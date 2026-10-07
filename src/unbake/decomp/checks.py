@@ -13,6 +13,8 @@ from unbake.config import Held, Project
 from unbake.decomp.gbi_source import invocations, macros, typedefs
 from unbake.decomp.needs import GuardFinding, Need, register_resolver
 from unbake.layout.split import Edit
+from unbake.process import capture
+from unbake.process import named as cause_named
 
 SOURCE_FINDINGS_SCHEMA = 4
 
@@ -35,7 +37,11 @@ def _code(source: str) -> str:
 def fakematches(source: str) -> tuple[str, ...]:
     """Return explicit exception reasons, suitable for a match receipt."""
     if not isinstance(source, str):
-        raise Held("checks", "source_text is missing or invalid")
+        raise Held(
+            cause_named(
+                "decomp.checks.fakematches", "source_text is missing or invalid", owner="decomp.checks", stage="checks"
+            )
+        )
     comments = [m[0] for m in _LEX.finditer(source) if m[0].startswith("/*")]
     reasons = []
     for comment in comments:
@@ -43,7 +49,14 @@ def fakematches(source: str) -> tuple[str, ...]:
             continue
         marker = _MARKER.fullmatch(comment)
         if marker is None or not marker[1].strip():
-            raise Held("checks", "FAKEMATCH.reason is missing or invalid")
+            raise Held(
+                cause_named(
+                    "decomp.checks.fakematches",
+                    "FAKEMATCH.reason is missing or invalid",
+                    owner="decomp.checks",
+                    stage="checks",
+                )
+            )
         reasons.append(marker[1].strip())
     return tuple(dict.fromkeys(reasons))
 
@@ -540,9 +553,18 @@ def run(source: str | Path) -> list[GuardFinding]:
         try:
             source = source.read_text()
         except (OSError, UnicodeError) as error:
-            raise Held("checks", f"source {source}: {error}") from error
+            raise Held(
+                capture(
+                    error,
+                    cause=cause_named(
+                        "decomp.checks.run", f"source {source}: {error}", owner="decomp.checks", stage="checks"
+                    ),
+                )
+            ) from error
     if not isinstance(source, str):
-        raise Held("checks", "source is missing or invalid")
+        raise Held(
+            cause_named("decomp.checks.run", "source is missing or invalid", owner="decomp.checks", stage="checks")
+        )
     reasons = fakematches(source)
     code = _code(source)
     findings = [finding for rule in RULES for finding in rule.check(source, code)]
@@ -629,7 +651,17 @@ def findings(
                 raise ValueError("expected finding rows")
             return tuple(GuardFinding(**row) for row in data)
         except (ValueError, TypeError) as error:
-            raise Held("checks", f"check.findings: corrupt source-rule result {content_key}: {error}") from error
+            raise Held(
+                capture(
+                    error,
+                    cause=cause_named(
+                        "check.findings",
+                        f"check.findings: corrupt source-rule result {content_key}: {error}",
+                        owner="decomp.checks",
+                        stage="checks",
+                    ),
+                )
+            ) from error
 
     requested = tuple(dict.fromkeys(paths))
     external = {
@@ -661,12 +693,27 @@ def message(finding: GuardFinding) -> str:
 def resolve(findings: list[Need], project: object, policy: object) -> list[Edit]:
     """Refuse unmarked findings before any build; marked evidence requires no edit."""
     if not isinstance(findings, list):
-        raise Held("checks", "findings is missing or invalid")
+        raise Held(
+            cause_named(
+                "decomp.checks.resolve", "findings is missing or invalid", owner="decomp.checks", stage="checks"
+            )
+        )
     for finding in findings:
         if not isinstance(finding, GuardFinding):
-            raise Held("checks", "GuardFinding is missing or invalid")
+            raise Held(
+                cause_named(
+                    "decomp.checks.resolve", "GuardFinding is missing or invalid", owner="decomp.checks", stage="checks"
+                )
+            )
         if not finding.fakematch:
-            raise Held("checks", f"{finding.rule}:{finding.line}: {finding.text}")
+            raise Held(
+                cause_named(
+                    f"{finding.rule}",
+                    f"{finding.rule}:{finding.line}: {finding.text}",
+                    owner="decomp.checks",
+                    stage="checks",
+                )
+            )
     return []
 
 

@@ -25,6 +25,7 @@ from unbake import cache, inputs, runner, scratch
 from unbake.config import Held, Host, Project
 from unbake.layout import map as layout_map
 from unbake.layout import split
+from unbake.process import named as cause_named
 from unbake.work import compare
 
 # Bump when this step's output changes for the same inputs. Keys never digest the tool's code.
@@ -69,7 +70,14 @@ def _owners(project: Project) -> Owners:
 def _row(owners: Owners, function: str, version: str) -> split.Function:
     rows = owners[version].get(function, [])
     if len(rows) != 1:
-        raise Held("compare", f"compare.row: {function}: expected one row in VERSION {version}, found {len(rows)}")
+        raise Held(
+            cause_named(
+                "compare.row",
+                f"compare.row: {function}: expected one row in VERSION {version}, found {len(rows)}",
+                owner="layout.merge_units",
+                stage="compare",
+            )
+        )
     return rows[0]
 
 
@@ -138,7 +146,7 @@ def prove(
                     runner.place(project, host, obj, version, row, placed, score=False)
                     linked = runner.link(project, host, placed, version, row, work, file)
             except Held:
-                return False
+                raise
             if linked != split.words(project, row):
                 return False
     return True
@@ -163,7 +171,7 @@ def prove_job(job: tuple[Project, Host, tuple[str, ...], str]) -> bool:
     return prove(*job)
 
 
-def run(project: Project, host: Host) -> list[str]:
+def _run(project: Project, host: Host) -> list[str]:
     """Prove every run in the worker pool, then write and commit the results in layout order; one line per run."""
     from unbake import buildfiles, land, pool
     from unbake import config as project_config
@@ -184,14 +192,12 @@ def run(project: Project, host: Host) -> list[str]:
     touched: list[Path] = [layout]
     absorbed: dict[str, tuple[str, ...]] = {}
     starts: dict[str, set[int]] = {}
-    cuts: list[str] = []
     firsts: list[str] = []
     owners = _owners(project)
     try:
         for (group, members), source, passed in zip(found, sources, proven, strict=True):
             if not passed:
-                cuts += members[1:]
-                lines.append(f"merge {group.name} {members[0]}..{members[-1]}: refused; recorded as split")
+                lines.append(f"merge {group.name} {members[0]}..{members[-1]}: refused; byte mismatch")
                 continue
             for version in split.holding_versions(project, members[0], owners):
                 starts.setdefault(version, set()).update(_row(owners, m, version).start for m in members[1:])
@@ -204,17 +210,32 @@ def run(project: Project, host: Host) -> list[str]:
             lines.append(f"merge {group.name} {members[0]}..{members[-1]}: proven")
         touched += _absorb_rows(project, starts)
         # One membership edit for the pass: absorbed members leave with their rows, refused runs become cuts.
-        layout_map.edit_members(project, absorbed, cuts=cuts, proven=firsts)
+        layout_map.edit_members(project, absorbed, proven=firsts)
         touched += buildfiles.write(project_config.load(project.root), host)
         merged = sum(passed for passed in proven)
         land._commit(
             project,
             host,
             sorted(set(touched)),
-            f"Merge units: {merged} proven runs, {len(found) - merged} recorded as split",
+            f"Merge units: {merged} proven runs, {len(found) - merged} byte mismatches",
         )
     except BaseException:
         for path, content in backup.items():
             atomic_files.write(path, content)
         raise
     return lines
+
+
+def run(project: Project, host: Host) -> list[str]:
+    from unbake import steps
+    from unbake.work.attempts import RetryScope, command_ledger
+
+    with (
+        command_ledger(project),
+        RetryScope(
+            project, "merge", "merge-units", {}, steps.operation_dependencies(project, host, "merge-units")
+        ) as scope,
+    ):
+        result = _run(project, host)
+        scope.value = {"receipts": result}
+        return result

@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 from tests.project_fixture import ProjectCase
 from unbake.config import Held
+from unbake.process import named
 from unbake.work import draft
 
 
@@ -29,7 +30,9 @@ class DraftFileTests(ProjectCase):
             scratch = Path(str(args[4]))
             (scratch / "compile-proof").mkdir(parents=True)
             (scratch / "compile-proof" / "alpha.c").write_text("int alpha(void) { return f(); }\n")
-            raise Held("m2c", "alpha: m2c/type compile proof failed: too few arguments")
+            raise Held(
+                named("alpha", "alpha: m2c/type compile proof failed: too few arguments", owner="fixture", stage="m2c")
+            )
 
         with self.assertRaises(Held) as raised:
             self.run_draft(unproven)
@@ -41,7 +44,7 @@ class DraftFileTests(ProjectCase):
 
     def test_refusal_without_a_draft_writes_nothing(self) -> None:
         def refused(*args: object, **kwargs: object) -> str:
-            raise Held("m2c", "alpha: unresolved M2C_ERROR at line 3")
+            raise Held(named("alpha", "alpha: unresolved M2C_ERROR at line 3", owner="fixture", stage="m2c"))
 
         with self.assertRaises(Held) as raised:
             self.run_draft(refused)

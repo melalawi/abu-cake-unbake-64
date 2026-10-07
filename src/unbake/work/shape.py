@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from unbake.config import Held
+from unbake.process import named as cause_named
 
 if TYPE_CHECKING:
     from unbake.compilers.families.mips import Shape
@@ -61,7 +62,9 @@ def configured(project: Project) -> tuple[dict[str, Shape], Shape]:
 
 def words_of(data: bytes) -> list[int]:
     if not isinstance(data, bytes) or not data or len(data) % 4:
-        raise Held("plan", "words: required nonempty complete big-endian words")
+        raise Held(
+            cause_named("words", "words: required nonempty complete big-endian words", owner="work.shape", stage="plan")
+        )
     return [item[0] for item in struct.iter_unpack(">I", data)]
 
 

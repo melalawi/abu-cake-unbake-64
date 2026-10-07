@@ -9,7 +9,8 @@ from pathlib import Path
 
 from unbake.config import Held, Project, Version
 from unbake.layout import split
-from unbake.process import read_text
+from unbake.process import capture, read_text
+from unbake.process import named as cause_named
 
 NAME = r"[A-Za-z_.$][\w.$]*"
 NUMBER = r"(?:0[xX][0-9A-Fa-f]+|[0-9]+)"
@@ -18,7 +19,11 @@ NUMBER = r"(?:0[xX][0-9A-Fa-f]+|[0-9]+)"
 def integer(value: str, where: str) -> int:
     value = value.strip()
     if not re.fullmatch(NUMBER, value):
-        raise Held("try", f"{where}: explicit integer required, got {value!r}")
+        raise Held(
+            cause_named(
+                f"{where}", f"{where}: explicit integer required, got {value!r}", owner="decomp.rom", stage="try"
+            )
+        )
     return int(value, 16 if value.lower().startswith("0x") else 10)
 
 
@@ -37,11 +42,22 @@ def symbol_values(path: Path) -> dict[str, int]:
             continue
         match = re.fullmatch(rf"({NAME})\s*=\s*({NUMBER})\s*;", line)
         if match is None:
-            raise Held("try", f"{path}:{number}: symbol address NAME = INTEGER; required")
+            raise Held(
+                cause_named(
+                    f"{path}",
+                    f"{path}:{number}: symbol address NAME = INTEGER; required",
+                    owner="decomp.rom",
+                    stage="try",
+                )
+            )
         name, value = match.groups()
         address = integer(value, f"{path}:{number} {name}")
         if name in values and values[name] != address:
-            raise Held("try", f"{path}:{number}: conflicting symbol address {name}")
+            raise Held(
+                cause_named(
+                    f"{path}", f"{path}:{number}: conflicting symbol address {name}", owner="decomp.rom", stage="try"
+                )
+            )
         values[name] = address
     return values
 
@@ -53,30 +69,71 @@ def function_span(version: Version, function: str, values: dict[str, int]) -> Fu
         if not named:
             continue
         if len(named) != 1:
-            raise Held("try", f"{version.split}: ambiguous split rows for {function}")
+            raise Held(
+                cause_named(
+                    f"{version.split}",
+                    f"{version.split}: ambiguous split rows for {function}",
+                    owner="decomp.rom",
+                    stage="try",
+                )
+            )
         for key in ("start", "vram"):
             if key not in segment.fields:
-                raise Held("try", f"{version.split}: segment for {function} is missing {key}")
+                raise Held(
+                    cause_named(
+                        f"{version.split}",
+                        f"{version.split}: segment for {function} is missing {key}",
+                        owner="decomp.rom",
+                        stage="try",
+                    )
+                )
         row = named[0]
         start = split.number(segment.fields["start"], f"{version.split}: segment start")
         vram = split.number(segment.fields["vram"], f"{version.split}: segment vram")
         address = values.get(function, split.address(row, version.split))
         if row.kind not in ("asm", "c"):
-            raise Held("try", f"{version.split}: {function} row type {row.kind} is not asm or c")
+            raise Held(
+                cause_named(
+                    f"{version.split}",
+                    f"{version.split}: {function} row type {row.kind} is not asm or c",
+                    owner="decomp.rom",
+                    stage="try",
+                )
+            )
         offset = start + address - vram
         if offset != row.start:
             raise Held(
-                "try",
-                f"{version.symbols}: {function} address 0x{address:X} disagrees with "
-                f"{version.split} offset 0x{row.start:X}; cut a merged row first",
+                cause_named(
+                    f"{version.symbols}",
+                    (
+                        f"{version.symbols}: {function} address 0x{address:X} disagrees "
+                        f"with {version.split} offset 0x{row.start:X}; cut a merged row first"
+                    ),
+                    owner="decomp.rom",
+                    stage="try",
+                )
             )
         end = split.end(row)
         if end <= offset or offset < start or (end - offset) % 4 or address % 4:
-            raise Held("try", f"{version.split}: invalid word range for {function}: 0x{offset:X}..0x{end:X}")
+            raise Held(
+                cause_named(
+                    f"{version.split}",
+                    f"{version.split}: invalid word range for {function}: 0x{offset:X}..0x{end:X}",
+                    owner="decomp.rom",
+                    stage="try",
+                )
+            )
         return FunctionSpan(address, offset, end - offset)
     if function not in values:
         return None
-    raise Held("try", f"{version.split}: asm/c split row for symbol {function} is missing")
+    raise Held(
+        cause_named(
+            f"{version.split}",
+            f"{version.split}: asm/c split row for symbol {function} is missing",
+            owner="decomp.rom",
+            stage="try",
+        )
+    )
 
 
 def target(version: Version, span: FunctionSpan) -> bytes:
@@ -85,9 +142,21 @@ def target(version: Version, span: FunctionSpan) -> bytes:
             rom.seek(span.offset)
             data = rom.read(span.size)
     except OSError as error:
-        raise Held("try", f"{version.baserom}: {error}") from error
+        raise Held(
+            capture(
+                error,
+                cause=cause_named(f"{version.baserom}", f"{version.baserom}: {error}", owner="decomp.rom", stage="try"),
+            )
+        ) from error
     if len(data) != span.size:
-        raise Held("try", f"{version.baserom}: {span.size} bytes at ROM offset 0x{span.offset:X} are missing")
+        raise Held(
+            cause_named(
+                f"{version.baserom}",
+                f"{version.baserom}: {span.size} bytes at ROM offset 0x{span.offset:X} are missing",
+                owner="decomp.rom",
+                stage="try",
+            )
+        )
     return data
 
 
@@ -113,7 +182,14 @@ class RomReader:
                 continue
             end = segment.end
             if end is None:
-                raise Held("try", f"{version.split}: mapped ROM end is missing")
+                raise Held(
+                    cause_named(
+                        f"{version.split}",
+                        f"{version.split}: mapped ROM end is missing",
+                        owner="decomp.rom",
+                        stage="try",
+                    )
+                )
             start = split.number(segment.fields["start"], f"{version.split}: segment start")
             vram = split.number(segment.fields["vram"], f"{version.split}: segment vram")
             bss = [row.start for row in segment.rows if row.kind.lstrip(".") == "bss"]
@@ -138,13 +214,27 @@ class RomReader:
         if not matches:
             matches = [row for row in self.resident_spans() if row.address <= address and address + size <= row.end]
         if size <= 0 or len(matches) > 1:
-            raise Held("try", f"{self.version.name}.read_memory: unmapped or ambiguous range 0x{address:X}+{size}")
+            raise Held(
+                cause_named(
+                    f"{self.version.name}.read_memory",
+                    f"{self.version.name}.read_memory: unmapped or ambiguous range 0x{address:X}+{size}",
+                    owner="decomp.rom",
+                    stage="try",
+                )
+            )
         return matches[0] if matches else None
 
     def span(self, address: int, size: int) -> MemorySpan:
         mapping = self.find_span(address, size)
         if mapping is None:
-            raise Held("try", f"{self.version.name}.read_memory: unmapped or ambiguous range 0x{address:X}+{size}")
+            raise Held(
+                cause_named(
+                    f"{self.version.name}.read_memory",
+                    f"{self.version.name}.read_memory: unmapped or ambiguous range 0x{address:X}+{size}",
+                    owner="decomp.rom",
+                    stage="try",
+                )
+            )
         return mapping
 
     def backing_row(self, address: int, size: int) -> tuple[int, split.Row]:
@@ -160,7 +250,14 @@ class RomReader:
             and offset + size <= split.end(row)
         ]
         if len(rows) != 1:
-            raise Held("rodata", f"0x{address:08X}+{size}: resident row is missing or ambiguous")
+            raise Held(
+                cause_named(
+                    f"0x{address:08X}+{size}",
+                    f"0x{address:08X}+{size}: resident row is missing or ambiguous",
+                    owner="decomp.rom",
+                    stage="rodata",
+                )
+            )
         return offset, rows[0]
 
     def __call__(self, address: int, size: int) -> bytes:
@@ -179,7 +276,14 @@ class RomReader:
             or row.offset + address - row.address != mapping.offset + address - mapping.address
             for row in overrides
         ):
-            raise Held("try", f"{self.version.name}.table_entry: conflicting resident backing at 0x{address:X}")
+            raise Held(
+                cause_named(
+                    f"{self.version.name}.table_entry",
+                    f"{self.version.name}.table_entry: conflicting resident backing at 0x{address:X}",
+                    owner="decomp.rom",
+                    stage="try",
+                )
+            )
         return replace(mapping, table_entry_bias=overrides[0].table_entry_bias) if overrides else mapping
 
     def table_entry(self, address: int) -> int:

@@ -8,6 +8,7 @@ from pycparser import c_ast  # type: ignore[import-untyped]
 from unbake import cdecl
 from unbake.config import Held
 from unbake.decomp.draft_context import _typedefs
+from unbake.process import named as cause_named
 
 
 def calls(source: str, name: str, replace: Callable[[list[str]], str]) -> str:
@@ -36,7 +37,14 @@ def calls(source: str, name: str, replace: Callable[[list[str]], str]) -> str:
         else:
             line = source.count("\n", 0, token.start()) + 1
             site = source[token.start() : token.end() + 80]
-            raise Held("m2c", f"unresolved {name} at line {line}: {site}")
+            raise Held(
+                cause_named(
+                    "decomp.draft_macros.calls",
+                    f"unresolved {name} at line {line}: {site}",
+                    owner="decomp.draft_macros",
+                    stage="m2c",
+                )
+            )
     # Rewrite the outer call recursively so nested replacements never overlap.
     cursor = 0
     result: list[str] = []
@@ -56,14 +64,26 @@ def lower(source: str, context: str, *, allow_fields: bool = False) -> str:
     incoming = re.search(r"\bsaved_reg_([A-Za-z0-9]+)\b", re.sub(r"/\*.*?\*/|//[^\n]*", " ", source, flags=re.S))
     if incoming:
         raise Held(
-            "m2c", f"incoming saved register ${incoming[1]} has no declared C parameter or dominating definition"
+            cause_named(
+                "decomp.draft_macros.lower",
+                f"incoming saved register ${incoming[1]} has no declared C parameter or dominating definition",
+                owner="decomp.draft_macros",
+                stage="m2c",
+            )
         )
 
     helpers: dict[str, str] = {}
 
     def bitwise(args: list[str]) -> str:
         if len(args) != 2 or not re.fullmatch(r"[A-Za-z_]\w*(?:\s*\*)*", args[0]):
-            raise Held("m2c", "unresolved M2C_BITWISE(" + ", ".join(args) + ")")
+            raise Held(
+                cause_named(
+                    "decomp.draft_macros.bitwise",
+                    "unresolved M2C_BITWISE(" + ", ".join(args) + ")",
+                    owner="decomp.draft_macros",
+                    stage="m2c",
+                )
+            )
         target, value = args
         typedefs = "\n".join(f"typedef int {name};" for name in sorted(_typedefs(context)))
         expression = None
@@ -116,7 +136,14 @@ def lower(source: str, context: str, *, allow_fields: bool = False) -> str:
                         "    word.bits = bits;\n    return word.value;\n}\n"
                     )
                     return f"{helper}({value})"
-            raise Held("m2c", "unresolved M2C_BITWISE(" + ", ".join(args) + "): requires addressable value")
+            raise Held(
+                cause_named(
+                    "decomp.draft_macros.bitwise",
+                    "unresolved M2C_BITWISE(" + ", ".join(args) + "): requires addressable value",
+                    owner="decomp.draft_macros",
+                    stage="m2c",
+                )
+            )
         return f"(*(({target} *)&({value})))"
 
     if not allow_fields:
@@ -128,5 +155,12 @@ def lower(source: str, context: str, *, allow_fields: bool = False) -> str:
             if allow_fields and token[0] in ("M2C_FIELD", "M2C_BITWISE"):
                 continue
             line = source.count("\n", 0, token.start()) + 1
-            raise Held("m2c", f"unresolved {token[0]} at line {line}: {source.splitlines()[line - 1].strip()}")
+            raise Held(
+                cause_named(
+                    "decomp.draft_macros.lower",
+                    f"unresolved {token[0]} at line {line}: {source.splitlines()[line - 1].strip()}",
+                    owner="decomp.draft_macros",
+                    stage="m2c",
+                )
+            )
     return "".join(helpers.values()) + source

@@ -14,6 +14,7 @@ from typing import Any
 from unbake.config import SymbolPolicy
 from unbake.layout import split
 from unbake.layout.rodata_references import collect, words
+from unbake.process import named as cause_named
 from unbake.project.flow import Span
 from unbake.project.rom import Rom
 
@@ -775,7 +776,14 @@ def data_identity(
             ):
                 from unbake.config import Held
 
-                raise Held("setup", f"data.assertion_stale: {assertion['name']}: {key}")
+                raise Held(
+                    cause_named(
+                        "data.assertion_stale",
+                        f"data.assertion_stale: {assertion['name']}: {key}",
+                        owner="layout.symbol_identity",
+                        stage="setup",
+                    )
+                )
             forced[key] = assertion["name"]
             edges[key].update(keys)
             proofs[key].append({"assertion": assertion})

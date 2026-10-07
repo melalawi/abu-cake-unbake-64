@@ -17,6 +17,8 @@ from typing import TYPE_CHECKING
 
 from unbake.config import Held
 from unbake.layout import split, split_apply
+from unbake.process import capture
+from unbake.process import named as cause_named
 
 if TYPE_CHECKING:
     from unbake.build import Outcome
@@ -38,9 +40,16 @@ def read(path: Path) -> list[Change]:
     try:
         document = json.loads(path.read_text())
     except (OSError, ValueError) as error:
-        raise Held("boundary-map", f"{path}: {error}") from error
+        raise Held(
+            capture(
+                error,
+                cause=cause_named(f"{path}", f"{path}: {error}", owner="layout.boundary_map", stage="boundary-map"),
+            )
+        ) from error
     if not isinstance(document, list):
-        raise Held("boundary-map", "map: required list of changes")
+        raise Held(
+            cause_named("map", "map: required list of changes", owner="layout.boundary_map", stage="boundary-map")
+        )
     result = []
     for index, row in enumerate(document):
         if not isinstance(row, dict) or set(row) - {
@@ -52,16 +61,44 @@ def read(path: Path) -> list[Change]:
             "neighbour",
             "start",
         }:
-            raise Held("boundary-map", f"map row {index + 1}: invalid fields")
+            raise Held(
+                cause_named(
+                    "layout.boundary_map.read",
+                    f"map row {index + 1}: invalid fields",
+                    owner="layout.boundary_map",
+                    stage="boundary-map",
+                )
+            )
         if any(
             not isinstance(row.get(key), str) or not row[key]
             for key in ("version", "function", "action", "sha256", "evidence")
         ):
-            raise Held("boundary-map", f"map row {index + 1}: missing string fields")
+            raise Held(
+                cause_named(
+                    "layout.boundary_map.read",
+                    f"map row {index + 1}: missing string fields",
+                    owner="layout.boundary_map",
+                    stage="boundary-map",
+                )
+            )
         if "neighbour" in row and not isinstance(row["neighbour"], str):
-            raise Held("boundary-map", f"{row['function']}: invalid neighbour")
+            raise Held(
+                cause_named(
+                    f"{row['function']}",
+                    f"{row['function']}: invalid neighbour",
+                    owner="layout.boundary_map",
+                    stage="boundary-map",
+                )
+            )
         if "start" in row and type(row["start"]) is not int:
-            raise Held("boundary-map", f"{row['function']}: invalid data start")
+            raise Held(
+                cause_named(
+                    f"{row['function']}",
+                    f"{row['function']}: invalid data start",
+                    owner="layout.boundary_map",
+                    stage="boundary-map",
+                )
+            )
         result.append(Change(**row))
     return result
 
@@ -74,17 +111,35 @@ def plan(project: Project, changes: Sequence[Change]) -> list[split.Edit]:
         project.version(change.version)
         if change.action == "code" and not split.NAME.fullmatch(change.function):
             raise Held(
-                "boundary-map",
-                "split.data_to_code: numeric data stems need a named interval correction; "
-                "use unbake split code FUNCTION --version V --start ROM --end ROM",
+                cause_named(
+                    "split.data_to_code",
+                    "split.data_to_code: numeric data stems need a named interval correction; "
+                    "use unbake split code FUNCTION --version V --start ROM --end ROM",
+                    owner="layout.boundary_map",
+                    stage="boundary-map",
+                )
             )
         split.name(change.function)
         key = (change.version, change.function)
         if key in names:
-            raise Held("boundary-map", f"{change.function}: duplicate change in VERSION {change.version}")
+            raise Held(
+                cause_named(
+                    f"{change.function}",
+                    f"{change.function}: duplicate change in VERSION {change.version}",
+                    owner="layout.boundary_map",
+                    stage="boundary-map",
+                )
+            )
         names.add(key)
         if change.action not in ("merge", "data", "code", "entry") or not change.evidence.strip():
-            raise Held("boundary-map", f"{change.function}: required merge/data/code/entry action and evidence")
+            raise Held(
+                cause_named(
+                    f"{change.function}",
+                    f"{change.function}: required merge/data/code/entry action and evidence",
+                    owner="layout.boundary_map",
+                    stage="boundary-map",
+                )
+            )
         selected.setdefault(change.version, []).append(change)
     edits = []
     for version, items in selected.items():
@@ -106,15 +161,34 @@ def plan(project: Project, changes: Sequence[Change]) -> list[split.Edit]:
             kinds = ("data",) if change.action == "code" else ("asm", "hasm")
             if len(found) != 1 or found[0].kind not in kinds:
                 raise Held(
-                    "boundary-map", f"{change.function}: requires one {'/'.join(kinds)} row in VERSION {version}"
+                    cause_named(
+                        f"{change.function}",
+                        f"{change.function}: requires one {'/'.join(kinds)} row in VERSION {version}",
+                        owner="layout.boundary_map",
+                        stage="boundary-map",
+                    )
                 )
             row = found[0]
             stop = split.end(row)
             if row.start < 0 or row.start >= stop or stop > len(image):
-                raise Held("boundary-map", f"{change.function}: invalid ROM interval")
+                raise Held(
+                    cause_named(
+                        f"{change.function}",
+                        f"{change.function}: invalid ROM interval",
+                        owner="layout.boundary_map",
+                        stage="boundary-map",
+                    )
+                )
             digest = hashlib.sha256(image[row.start : stop]).hexdigest()
             if digest != change.sha256:
-                raise Held("boundary-map", f"{change.function}: ROM bytes differ from map sha256")
+                raise Held(
+                    cause_named(
+                        f"{change.function}",
+                        f"{change.function}: ROM bytes differ from map sha256",
+                        owner="layout.boundary_map",
+                        stage="boundary-map",
+                    )
+                )
             if change.action == "code":
                 lines[row.line] = split.replace_row(lines[row.line], row.match, kind="asm")
                 continue
@@ -122,14 +196,28 @@ def plan(project: Project, changes: Sequence[Change]) -> list[split.Edit]:
                 data.add(row)
                 start = row.start if change.start is None else change.start
                 if start < row.start or start >= stop or start % 4:
-                    raise Held("boundary-map", f"{change.function}: data start outside word-aligned ROM interval")
+                    raise Held(
+                        cause_named(
+                            f"{change.function}",
+                            f"{change.function}: data start outside word-aligned ROM interval",
+                            owner="layout.boundary_map",
+                            stage="boundary-map",
+                        )
+                    )
                 template = lines[row.line]
                 if start == row.start:
                     lines[row.line] = split.replace_row(template, row.match, kind="data")
                 else:
                     padding = row.path + f"_padding_{start:X}"
                     if any(item.path == padding for item in rows):
-                        raise Held("boundary-map", f"{change.function}: padding path already exists")
+                        raise Held(
+                            cause_named(
+                                f"{change.function}",
+                                f"{change.function}: padding path already exists",
+                                owner="layout.boundary_map",
+                                stage="boundary-map",
+                            )
+                        )
                     newline = row.match["newline"] or "\n"
                     rendered = split.replace_row(template, row.match, start=f"0x{start:06X}", kind="data", path=padding)
                     lines[row.line] = template.rstrip("\r\n") + newline + rendered
@@ -138,9 +226,23 @@ def plan(project: Project, changes: Sequence[Change]) -> list[split.Edit]:
                 split.name(change.neighbour, "entry name")
                 entry_start = change.start
                 if entry_start is None or not row.start <= entry_start < stop or entry_start % 4:
-                    raise Held("boundary-map", f"{change.function}: entry start must be within its ROM interval")
+                    raise Held(
+                        cause_named(
+                            f"{change.function}",
+                            f"{change.function}: entry start must be within its ROM interval",
+                            owner="layout.boundary_map",
+                            stage="boundary-map",
+                        )
+                    )
                 if change.neighbour in by_name:
-                    raise Held("boundary-map", f"{change.function}: entry name {change.neighbour} already exists")
+                    raise Held(
+                        cause_named(
+                            f"{change.function}",
+                            f"{change.function}: entry name {change.neighbour} already exists",
+                            owner="layout.boundary_map",
+                            stage="boundary-map",
+                        )
+                    )
                 directory = Path(row.path).parent
                 path = (directory / change.neighbour).as_posix()
                 template = lines[row.line]
@@ -152,7 +254,12 @@ def plan(project: Project, changes: Sequence[Change]) -> list[split.Edit]:
                 symbol = symbols.get(change.neighbour)
                 if symbol is not None and symbol[0] != address:
                     raise Held(
-                        "boundary-map", f"{change.function}: entry symbol {change.neighbour} has another address"
+                        cause_named(
+                            f"{change.function}",
+                            f"{change.function}: entry symbol {change.neighbour} has another address",
+                            owner="layout.boundary_map",
+                            stage="boundary-map",
+                        )
                     )
                 if symbol is None:
                     separator = "" if not symbols_after or symbols_after.endswith("\n") else newline
@@ -161,29 +268,61 @@ def plan(project: Project, changes: Sequence[Change]) -> list[split.Edit]:
             split.name(change.neighbour, "neighbour")
             owners = by_name.get(change.neighbour, [])
             if len(owners) != 1:
-                raise Held("boundary-map", f"{change.function}: requires one neighbour {change.neighbour}")
+                raise Held(
+                    cause_named(
+                        f"{change.function}",
+                        f"{change.function}: requires one neighbour {change.neighbour}",
+                        owner="layout.boundary_map",
+                        stage="boundary-map",
+                    )
+                )
             owner = owners[0]
             if owner.segment is not row.segment or owner.kind not in ("asm", "hasm", "c"):
-                raise Held("boundary-map", f"{change.function}: neighbour must be text in the same segment")
+                raise Held(
+                    cause_named(
+                        f"{change.function}",
+                        f"{change.function}: neighbour must be text in the same segment",
+                        owner="layout.boundary_map",
+                        stage="boundary-map",
+                    )
+                )
             group = row.segment.rows
             lo, hi = sorted((group.index(row), group.index(owner)))
             between = group[lo + 1 : hi]
             merging = {item.function for item in items if item.action == "merge" and item.neighbour == change.neighbour}
             if any(Path(item.path).name not in merging for item in between):
-                raise Held("boundary-map", f"{change.function}: nonadjacent neighbour {change.neighbour}")
+                raise Held(
+                    cause_named(
+                        f"{change.function}",
+                        f"{change.function}: nonadjacent neighbour {change.neighbour}",
+                        owner="layout.boundary_map",
+                        stage="boundary-map",
+                    )
+                )
             # A head merge into C would move its public entry while keeping its
             # compiled prologue. Require the operator to keep such an owner asm.
             if row.start < owner.start and owner.kind == "c":
-                raise Held("boundary-map", f"{change.function}: head merge would move C entry {change.neighbour}")
+                raise Held(
+                    cause_named(
+                        f"{change.function}",
+                        f"{change.function}: head merge would move C entry {change.neighbour}",
+                        owner="layout.boundary_map",
+                        stage="boundary-map",
+                    )
+                )
             owners_by_fragment[row] = owner
             deleted.add(row)
             neighbours.add(owner)
             lines[row.line] = ""
         if neighbours & (deleted | data):
             raise Held(
-                "boundary-map",
-                "neighbour is also changed: "
-                + ", ".join(sorted(Path(row.path).name for row in neighbours & (deleted | data))),
+                cause_named(
+                    "layout.boundary_map.plan",
+                    "neighbour is also changed: "
+                    + ", ".join(sorted(Path(row.path).name for row in neighbours & (deleted | data))),
+                    owner="layout.boundary_map",
+                    stage="boundary-map",
+                )
             )
         for owner in neighbours:
             heads = [
@@ -207,7 +346,14 @@ def plan(project: Project, changes: Sequence[Change]) -> list[split.Edit]:
                 or old.end != new.end
                 or (old.rows and (not new.rows or old.rows[0].start != new.rows[0].start))
             ):
-                raise Held("boundary-map", f"VERSION {version}: map changes segment ROM coverage")
+                raise Held(
+                    cause_named(
+                        "layout.boundary_map.plan",
+                        f"VERSION {version}: map changes segment ROM coverage",
+                        owner="layout.boundary_map",
+                        stage="boundary-map",
+                    )
+                )
         if before != after:
             edits.append(split.Edit(config.split, before, after, (version,)))
         if symbols_after != symbols_before:
@@ -268,9 +414,26 @@ def apply(project: Project, policy: Host, changes: Sequence[Change]) -> Outcome 
         if error.phase == "preflight":
             raise
         names = ", ".join(f"{item.version}:{item.function}" for item in changes)
-        raise Held("boundary-map", f"refused {names}; all map edits rolled back; {error.reason}") from error
+        raise Held(
+            capture(
+                error,
+                cause=cause_named(
+                    "layout.boundary_map.apply",
+                    f"refused {names}; all map edits rolled back; {error.reason}",
+                    owner="layout.boundary_map",
+                    stage="boundary-map",
+                ),
+            )
+        ) from error
     if results is not None and not results.ok:
         names = ", ".join(f"{item.version}:{item.function}" for item in changes)
         detail = "; ".join(results.lines())
-        raise Held("boundary-map", f"make check refused {names}; all map edits rolled back; {detail}")
+        raise Held(
+            cause_named(
+                "layout.boundary_map.apply",
+                f"make check refused {names}; all map edits rolled back; {detail}",
+                owner="layout.boundary_map",
+                stage="boundary-map",
+            )
+        )
     return results

@@ -9,11 +9,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from unbake import process
 from unbake.config import Held, Host, Project, draft_view
+from unbake.inputs import DependencySet
 from unbake.layout import split
+from unbake.process import Fault, capture
+from unbake.process import named as cause_named
 from unbake.work import attempts
-from unbake.work.score import TYPES, Compare, compare_words
+from unbake.work.score import Measurement, measure_words, unavailable
 
 
 @dataclass
@@ -21,7 +23,7 @@ class Compared:
     function: str
     file: Path
     source_sha256: str
-    compares: dict[str, Compare]
+    compares: dict[str, Measurement]
     preconditions: list[str] = field(default_factory=list)
     seconds: float = 0.0
     compiler: str = ""
@@ -52,8 +54,12 @@ class Compared:
         return self.identical_everywhere and not self.preconditions
 
     @property
-    def best_percent(self) -> float:
-        return min((result.match_percent for result in self.compares.values()), default=0.0)
+    def best_percent(self) -> float | None:
+        return (
+            min((result.percent for result in self.compares.values() if result.percent is not None), default=None)
+            if self.compares and all(result.available for result in self.compares.values())
+            else None
+        )
 
     @property
     def next_command(self) -> str:
@@ -71,7 +77,7 @@ class Compared:
                 version: result.document() | ({"fault": self.faults[version]} if version in self.faults else {})
                 for version, result in self.compares.items()
             },
-            "best_percent": round(self.best_percent, 6),
+            "best_percent": round(self.best_percent, 6) if self.best_percent is not None else None,
             "exact": self.exact,
             "preconditions": list(self.preconditions),
             "seconds": round(self.seconds, 3),
@@ -90,9 +96,14 @@ class Compared:
 
         output.extend(line for version, facts in self.facts.items() for line in lines(version, facts))
         output.extend(f"rule broken: {line}" for line in self.rule_lines)
-        output.append(
-            f"{self.function}: {'EXACT in every version' if self.exact else f'best {self.best_percent:.2f}%'}"
+        state = (
+            "EXACT in every version"
+            if self.exact
+            else f"best {self.best_percent:.2f}%"
+            if self.best_percent is not None
+            else "measurement unavailable"
         )
+        output.append(f"{self.function}: {state}")
         if self.required_versions is not None:
             output.append(
                 f"required versions {', '.join(self.required_versions)}: "
@@ -104,16 +115,32 @@ class Compared:
 def function_of(file: Path) -> str:
     function = file.stem.removesuffix(".best")
     if file.suffix != ".c" or not re.fullmatch(r"[A-Za-z_]\w*", function):
-        raise Held("compare", f"compare.file: {file}: expected FUNC.c or FUNC.best.c")
+        raise Held(
+            cause_named(
+                "compare.file",
+                f"compare.file: {file}: expected FUNC.c or FUNC.best.c",
+                owner="work.compare",
+                stage="compare",
+            )
+        )
     if not file.is_file():
-        raise Held("compare", f"compare.file: {file}: missing file")
+        raise Held(
+            cause_named("compare.file", f"compare.file: {file}: missing file", owner="work.compare", stage="compare")
+        )
     return function
 
 
 def row_of(project: Project, function: str, version: str) -> split.Function:
     rows = [row for row in split.functions(project, version) if function in row.aliases]
     if len(rows) != 1:
-        raise Held("compare", f"compare.row: {function}: expected one row in VERSION {version}, found {len(rows)}")
+        raise Held(
+            cause_named(
+                "compare.row",
+                f"compare.row: {function}: expected one row in VERSION {version}, found {len(rows)}",
+                owner="work.compare",
+                stage="compare",
+            )
+        )
     return rows[0]
 
 
@@ -152,12 +179,13 @@ def measure(
     view = view_for(project, file, function)
     content = file.read_bytes()
     non_matching = (
-        file.resolve() == (project.src / f"{function}.c").resolve() and attempts.fuzzy(project, function) is not None
+        file.resolve() == (project.src / f"{function}.c").resolve()
+        and attempts.ledger(project).fuzzy(function) is not None
     )
     broken = [finding for finding in checks.run(content.decode()) if finding.fakematch is None]
     preconditions = [checks.message(finding) for finding in broken]
     rule_lines = [checks.plain(finding) for finding in broken]
-    results: dict[str, Compare] = {}
+    results: dict[str, Measurement] = {}
     faults: dict[str, dict[str, Any]] = {}
     from unbake.fold import provider_reuse
     from unbake.typemap import namespace
@@ -178,18 +206,15 @@ def measure(
             except Held as error:
                 if not compiling and not retain_link_faults:
                     raise
-                faults[version] = process.fault(error)
-                results[version] = Compare(
-                    version,
-                    0,
-                    len(target) // 4,
-                    dict.fromkeys(TYPES, 0) | {"changed": len(target) // 4},
-                    [f"VERSION {version}: {error.reason}"],
-                    0.0,
-                )
+                faults[version] = capture(
+                    error, cause=cause_named("work.compare.unexpected", str(error), owner="work.compare", stage="work")
+                ).document()
+                results[version] = unavailable(version, len(target) // 4, error.fault)
+                results[version].lines.append(f"VERSION {version}: {error.reason}")
                 continue
-            result = compare_words(version, target, linked)
+            result = measure_words(version, target, linked)
             if problems:
+                assert result.typed is not None
                 result.typed["relocation"] += len(problems)
                 result.lines.extend(f"constant: {problem}" for problem in problems)
             results[version] = result
@@ -200,7 +225,13 @@ def measure(
     )
 
 
-def compare(project: Project, host: Host, file: Path, *, required_versions: tuple[str, ...] | None = None) -> Compared:
+def _compare(
+    project: Project,
+    host: Host,
+    file: Path,
+    *,
+    required_versions: tuple[str, ...] | None = None,
+) -> Compared:
     """Measure every holding version (trying the other configured compilers when not exact) and record it."""
     from unbake.compilers import candidates
 
@@ -214,7 +245,12 @@ def compare(project: Project, host: Host, file: Path, *, required_versions: tupl
             or set(required_versions) - set(holding)
         ):
             raise Held(
-                "compare", f"compare.versions: {function}: require distinct holding versions from {', '.join(holding)}"
+                cause_named(
+                    "compare.versions",
+                    f"compare.versions: {function}: require distinct holding versions from {', '.join(holding)}",
+                    owner="work.compare",
+                    stage="compare",
+                )
             )
         required = tuple(v for v in holding if v in required_versions or row_of(project, function, v).kind == "c")
     try:
@@ -234,20 +270,99 @@ def compare(project: Project, host: Host, file: Path, *, required_versions: tupl
     from unbake.work.compare_facts import attach
 
     attach(project, measured)
-    first = row_of(project, measured.function, next(iter(measured.compares)))
-    size = first.end - first.start
-    attempts.append(
-        project,
-        attempts.Attempt(
-            attempts.now(),
-            measured.function,
-            measured.source_sha256,
-            size,
-            measured.document()["versions"],
-            measured.best_percent,
-            measured.exact,
-            measured.seconds,
-            measured.compiler,
-        ),
-    )
     return measured
+
+
+def operation_dependencies(project: Project, host: Host, file: Path) -> DependencySet:
+    from unbake import cache, inputs
+    from unbake.project.headers import Graph
+
+    graph = Graph.capture(project)
+    closure = graph.closure((file,))
+    dependencies = closure.dependency_set
+    modules = ("work/compare.py", "runner.py", "process.py", "compilers/drivers.py", "compilers/candidates.py")
+    tool = Path(__file__).parents[1]
+    recipe = cache.key(*(inputs.digest(tool / name, algorithm="sha256", reuse=cache.configured()) for name in modules))
+    native = {
+        field: inputs.digest(Path(getattr(host, field)), algorithm="sha256", reuse=cache.configured())
+        for field in ("cpp", "mips_as", "mips_ld", "mips_objcopy", "n64link")
+    }
+    native.update(
+        {
+            "cc:" + name: inputs.digest(compiler.cc, algorithm="sha256", reuse=cache.configured())
+            for name, compiler in project.compilers.items()
+        }
+    )
+    paths = {
+        project.root / "config.toml",
+        project.root / "layout.toml",
+        *(
+            p
+            for version in project.versions
+            for p in (project.version(version).split, project.version(version).symbols)
+        ),
+    }
+    paths.update(
+        path for version in project.versions for path in project.build_link(version).glob("*") if path.is_file()
+    )
+    pins = {pin.path: pin for pin in dependencies.files}
+    for path in paths:
+        pin = inputs.file_pin(path, root=project.root, root_id="project", reuse=cache.configured())
+        pins[pin.path] = pin
+    return inputs.DependencySet(
+        tuple(pins.values()),
+        {
+            **dependencies.values,
+            "compiler": project.compiler_reference(file.stem),
+            "versions": list(project.versions),
+            "memory_worker_bytes": host.memory_worker_bytes,
+            "cache_memory_bytes": host.cache_memory_bytes,
+            "native": native,
+            "native_flags": {
+                "compiler": list(project.compiler_for(file.stem).cflags),
+                "as": list(project.asflags),
+                "gnu_as": list(project.gnu_asflags),
+                "cpp": list(project.cppflags),
+            },
+            "source_sha256": inputs.digest(file, algorithm="sha256", reuse=cache.configured()),
+            "dependencies_unknown": closure.unknown,
+        },
+        {**dependencies.recipes, "compare": recipe},
+    )
+
+
+def compare(project: Project, host: Host, file: Path, *, required_versions: tuple[str, ...] | None = None) -> Compared:
+    if attempts.producer_operation() is not None:
+        return _compare(project, host, file, required_versions=required_versions)
+    function = function_of(file)
+    from unbake.work.attempts import RetryScope, command_ledger
+
+    with (
+        command_ledger(project),
+        RetryScope(
+            project,
+            "compare",
+            function,
+            {
+                "path": str(file.relative_to(project.root)) if file.is_relative_to(project.root) else file.name,
+                "required_versions": list(required_versions) if required_versions is not None else None,
+            },
+            operation_dependencies(project, host, file),
+        ) as scope,
+    ):
+        result = _compare(project, host, file, required_versions=required_versions)
+        first = row_of(project, result.function, next(iter(result.compares)))
+        observed = attempts.Attempt(
+            attempts.now(),
+            result.function,
+            result.source_sha256,
+            first.end - first.start,
+            result.document()["versions"],
+            result.best_percent,
+            result.exact,
+            result.seconds,
+            result.compiler,
+        )
+        scope.value = {**result.document(), "attempt": observed.document()}
+        scope.fault = Fault.read(next(iter(result.faults.values()))) if result.faults else None
+        return result

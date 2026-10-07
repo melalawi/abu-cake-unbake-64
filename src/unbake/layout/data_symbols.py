@@ -4,6 +4,7 @@ import re
 
 from unbake.config import Held, Host, Project
 from unbake.layout import split
+from unbake.process import named as cause_named
 
 
 def encoded_address(name: str) -> int | None:
@@ -17,7 +18,14 @@ def _source_address(project: Project, name: str) -> int:
         return source[name][0]
     address = encoded_address(name)
     if address is None:
-        raise Held("split", f"data symbol {name}: missing in names_from VERSION {project.names_from}")
+        raise Held(
+            cause_named(
+                "layout.data_symbols._source_address",
+                f"data symbol {name}: missing in names_from VERSION {project.names_from}",
+                owner="layout.data_symbols",
+                stage="split",
+            )
+        )
     return address
 
 
@@ -46,12 +54,24 @@ def counterparts(project: Project, name: str) -> dict[str, str]:
             else set()
         )
         if len(deltas) != 1:
-            raise Held("split", f"data symbol {name}: no unambiguous correspondence in VERSION {version}")
+            raise Held(
+                cause_named(
+                    "layout.data_symbols.counterparts",
+                    f"data symbol {name}: no unambiguous correspondence in VERSION {version}",
+                    owner="layout.data_symbols",
+                    stage="split",
+                )
+            )
         mapped = address + deltas.pop()
         candidates = [key for key, value in target.items() if value[0] == mapped]
         if len(candidates) != 1:
             raise Held(
-                "split", f"data symbol {name}: correspondence at 0x{mapped:X} is missing or ambiguous in {version}"
+                cause_named(
+                    "layout.data_symbols.counterparts",
+                    f"data symbol {name}: correspondence at 0x{mapped:X} is missing or ambiguous in {version}",
+                    owner="layout.data_symbols",
+                    stage="split",
+                )
             )
         result[version] = candidates[0]
     return result
@@ -127,7 +147,14 @@ def addresses(project: Project, name: str) -> dict[str, int]:
                     )
     for version, candidates in evidence.items():
         if len(candidates) != 1:
-            raise Held("split", f"data symbol {name}: no unambiguous aligned reference in VERSION {version}")
+            raise Held(
+                cause_named(
+                    "layout.data_symbols.addresses",
+                    f"data symbol {name}: no unambiguous aligned reference in VERSION {version}",
+                    owner="layout.data_symbols",
+                    stage="split",
+                )
+            )
         result[version] = candidates.pop()
     return result
 

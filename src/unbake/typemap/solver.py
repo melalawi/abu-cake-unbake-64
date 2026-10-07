@@ -15,6 +15,8 @@ from unbake import cache as retention
 from unbake import inputs, tui
 from unbake.cache import Cache
 from unbake.config import Held, Host, Project
+from unbake.process import capture
+from unbake.process import named as cause_named
 from unbake.typemap import abi_declarations, closure, declarations, evidence, layouts, namespace, o32, shards, storage
 from unbake.typemap.closure import Constraints
 from unbake.typemap.mapping import refresh_map
@@ -1112,12 +1114,11 @@ def readiness(project: Project, host: Host | None) -> Readiness:
         paths.update(path for path in (project.build / "types/abi.json",) if path.is_file())
         paths.update(path for compiler in project.compilers.values() for path in (compiler.sha256, compiler.cc))
         # Map/ABI shards and evidence inputs count; the solve marker is checked separately.
-        receipt = marker(project)
         paths.update(
             path
             for directory in (project.build / "map", project.build / "types")
             for path in directory.glob("*")
-            if path.is_file() and path != receipt
+            if path.is_file()
         )
         policy = (
             None
@@ -1160,11 +1161,6 @@ def input_key(project: Project, host: Host | None) -> str:
     if database.is_file() and not types_db.compatible(database):
         return content_cache.key(current, "stale types database", str(types_db.DB_SCHEMA))
     return current
-
-
-def marker(project: Project) -> Path:
-    """Where the digest of the inputs of the last published solution is kept."""
-    return project.build / "types" / "solve-input.sha256"
 
 
 def _evidence(project: Project) -> tuple[dict[str, str], dict[str, str], dict[str, list[str]]]:
@@ -1253,24 +1249,39 @@ def _solve(project: Project, policy: Host | None) -> dict[str, Any]:
     database = types_db.path(project)
     compatible = types_db.compatible(database)
     current = readiness(project, policy)
-    stored = marker(project)
     revision = 0  # The current schema initializes a new database explicitly at revision one.
     if database.is_file():
         try:
             revision = types_db.meta(database, "revision", default=0)
         except ValueError as error:
-            raise Held("solve", "types.sqlite.meta.revision: invalid JSON metadata") from error
+            raise Held(
+                capture(
+                    error,
+                    cause=cause_named(
+                        "types.sqlite.meta.revision",
+                        "types.sqlite.meta.revision: invalid JSON metadata",
+                        owner="typemap.solver",
+                        stage="solve",
+                    ),
+                )
+            ) from error
         if type(revision) is not int or revision < 0:
-            raise Held("solve", "types.sqlite.meta.revision: expected nonnegative integer")
+            raise Held(
+                cause_named(
+                    "types.sqlite.meta.revision",
+                    "types.sqlite.meta.revision: expected nonnegative integer",
+                    owner="typemap.solver",
+                    stage="solve",
+                )
+            )
     if (
         compatible
-        and stored.is_file()
-        and stored.read_text() == current.key
+        and __import__("unbake.steps", fromlist=["recorded"]).recorded(project, "types") == current.key
         and database.is_file()
         and not header_step.missing(project)
     ):
         tui.line("The type inputs did not change, so the last solution stands")
-        return {"changes": {}, "reused": True}
+        return {"changes": {}, "reused": True, "post_input_key": current.key}
     with tui.task("Reading the previous type summary"):
         previous = types_db.summary(database) if database.is_file() else {}
     facts, fact_keys = current.facts, current.source_keys
@@ -1318,15 +1329,14 @@ def _solve(project: Project, policy: Host | None) -> dict[str, Any]:
             result = compute()
         if (
             compatible
-            and stored.is_file()
+            and __import__("unbake.steps", fromlist=["recorded"]).recorded(project, "types") is not None
             and types_db.meta(database, "inference_key") == inference_key
             and types_db.meta(database, "inference_receipts") == receipts_key
             and types_db.meta(database, "inference_publication") == publication_key
             and not header_step.missing(project)
         ):
-            atomic_files.text(stored, content_key)
             tui.line("The type facts did not change, so the last solution stands")
-            return {"changes": {}, "reused": True}
+            return {"changes": {}, "reused": True, "post_input_key": current.key}
     result["declaration_evidence"], result["published_declarations"], result["published_homes"] = evidence
     revision += 1
     result = {
@@ -1343,14 +1353,11 @@ def _solve(project: Project, policy: Host | None) -> dict[str, Any]:
     }
     from unbake.typemap.database import publish
 
-    try:
-        publish(project, result, previous, policy=policy)
-        content_key = _settled_inputs(project, policy, content_key, inference_key, receipts_key, publication_key)
-    except BaseException:
-        stored.unlink(missing_ok=True)
-        raise
-    atomic_files.text(stored, content_key)
+    publish(project, result, previous, policy=policy)
+    content_key = _settled_inputs(project, policy, content_key, inference_key, receipts_key, publication_key)
     result["changes"] = changes(previous, types_db.summary(database))
+    result["post_input_key"] = content_key
+
     return result
 
 

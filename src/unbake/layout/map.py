@@ -13,6 +13,8 @@ from typing import Any, NoReturn
 from unbake import atomic as atomic_files
 from unbake.config import Held, Project
 from unbake.layout import split
+from unbake.process import capture
+from unbake.process import named as cause_named
 
 
 @dataclass(frozen=True)
@@ -53,7 +55,7 @@ class Map:
 
 
 def refuse(key: str, reason: str) -> NoReturn:
-    raise Held("layout", f"layout.{key}: {reason}")
+    raise Held(cause_named(f"layout.{key}", f"layout.{key}: {reason}", owner="layout.map", stage="layout"))
 
 
 def positive(value: Any, key: str) -> int:
@@ -223,7 +225,12 @@ def load(project: Project) -> Map:
     try:
         value = tomllib.loads(path.read_text())
     except (OSError, tomllib.TOMLDecodeError) as error:
-        raise Held("layout", f"layout.map: {path}: {error}") from error
+        raise Held(
+            capture(
+                error,
+                cause=cause_named("layout.map", f"layout.map: {path}: {error}", owner="layout.map", stage="layout"),
+            )
+        ) from error
     return validate(value, project.versions, catalog(project))
 
 
@@ -287,7 +294,12 @@ def ensure(project: Project) -> bool:
         before = target.read_bytes()
         value = tomllib.loads(before.decode("utf-8"))
     except (OSError, UnicodeError, tomllib.TOMLDecodeError) as error:
-        raise Held("layout", f"layout.map: {target}: {error}") from error
+        raise Held(
+            capture(
+                error,
+                cause=cause_named("layout.map", f"layout.map: {target}: {error}", owner="layout.map", stage="layout"),
+            )
+        ) from error
     members = catalog(project)
     _drop_stale_defaults(value, members)
     named = {

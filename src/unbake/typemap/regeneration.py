@@ -19,6 +19,8 @@ from unbake.fold import provider_reuse
 from unbake.layout import headers
 from unbake.layout import index as layout_index
 from unbake.layout import map as layout_map
+from unbake.process import capture
+from unbake.process import named as cause_named
 from unbake.project.headers import Graph
 from unbake.typemap import header_names, split, storage
 
@@ -98,7 +100,17 @@ def _projection(project: Project, policy: Host | None, path: Path, text: str, ex
         declared: Any = tokens(text)
     except Held as error:
         if policy is None or not re.search(r"^\s*#\s*(?:if|ifdef|ifndef|elif)\b", text, re.M):
-            raise Held("solve", f"types.declaration: {path}: {error.reason}") from error
+            raise Held(
+                capture(
+                    error,
+                    cause=cause_named(
+                        "types.declaration",
+                        f"types.declaration: {path}: {error.reason}",
+                        owner="typemap.regeneration",
+                        stage="solve",
+                    ),
+                )
+            ) from error
         from unbake.fold.source_views import active_source
 
         declared = {

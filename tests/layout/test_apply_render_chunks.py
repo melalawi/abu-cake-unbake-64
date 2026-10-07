@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 from unbake.config import Held
 from unbake.layout import apply
+from unbake.process import named
 from unbake.typemap import database, regeneration
 
 ROOT = Path("/project")
@@ -15,7 +16,7 @@ ROOT = Path("/project")
 
 def fake_source(project, text, member, outputs, *, ownership, lookup, previous, disagreements):
     if "refuse" in text:
-        raise Held("layout", f"layout.redeclaration.{member}: refused")
+        raise Held(named("fixture.refusal", f"layout.redeclaration.{member}: refused", owner="fixture", stage="layout"))
     if disagreements is not None and "differs" in text:
         disagreements[member] = ("int x;", "s32 x;")
     assert all(path.suffix != ".c" for path in outputs), "a source never reads another source"

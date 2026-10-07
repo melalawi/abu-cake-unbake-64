@@ -18,6 +18,8 @@ from unbake import config
 from unbake import inputs as input_pins
 from unbake.config import Held, Host, Project
 from unbake.layout import planner, port, split, symbol_identity, symbol_replan
+from unbake.process import capture
+from unbake.process import named as cause_named
 from unbake.project import setup
 from unbake.project.flow import LayoutManifest
 from unbake.project.rom import load
@@ -28,16 +30,37 @@ def read(path: Path) -> list[dict[str, Any]]:
         result = {}
         for key, value in values:
             if key in result:
-                raise Held("split", f"split.join.map: duplicate key {key}")
+                raise Held(
+                    cause_named(
+                        "split.join.map",
+                        f"split.join.map: duplicate key {key}",
+                        owner="layout.symbol_join",
+                        stage="split",
+                    )
+                )
             result[key] = value
         return result
 
     try:
         value = json.loads(path.read_bytes(), object_pairs_hook=pairs)
     except (OSError, ValueError) as error:
-        raise Held("split", f"split.join.map: {error}") from error
+        raise Held(
+            capture(
+                error,
+                cause=cause_named(
+                    "split.join.map", f"split.join.map: {error}", owner="layout.symbol_join", stage="split"
+                ),
+            )
+        ) from error
     if not isinstance(value, list) or not value or any(not isinstance(row, dict) for row in value):
-        raise Held("split", "split.join.map: required nonempty JSON list of name/placements/evidence objects")
+        raise Held(
+            cause_named(
+                "split.join.map",
+                "split.join.map: required nonempty JSON list of name/placements/evidence objects",
+                owner="layout.symbol_join",
+                stage="split",
+            )
+        )
     return cast(list[dict[str, Any]], value)
 
 
@@ -47,7 +70,14 @@ def plan(project: Project, assertions: list[dict[str, Any]]) -> tuple[dict[str, 
         with (project.build / "setup/layout.json").open() as stream:
             layout = cast(LayoutManifest, json.load(stream))
     except (OSError, ValueError) as error:
-        raise Held("split", f"split.join.layout: {error}") from error
+        raise Held(
+            capture(
+                error,
+                cause=cause_named(
+                    "split.join.layout", f"split.join.layout: {error}", owner="layout.symbol_join", stage="split"
+                ),
+            )
+        ) from error
     ff = {v: port.functions(project, v) for v in project.versions}
     functions = {(v, f.start): f for v, rows in ff.items() for f in rows}
     records = {(v, f["start"]): f for v, row in layout["versions"].items() for f in row["functions"]}
@@ -63,7 +93,14 @@ def plan(project: Project, assertions: list[dict[str, Any]]) -> tuple[dict[str, 
             for k, f in functions.items()
         )
     ):
-        raise Held("split", "split.join.layout_stale: ROM pins, project identity or executable placements changed")
+        raise Held(
+            cause_named(
+                "split.join.layout_stale",
+                "split.join.layout_stale: ROM pins, project identity or executable placements changed",
+                owner="layout.symbol_join",
+                stage="split",
+            )
+        )
     items: dict[str, set[tuple[str, int]]] = defaultdict(set)
     for key, f in functions.items():
         items[f.name].add(key)
@@ -85,52 +122,131 @@ def plan(project: Project, assertions: list[dict[str, Any]]) -> tuple[dict[str, 
             split.name(name, "split.join.name")
             placements = request.get("placements")
             if not isinstance(placements, list) or len(placements) < 2:
-                raise Held("split", "split.join.placements: supply at least two byte-pinned placements")
+                raise Held(
+                    cause_named(
+                        "split.join.placements",
+                        "split.join.placements: supply at least two byte-pinned placements",
+                        owner="layout.symbol_join",
+                        stage="split",
+                    )
+                )
             if not isinstance(request.get("evidence"), (str, dict)) or not request["evidence"]:
-                raise Held("split", "split.join.evidence: supply correspondence evidence")
+                raise Held(
+                    cause_named(
+                        "split.join.evidence",
+                        "split.join.evidence: supply correspondence evidence",
+                        owner="layout.symbol_join",
+                        stage="split",
+                    )
+                )
             keys = set()
             for placement in placements:
                 if not isinstance(placement, dict):
-                    raise Held("split", "split.join.placements: expected placement object")
+                    raise Held(
+                        cause_named(
+                            "split.join.placements",
+                            "split.join.placements: expected placement object",
+                            owner="layout.symbol_join",
+                            stage="split",
+                        )
+                    )
                 v, start, end = (placement.get(field) for field in ("version", "start", "end"))
                 if not isinstance(v, str) or type(start) is not int or type(end) is not int:
-                    raise Held("split", "split.join.placements: version string and integer start/end required")
+                    raise Held(
+                        cause_named(
+                            "split.join.placements",
+                            "split.join.placements: version string and integer start/end required",
+                            owner="layout.symbol_join",
+                            stage="split",
+                        )
+                    )
                 key = (v, start)
                 if key in keys:
-                    raise Held("split", "split.join.duplicate_version: repeated placement")
+                    raise Held(
+                        cause_named(
+                            "split.join.duplicate_version",
+                            "split.join.duplicate_version: repeated placement",
+                            owner="layout.symbol_join",
+                            stage="split",
+                        )
+                    )
                 requested_function = functions.get(key)
                 if requested_function is None or requested_function.end != end:
-                    raise Held("split", f"split.join.placement_stale: {v}:{start:#x}: executable boundary differs")
+                    raise Held(
+                        cause_named(
+                            "split.join.placement_stale",
+                            f"split.join.placement_stale: {v}:{start:#x}: executable boundary differs",
+                            owner="layout.symbol_join",
+                            stage="split",
+                        )
+                    )
                 image = images[v].image()
                 digest = hashlib.sha256(image[start:end]).hexdigest()
                 del image
                 if placement.get("body_sha256") != digest:
-                    raise Held("split", f"split.join.placement_stale: {v}:{start:#x}: body SHA256 differs")
+                    raise Held(
+                        cause_named(
+                            "split.join.placement_stale",
+                            f"split.join.placement_stale: {v}:{start:#x}: body SHA256 differs",
+                            owner="layout.symbol_join",
+                            stage="split",
+                        )
+                    )
                 keys.add(key)
             # An assertion joins whole existing items; it never detaches one
             # placement from its already established symbol correspondence.
             members = set().union(*(items[functions[key].name] for key in keys))
             if len({v for v, _ in members}) != len(members):
-                raise Held("split", "split.join.duplicate_version: existing items overlap in a version")
+                raise Held(
+                    cause_named(
+                        "split.join.duplicate_version",
+                        "split.join.duplicate_version: existing items overlap in a version",
+                        owner="layout.symbol_join",
+                        stage="split",
+                    )
+                )
             source_names = {functions[key].name for key in members}
             if pending := source_names & pending_sources:
                 raise Held(
-                    "split", "split.join.authored_source: unpublished C requires review: " + ", ".join(sorted(pending))
+                    cause_named(
+                        "layout.symbol_join.plan",
+                        "split.join.authored_source: unpublished C requires review: " + ", ".join(sorted(pending)),
+                        owner="layout.symbol_join",
+                        stage="split",
+                    )
                 )
             if name in authored and name not in source_names:
-                raise Held("split", f"split.join.authored_source: destination {name}.c already exists")
+                raise Held(
+                    cause_named(
+                        "split.join.authored_source",
+                        f"split.join.authored_source: destination {name}.c already exists",
+                        owner="layout.symbol_join",
+                        stage="split",
+                    )
+                )
             sources = [authored[old] for old in sorted(source_names & authored.keys())]
             if len(sources) > 1:
                 proposed = dict.fromkeys(source_names, name)
                 if len({symbol_replan.rewrite(source.read_text(), proposed) for source in sources}) != 1:
                     raise Held(
-                        "split",
-                        "split.join.authored_source: joined C sources differ; review "
-                        + ", ".join(p.name for p in sources),
+                        cause_named(
+                            "layout.symbol_join.plan",
+                            "split.join.authored_source: joined C sources differ; review "
+                            + ", ".join(p.name for p in sources),
+                            owner="layout.symbol_join",
+                            stage="split",
+                        )
                     )
             for v in project.versions:
                 if name in symbol_names[v] and name not in source_names:
-                    raise Held("split", f"split.join.name_conflict: {v}: symbol {name} already exists")
+                    raise Held(
+                        cause_named(
+                            "split.join.name_conflict",
+                            f"split.join.name_conflict: {v}: symbol {name} already exists",
+                            owner="layout.symbol_join",
+                            stage="split",
+                        )
+                    )
             candidates.append((name, members, request["evidence"]))
         except Held as error:
             refusals.append({"name": name, "reason": error.reason})
@@ -300,19 +416,54 @@ def plan(project: Project, assertions: list[dict[str, Any]]) -> tuple[dict[str, 
         try:
             split.name(name, "split.join.name")
             if not request.get("evidence") or not isinstance(request["evidence"], (str, dict)):
-                raise Held("split", "split.join.evidence: supply correspondence evidence")
+                raise Held(
+                    cause_named(
+                        "split.join.evidence",
+                        "split.join.evidence: supply correspondence evidence",
+                        owner="layout.symbol_join",
+                        stage="split",
+                    )
+                )
             if any(function.name == name for function in functions.values()):
-                raise Held("split", f"split.join.name_conflict: function symbol {name} already exists")
+                raise Held(
+                    cause_named(
+                        "split.join.name_conflict",
+                        f"split.join.name_conflict: function symbol {name} already exists",
+                        owner="layout.symbol_join",
+                        stage="split",
+                    )
+                )
             rows = request.get("placements")
             if not isinstance(rows, list) or len(rows) < 2:
-                raise Held("split", "split.join.placements: supply at least two ROM-pinned data placements")
+                raise Held(
+                    cause_named(
+                        "split.join.placements",
+                        "split.join.placements: supply at least two ROM-pinned data placements",
+                        owner="layout.symbol_join",
+                        stage="split",
+                    )
+                )
             versions = set()
             for row in rows:
                 if not isinstance(row, dict):
-                    raise Held("split", "split.join.placements: expected placement object")
+                    raise Held(
+                        cause_named(
+                            "split.join.placements",
+                            "split.join.placements: expected placement object",
+                            owner="layout.symbol_join",
+                            stage="split",
+                        )
+                    )
                 v, symbol = row.get("version"), row.get("symbol")
                 if not isinstance(v, str) or v not in data_tables or not isinstance(symbol, str):
-                    raise Held("split", "split.join.data_placement_stale: unknown version or data symbol")
+                    raise Held(
+                        cause_named(
+                            "split.join.data_placement_stale",
+                            "split.join.data_placement_stale: unknown version or data symbol",
+                            owner="layout.symbol_join",
+                            stage="split",
+                        )
+                    )
                 entry = data_tables[v].get(symbol)
                 if entry is None and type(row.get("address")) is int:
                     encoded = re.fullmatch(r"D_([0-9A-Fa-f]{8})", symbol)
@@ -320,18 +471,60 @@ def plan(project: Project, assertions: list[dict[str, Any]]) -> tuple[dict[str, 
                         entry = symbol_identity.DataSymbol(row["address"])
                         data_tables[v][symbol] = entry
                 if entry is None or type(row.get("address")) is not int or entry.address != row["address"]:
-                    raise Held("split", "split.join.data_placement_stale: data address differs")
+                    raise Held(
+                        cause_named(
+                            "split.join.data_placement_stale",
+                            "split.join.data_placement_stale: data address differs",
+                            owner="layout.symbol_join",
+                            stage="split",
+                        )
+                    )
                 if row.get("rom_sha1") != pins[v]:
-                    raise Held("split", "split.join.data_placement_stale: ROM SHA1 differs")
+                    raise Held(
+                        cause_named(
+                            "split.join.data_placement_stale",
+                            "split.join.data_placement_stale: ROM SHA1 differs",
+                            owner="layout.symbol_join",
+                            stage="split",
+                        )
+                    )
                 if v in versions:
-                    raise Held("split", "split.join.duplicate_version: repeated data version")
+                    raise Held(
+                        cause_named(
+                            "split.join.duplicate_version",
+                            "split.join.duplicate_version: repeated data version",
+                            owner="layout.symbol_join",
+                            stage="split",
+                        )
+                    )
                 versions.add(v)
                 if row.get("size", entry.size) != entry.size:
-                    raise Held("split", "data.size_conflict: declared size differs")
+                    raise Held(
+                        cause_named(
+                            "data.size_conflict",
+                            "data.size_conflict: declared size differs",
+                            owner="layout.symbol_join",
+                            stage="split",
+                        )
+                    )
                 if row.get("type", entry.kind) != entry.kind:
-                    raise Held("split", "data.kind_conflict: declared kind differs")
+                    raise Held(
+                        cause_named(
+                            "data.kind_conflict",
+                            "data.kind_conflict: declared kind differs",
+                            owner="layout.symbol_join",
+                            stage="split",
+                        )
+                    )
             if name in groups or any(name == old["name"] for old in validated_data):
-                raise Held("split", "split.join.overlap: repeated asserted name")
+                raise Held(
+                    cause_named(
+                        "split.join.overlap",
+                        "split.join.overlap: repeated asserted name",
+                        owner="layout.symbol_join",
+                        stage="split",
+                    )
+                )
             validated_data.append(request)
         except Held as error:
             refusals.append({"name": name, "reason": error.reason})
@@ -412,4 +605,11 @@ def run(project: Project, policy: Host, path: Path, *, apply: bool) -> list[str]
             # Large layout evidence must be released before the next attempt.
             if "report" in locals():
                 del report
-    raise Held("split", "split.join.stale: project kept changing; retry the byte-pinned map")
+    raise Held(
+        cause_named(
+            "split.join.stale",
+            "split.join.stale: project kept changing; retry the byte-pinned map",
+            owner="layout.symbol_join",
+            stage="split",
+        )
+    )

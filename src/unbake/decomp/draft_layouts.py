@@ -7,6 +7,7 @@ from unbake.config import Held
 from unbake.decomp import opaque_pointers
 from unbake.decomp.draft_macros import calls
 from unbake.layout.structs_types import SCALARS
+from unbake.process import named as cause_named
 
 _ACCESS = re.compile(r"^\s*[ls](b|bu|h|hu|w|d)\s", re.M)
 _WIDTHS = {"b": 1, "bu": 1, "h": 2, "hu": 2, "w": 4, "d": 8}
@@ -57,15 +58,34 @@ def normalize(source: str, context: str, accessed: frozenset[int] = frozenset())
             field = _field_of(source, name)
             if field is not None:
                 raise Held(
-                    "m2c", f"{name}: the field at {field} is dereferenced but its pointee has no measured layout"
+                    cause_named(
+                        f"{name}",
+                        f"{name}: the field at {field} is dereferenced but its pointee has no measured layout",
+                        owner="decomp.draft_layouts",
+                        stage="m2c",
+                    )
                 )
             if len(accessed) != 1:
-                raise Held("m2c", f"{name}: unknown type has no declared target layout")
+                raise Held(
+                    cause_named(
+                        f"{name}",
+                        f"{name}: unknown type has no declared target layout",
+                        owner="decomp.draft_layouts",
+                        stage="m2c",
+                    )
+                )
             replacements.append((token.start(), token.end(), f"s{next(iter(accessed)) * 8}"))
             continue
         spelling = parser.type_name(name, ())
         if spelling not in SCALARS or spelling in ("float", "double", "f32", "f64"):
-            raise Held("m2c", f"{name}: unknown type has unsupported target layout {spelling}")
+            raise Held(
+                cause_named(
+                    f"{name}",
+                    f"{name}: unknown type has unsupported target layout {spelling}",
+                    owner="decomp.draft_layouts",
+                    stage="m2c",
+                )
+            )
         width = SCALARS[spelling][0]
         replacements.append((token.start(), token.end(), f"s{width * 8}"))
     for start, end, value in reversed(replacements):

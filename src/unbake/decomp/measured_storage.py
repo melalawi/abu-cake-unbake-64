@@ -9,6 +9,7 @@ from unbake.config import Held, Project
 from unbake.decomp import measured_access, measured_memory
 from unbake.decomp.draft_macros import calls
 from unbake.layout.structs_types import SCALARS
+from unbake.process import named as cause_named
 
 
 def _access_views(function: str, source: str, assembly: str, symbol: str, reads: set[str], writes: set[str]) -> str:
@@ -37,7 +38,14 @@ def _access_views(function: str, source: str, assembly: str, symbol: str, reads:
                 break
             tail += 1
         if level:
-            raise Held("m2c", f"{function}.{symbol}: unclosed data access")
+            raise Held(
+                cause_named(
+                    f"{function}.{symbol}",
+                    f"{function}.{symbol}: unclosed data access",
+                    owner="decomp.measured_storage",
+                    stage="m2c",
+                )
+            )
         end = tokens[tail].end()
         after = clean[end:].lstrip()
         before = clean[: token.start()]
@@ -50,17 +58,38 @@ def _access_views(function: str, source: str, assembly: str, symbol: str, reads:
         byte_address = f"((unsigned char *)&{symbol} + {address})"
         if after.startswith("(") and re.search(r"\bjalr\b", assembly):
             if reads != {"int"}:
-                raise Held("m2c", f"{function}.{symbol}: indirect call lacks a measured word")
+                raise Held(
+                    cause_named(
+                        f"{function}.{symbol}",
+                        f"{function}.{symbol}: indirect call lacks a measured word",
+                        owner="decomp.measured_storage",
+                        stage="m2c",
+                    )
+                )
             value = f"((void (**)()){byte_address})[0]"
         else:
             choices = writes if assignment else reads
             widths = {SCALARS[spelling][0] for spelling in choices}
             if len(widths) != 1:
                 kind = "store" if assignment else "load"
-                raise Held("m2c", f"{function}.{symbol}: data {kind} lacks a measured width")
+                raise Held(
+                    cause_named(
+                        f"{function}.{symbol}",
+                        f"{function}.{symbol}: data {kind} lacks a measured width",
+                        owner="decomp.measured_storage",
+                        stage="m2c",
+                    )
+                )
             width = next(iter(widths))
             if compound and {SCALARS[spelling][0] for spelling in writes} != {width}:
-                raise Held("m2c", f"{function}.{symbol}: read/modify/write lacks a measured width")
+                raise Held(
+                    cause_named(
+                        f"{function}.{symbol}",
+                        f"{function}.{symbol}: read/modify/write lacks a measured width",
+                        owner="decomp.measured_storage",
+                        stage="m2c",
+                    )
+                )
             if len(choices) == 1:
                 spelling = next(iter(choices))
             else:
@@ -83,7 +112,14 @@ def _access_views(function: str, source: str, assembly: str, symbol: str, reads:
                 if transport:
                     spelling = {1: "unsigned char", 2: "unsigned short", 4: "int"}[width]
                 if compound or not spelling or SCALARS[spelling][0] != width:
-                    raise Held("m2c", f"{function}.{symbol}: data load lacks a measured signed view")
+                    raise Held(
+                        cause_named(
+                            f"{function}.{symbol}",
+                            f"{function}.{symbol}: data load lacks a measured signed view",
+                            owner="decomp.measured_storage",
+                            stage="m2c",
+                        )
+                    )
             value = f"*(({spelling} *){byte_address})"
         edits.append((token.start(), end, value, 4 if after.startswith("(") else width))
     for start, end, value, _ in reversed(edits):
@@ -126,12 +162,26 @@ def prepare(project: Project, function: str, source: str, assembly: str) -> tupl
                         None,
                     )
                     if pad is None or not re.search(r"&" + name + r"\b", source):
-                        raise Held("m2c", f"{function}.{name}: unknown stack storage lacks a measured extent")
+                        raise Held(
+                            cause_named(
+                                f"{function}.{name}",
+                                f"{function}.{name}: unknown stack storage lacks a measured extent",
+                                owner="decomp.measured_storage",
+                                stage="m2c",
+                            )
+                        )
                     extent = str(min(int(pad[1], 0), following - offset))
                     type_ = "unsigned char"
             width = SCALARS.get(type_, (None, None))[0]
             if width is None or offset + width * (int(extent, 0) if extent else 1) > size:
-                raise Held("m2c", f"{function}.{name}: unsupported measured stack interval")
+                raise Held(
+                    cause_named(
+                        f"{function}.{name}",
+                        f"{function}.{name}: unsupported measured stack interval",
+                        owner="decomp.measured_storage",
+                        stage="m2c",
+                    )
+                )
             fields[name] = (offset, f"{type_} {name}" + (f"[{extent}]" if extent else "") + ";")
             if width != 4 and re.search(r"\b" + name + r"\s*=\s*M2C_UNALIGNED32\(", source):
                 word_name = "word_" + name
@@ -155,7 +205,14 @@ def prepare(project: Project, function: str, source: str, assembly: str) -> tupl
             )
         entry = re.search(r"\b" + re.escape(function) + r"\s*\([^{};]*\)\s*\{", source)
         if entry is None:
-            raise Held("m2c", f"{function}: missing measured stack body")
+            raise Held(
+                cause_named(
+                    f"{function}",
+                    f"{function}: missing measured stack body",
+                    owner="decomp.measured_storage",
+                    stage="m2c",
+                )
+            )
         # The template measures the local SP origin. Use that same byte
         # storage for dynamic addresses, leaving their index and field offset
         # intact so static and dynamic accesses continue to alias.
@@ -194,7 +251,14 @@ def prepare(project: Project, function: str, source: str, assembly: str) -> tupl
 
     def unaligned(args: list[str]) -> str:
         if len(args) != 1:
-            raise Held("m2c", f"{function}: invalid unaligned word operand")
+            raise Held(
+                cause_named(
+                    f"{function}",
+                    f"{function}: invalid unaligned word operand",
+                    owner="decomp.measured_storage",
+                    stage="m2c",
+                )
+            )
         operand = args[0]
         fields: list[list[str]] = []
 
@@ -225,7 +289,14 @@ def prepare(project: Project, function: str, source: str, assembly: str) -> tupl
     if addresses:
         entry = re.search(r"\b" + re.escape(function) + r"\s*\([^{};]*\)\s*\{", source)
         if entry is None:
-            raise Held("m2c", f"{function}: missing unaligned word body")
+            raise Held(
+                cause_named(
+                    f"{function}",
+                    f"{function}: missing unaligned word body",
+                    owner="decomp.measured_storage",
+                    stage="m2c",
+                )
+            )
         declarations = "".join(f"\n    const unsigned char *{name};" for name in addresses)
         source = source[: entry.end()] + declarations + source[entry.end() :]
     return source, shared

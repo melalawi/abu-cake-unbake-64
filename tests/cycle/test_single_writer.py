@@ -14,6 +14,10 @@ from tests.kit import TempCase
 from unbake import land, pool, steps
 from unbake.config import Held
 from unbake.cycle import engine, ladder
+from unbake.inputs import DependencySet
+from unbake.process import named
+from unbake.work import attempts
+from unbake.work.score import measure_words
 
 QUEUE = queue.Queue
 
@@ -49,7 +53,12 @@ class SingleWriterTests(TempCase):
         A beta text spelling "better" scores 10 points more each time, "worse" 10 less, "EXACT" is exact.
         The run ends when beta needs a creative edit."""
         project = SimpleNamespace(
-            root=self.root, build=self.root / "build", work=self.root / "work", cache=self.root, versions=("us",)
+            root=self.root,
+            id="fixture",
+            build=self.root / "build",
+            work=self.root / "work",
+            cache=self.root,
+            versions=("us",),
         )
         host = SimpleNamespace(
             cycle_debounce_ms=100,
@@ -129,7 +138,31 @@ class SingleWriterTests(TempCase):
                     held_once.discard(spec[2])
                     pending.append(future)  # queued behind busy workers: never started
                     return future
-                future.set_result(fn(spec))
+                if fn is engine.execute_task:
+                    operation, produce, arguments = spec
+                    if produce is draft_task and arguments[2] in held_once:
+                        held_once.discard(arguments[2])
+                        pending.append(future)
+                        return future
+                    value = produce(arguments)
+                    fault = (
+                        None
+                        if value["ok"]
+                        else __import__("unbake.process", fromlist=["Fault"]).Fault(
+                            named(
+                                value.get("key", "fixture.refused"),
+                                value["diagnostic"],
+                                owner="fixture",
+                                stage="cycle",
+                                dependencies=operation.dependencies,
+                            )
+                        )
+                    )
+                    future.set_result(
+                        attempts.Outcome(operation.id, "ok" if value["ok"] else "blocked", value, fault, {})
+                    )
+                else:
+                    future.set_result(fn(spec))
                 return future
 
         def busy() -> bool:
@@ -187,10 +220,30 @@ class SingleWriterTests(TempCase):
             if isinstance(found, dict):
                 return found
             if found == "SKIP":
-                return {"ok": True, "best_file": str(path), "mutations": 0, "words": 3, "seconds": 0.0}
+                return {
+                    "ok": True,
+                    "best_file": str(path),
+                    "mutations": 0,
+                    "measurements": {
+                        "us": measure_words(
+                            "us", bytes.fromhex("24420004") * 4, bytes.fromhex("24420004") + bytes(12)
+                        ).document()
+                    },
+                    "seconds": 0.0,
+                }
             best = path.with_name(f"{path.stem}.best.c")
             best.write_text(path.read_text() if found is None else found)
-            return {"ok": True, "best_file": str(best), "mutations": 1, "words": 3, "seconds": 0.0}
+            return {
+                "ok": True,
+                "best_file": str(best),
+                "mutations": 1,
+                "measurements": {
+                    "us": measure_words(
+                        "us", bytes.fromhex("24420004") * 4, bytes.fromhex("24420004") + bytes(12)
+                    ).document()
+                },
+                "seconds": 0.0,
+            }
 
         def write_trouble(project_, host_, function, file, ladder_, difference):
             log.append(f"trouble {function}")
@@ -208,6 +261,9 @@ class SingleWriterTests(TempCase):
         ]
         stream = io.StringIO()
         with (
+            patch.object(
+                engine, "task_dependencies", return_value=DependencySet((), {"dependencies_unknown": True}, {})
+            ),
             patch.object(engine, "_draft_task", draft_task),
             patch.object(engine, "_compare_task", compare_task),
             patch.object(engine, "_search_task", search_task),
@@ -304,7 +360,9 @@ class SingleWriterTests(TempCase):
         self.assertEqual(run.result.data["landed"], ["alpha", "beta"])
 
     def test_a_refused_step_stops_the_cycle_by_name(self) -> None:
-        run = self.cycle(land_steps=[Held("solve", "types.declaration: broken")])
+        run = self.cycle(
+            land_steps=[Held(named("types.declaration", "types.declaration: broken", owner="fixture", stage="solve"))]
+        )
         self.assertEqual(run.result.key, "cycle.steps")
         self.assertEqual(run.names("steps.held")[0]["reason"], "types.declaration: broken")
         self.assertNotIn("draft beta", run.log[run.log.index("land alpha") :])

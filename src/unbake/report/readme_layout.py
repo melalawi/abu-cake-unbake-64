@@ -3,17 +3,32 @@
 import re
 
 from unbake.config import Held
+from unbake.process import named as cause_named
 
 
 def section(content: str) -> tuple[str, str, str]:
     headings = list(re.finditer(r"^## Progress\r?\n\r?\n", content, re.MULTILINE))
     if len(headings) != 1:
-        raise Held("report", "readme.Progress: exactly one heading required")
+        raise Held(
+            cause_named(
+                "readme.Progress",
+                "readme.Progress: exactly one heading required",
+                owner="report.readme_layout",
+                stage="report",
+            )
+        )
     heading = headings[0]
     body = content[heading.end() :]
     end = re.search(r"\r?\n## ", body)
     if end is None:
-        raise Held("report", "readme.Progress: following section missing")
+        raise Held(
+            cause_named(
+                "readme.Progress",
+                "readme.Progress: following section missing",
+                owner="report.readme_layout",
+                stage="report",
+            )
+        )
     return content[: heading.end()], body[: end.start()], body[end.start() :]
 
 

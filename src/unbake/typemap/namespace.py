@@ -14,6 +14,8 @@ from pycparser import c_ast, c_generator  # type: ignore[import-untyped]
 
 from unbake import cdecl
 from unbake.config import Held, Host, Project
+from unbake.process import capture
+from unbake.process import named as cause_named
 
 
 class FunctionDeclarations:
@@ -97,16 +99,27 @@ class FunctionDeclarations:
                     if isinstance(node, c_ast.Decl) and node.name in self.names and not self.function(node.type):
                         if node.init is not None or "extern" not in node.storage:
                             raise Held(
-                                "headers", f"headers.namespace: {node.name}: function identity has object storage"
+                                cause_named(
+                                    "headers.namespace",
+                                    f"headers.namespace: {node.name}: function identity has object storage",
+                                    owner="typemap.namespace",
+                                    stage="headers",
+                                )
                             )
                         record = self.records.get(node.name, {})
                         prototype = self.prototypes.get(node.name) or record.get("prototype")
                         if not prototype:
                             if not isinstance(node.type, c_ast.TypeDecl):
                                 raise Held(
-                                    "headers",
-                                    f"headers.namespace: {node.name}: "
-                                    "non-scalar object conflicts with function identity",
+                                    cause_named(
+                                        "headers.namespace",
+                                        (
+                                            f"headers.namespace: {node.name}: non-scalar object conflicts with "
+                                            f"function identity"
+                                        ),
+                                        owner="typemap.namespace",
+                                        stage="headers",
+                                    )
                                 )
                             declaration = copy.deepcopy(node)
                             declaration.type = c_ast.FuncDecl(None, declaration.type)
@@ -271,7 +284,14 @@ def reconcile(
     for name in sorted(names & (facts["globals"].keys() | globals_.keys() | arrays.keys())):
         placements = facts["globals"].get(name, {}).get("versions", {})
         if any(row["address"] not in addresses.get(version, ()) for version, row in placements.items()):
-            raise Held("solve", f"types.namespace: {name}: function identity conflicts with mapped object storage")
+            raise Held(
+                cause_named(
+                    "types.namespace",
+                    f"types.namespace: {name}: function identity conflicts with mapped object storage",
+                    owner="typemap.namespace",
+                    stage="solve",
+                )
+            )
         record = globals_.pop(name, None)
         array = arrays.pop(name, None)
         if record is not None or array is not None:
@@ -298,7 +318,14 @@ def check(value: dict[str, Any], components: Mapping[Path, str]) -> None:
     names = set(value.get("function_symbols", ())) | value.get("functions", {}).keys()
     collisions = names & (value.get("globals", {}).keys() | value.get("arrays", {}).keys())
     if collisions:
-        raise Held("headers", "headers.namespace: function/object records conflict: " + ", ".join(sorted(collisions)))
+        raise Held(
+            cause_named(
+                "typemap.namespace.check",
+                "headers.namespace: function/object records conflict: " + ", ".join(sorted(collisions)),
+                owner="typemap.namespace",
+                stage="headers",
+            )
+        )
     if not names:
         return
     contracts = units(dict(components))
@@ -333,15 +360,36 @@ def check(value: dict[str, Any], components: Mapping[Path, str]) -> None:
         try:
             nodes = tree(unit.text).ext
         except Exception as error:
-            raise Held("headers", f"headers.namespace: cannot classify {unit.path}: {error}") from error
+            raise Held(
+                capture(
+                    error,
+                    cause=cause_named(
+                        "headers.namespace",
+                        f"headers.namespace: cannot classify {unit.path}: {error}",
+                        owner="typemap.namespace",
+                        stage="headers",
+                    ),
+                )
+            ) from error
         for node in nodes:
             if isinstance(node, c_ast.Typedef) and node.name in names:
                 raise Held(
-                    "headers", f"headers.namespace: {node.name}: typedef conflicts with function identity ({unit.path})"
+                    cause_named(
+                        "headers.namespace",
+                        f"headers.namespace: {node.name}: typedef conflicts with function identity ({unit.path})",
+                        owner="typemap.namespace",
+                        stage="headers",
+                    )
                 )
             if isinstance(node, c_ast.Decl) and node.name in names and not function(node.type, set()):
                 raise Held(
-                    "headers",
-                    f"headers.namespace: {node.name}: retained object declaration conflicts with function identity "
-                    f"({unit.path}: {unit.text.strip()})",
+                    cause_named(
+                        "headers.namespace",
+                        (
+                            f"headers.namespace: {node.name}: retained object declaration conflicts "
+                            f"with function identity ({unit.path}: {unit.text.strip()})"
+                        ),
+                        owner="typemap.namespace",
+                        stage="headers",
+                    )
                 )

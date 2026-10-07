@@ -8,6 +8,7 @@ from pathlib import Path
 
 from unbake.config import Held, Host, Project
 from unbake.layout import split, split_apply
+from unbake.process import named as cause_named
 
 
 @dataclass
@@ -32,7 +33,12 @@ def _finish(
         return Outcome([], versions, [*lines, "no edits"])
     if not proved.ok:
         raise Held(
-            "boundary", "boundary.proof: make check refused the edit; nothing was written: " + "; ".join(proved.lines())
+            cause_named(
+                "layout.boundary_ops._finish",
+                "boundary.proof: make check refused the edit; nothing was written: " + "; ".join(proved.lines()),
+                owner="layout.boundary_ops",
+                stage="boundary",
+            )
         )
     return Outcome(text.splitlines(), versions, [*lines, *proved.lines()])
 
@@ -53,7 +59,11 @@ def interval(
         edits = split_edits.code(project, version, subject, start, end, policy=host)
         extra.append("proved code: " + json.dumps(prove(project, version, start, end, host), sort_keys=True))
     else:
-        raise Held("boundary", f"boundary.verb: {verb}: unknown")
+        raise Held(
+            cause_named(
+                "boundary.verb", f"boundary.verb: {verb}: unknown", owner="layout.boundary_ops", stage="boundary"
+            )
+        )
     return _finish(project, host, edits, apply, extra)
 
 

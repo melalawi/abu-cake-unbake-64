@@ -30,7 +30,7 @@ class DatabaseWorkCounts(RealSlice):
         self.summary = {"functions": {name: {"semantic_sha256": "stable", "users": [name]} for name in functions}}
 
     def publish(self, value):
-        staged, digest = types_db.stage(self.database, types_db.encode(value), self.summary, {})
+        staged, digest = types_db.stage(self.database, types_db.encode(value), self.summary)
         types_db.install(self.database, staged)
         return digest
 

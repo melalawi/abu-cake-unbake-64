@@ -20,6 +20,8 @@ from unbake import process, scratch, strict_json
 from unbake.compilers.families.mips import ORIGINAL_RULES
 from unbake.config import Held
 from unbake.layout import split
+from unbake.process import capture
+from unbake.process import named as cause_named
 from unbake.work import shape
 
 if TYPE_CHECKING:
@@ -47,19 +49,54 @@ def load(project: Project) -> dict[str, Record]:
     try:
         value = strict_json.read(path)
     except (OSError, ValueError) as error:
-        raise Held("original-asm", f"{MANIFEST}: {error}") from error
+        raise Held(
+            capture(
+                error,
+                cause=cause_named(
+                    f"{MANIFEST}", f"{MANIFEST}: {error}", owner="decomp.original_asm", stage="original-asm"
+                ),
+            )
+        ) from error
     if not isinstance(value, dict) or value.get("schema") != 1 or set(value) != {"schema", "functions"}:
-        raise Held("original-asm", f"{MANIFEST}: expected schema 1 and functions")
+        raise Held(
+            cause_named(
+                f"{MANIFEST}",
+                f"{MANIFEST}: expected schema 1 and functions",
+                owner="decomp.original_asm",
+                stage="original-asm",
+            )
+        )
     functions = value["functions"]
     if not isinstance(functions, dict):
-        raise Held("original-asm", f"{MANIFEST}.functions: expected a table")
+        raise Held(
+            cause_named(
+                f"{MANIFEST}.functions",
+                f"{MANIFEST}.functions: expected a table",
+                owner="decomp.original_asm",
+                stage="original-asm",
+            )
+        )
     records = {}
     for name, row in functions.items():
         if not split.NAME.fullmatch(name) or not isinstance(row, dict) or set(row) != {"rule"}:
-            raise Held("original-asm", f"{MANIFEST}.functions.{name}: expected {{rule}}")
+            raise Held(
+                cause_named(
+                    f"{MANIFEST}.functions.{name}",
+                    f"{MANIFEST}.functions.{name}: expected {{rule}}",
+                    owner="decomp.original_asm",
+                    stage="original-asm",
+                )
+            )
         if row["rule"] not in ORIGINAL_RULES:
             known = ", ".join(sorted(ORIGINAL_RULES))
-            raise Held("original-asm", f"{MANIFEST}.functions.{name}.rule: {row['rule']!r} is not one of {known}")
+            raise Held(
+                cause_named(
+                    f"{MANIFEST}.functions.{name}.rule",
+                    f"{MANIFEST}.functions.{name}.rule: {row['rule']!r} is not one of {known}",
+                    owner="decomp.original_asm",
+                    stage="original-asm",
+                )
+            )
         records[name] = Record(row["rule"])
     return records
 
@@ -73,7 +110,14 @@ def prove(project: Project, row: split.Function, data: bytes) -> shape.Original:
     """The original-asm proof of ROW's bytes against every configured compiler; refused when no rule holds."""
     found = shape.original(shape.words_of(data), shape.configured(project)[1])
     if found is None:
-        raise Held("original-asm", f"original.not_original: {row.version} {row.name}: no original-asm rule holds")
+        raise Held(
+            cause_named(
+                "original.not_original",
+                f"original.not_original: {row.version} {row.name}: no original-asm rule holds",
+                owner="decomp.original_asm",
+                stage="original-asm",
+            )
+        )
     return found
 
 
@@ -83,7 +127,14 @@ def guard(project: Project) -> None:
     sources = {path.stem for path in project.src.glob("*.s")}
     unrecorded = sorted(sources - set(records))
     if unrecorded:
-        raise Held("original-asm", f"original.unrecorded: src/{unrecorded[0]}.s has no {MANIFEST} record")
+        raise Held(
+            cause_named(
+                "original.unrecorded",
+                f"original.unrecorded: src/{unrecorded[0]}.s has no {MANIFEST} record",
+                owner="decomp.original_asm",
+                stage="original-asm",
+            )
+        )
     rows: set[str] = set()
     for version in project.versions:
         for row in split.functions(project, version):
@@ -93,17 +144,43 @@ def guard(project: Project) -> None:
             rows.add(name)
             record = records.get(name)
             if record is None:
-                raise Held("original-asm", f"original.unrecorded: {version} hasm row {name} has no record")
+                raise Held(
+                    cause_named(
+                        "original.unrecorded",
+                        f"original.unrecorded: {version} hasm row {name} has no record",
+                        owner="decomp.original_asm",
+                        stage="original-asm",
+                    )
+                )
             if name not in sources:
-                raise Held("original-asm", f"original.source: {version} hasm row {name} has no src/{name}.s")
+                raise Held(
+                    cause_named(
+                        "original.source",
+                        f"original.source: {version} hasm row {name} has no src/{name}.s",
+                        owner="decomp.original_asm",
+                        stage="original-asm",
+                    )
+                )
             found = prove(project, row, split.words(project, row))
             if found.rule != record.rule:
                 raise Held(
-                    "original-asm", f"original.rule: {version} {name}: recorded {record.rule}, ROM proves {found.rule}"
+                    cause_named(
+                        "original.rule",
+                        f"original.rule: {version} {name}: recorded {record.rule}, ROM proves {found.rule}",
+                        owner="decomp.original_asm",
+                        stage="original-asm",
+                    )
                 )
     missing = sorted(set(records) - rows)
     if missing:
-        raise Held("original-asm", f"original.row: {missing[0]} is recorded but no VERSION has its hasm row")
+        raise Held(
+            cause_named(
+                "original.row",
+                f"original.row: {missing[0]} is recorded but no VERSION has its hasm row",
+                owner="decomp.original_asm",
+                stage="original-asm",
+            )
+        )
 
 
 def _disassemble(host: Host, data: bytes, address: int, work: Path) -> list[str]:
@@ -233,4 +310,11 @@ def write_source(project: Project, host: Host, row: split.Function, data: bytes,
                 bad = [index for index, (have, want) in enumerate(pairs) if have != want]
             for index in bad:
                 instructions[index] = (f".word 0x{words[index]:08X}", instructions[index][0])
-    raise Held("original-asm", f"original.mismatch: {row.version} {name}: the .s does not assemble to the ROM row")
+    raise Held(
+        cause_named(
+            "original.mismatch",
+            f"original.mismatch: {row.version} {name}: the .s does not assemble to the ROM row",
+            owner="decomp.original_asm",
+            stage="original-asm",
+        )
+    )

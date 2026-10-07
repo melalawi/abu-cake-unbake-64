@@ -17,6 +17,8 @@ from unbake.decomp.draft_context import ordered_headers
 from unbake.layout.structs import Field, Layout
 from unbake.layout.structs_identity import Index
 from unbake.layout.structs_types import Aggregate
+from unbake.process import capture
+from unbake.process import named as cause_named
 from unbake.project.headers import Graph, include_headers
 
 
@@ -144,7 +146,17 @@ def _context(contents: dict[Path, str], *, root: Path | None) -> tuple[dict[Path
                     reason = reason[: line.start()] + f"{label}:{number}" + reason[line.end() :]
                     break
                 number -= lines
-        raise Held("structs", f"headers.declaration: SDK/shared header prerequisite: {reason}") from error
+        raise Held(
+            capture(
+                error,
+                cause=cause_named(
+                    "headers.declaration",
+                    f"headers.declaration: SDK/shared header prerequisite: {reason}",
+                    owner="layout.header_context",
+                    stage="structs",
+                ),
+            )
+        ) from error
     return contents, parser, records
 
 
@@ -347,7 +359,17 @@ class Headers:
                     aggregate.aliases[:] = list(dict.fromkeys(aggregate.aliases))
         except Held as error:
             label = path.relative_to(self.root) if self.root is not None and path.is_relative_to(self.root) else path
-            raise Held("structs", f"headers.declaration: {label}: {error.reason}") from error
+            raise Held(
+                capture(
+                    error,
+                    cause=cause_named(
+                        "headers.declaration",
+                        f"headers.declaration: {label}: {error.reason}",
+                        owner="layout.header_context",
+                        stage="structs",
+                    ),
+                )
+            ) from error
         delta = len(self.source) + 1
         shifted = [
             replace(

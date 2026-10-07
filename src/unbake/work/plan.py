@@ -83,8 +83,8 @@ def candidates(project: Project, host: Host, *, selected: frozenset[str] | None 
 
     excluded = exclusions.load(project)
     _, functions, bodies = inventory.inventory(project)
-    carry = {name for name in attempts.functions(project) if attempts.path(project, name).is_file()}
-    history = attempts.summaries(project)
+    carry = set(attempts.ledger(project).summaries())
+    history = attempts.ledger(project).summaries()
     shapes, emitted = shape.configured(project)
     picked: list[tuple[split.Function, tuple[split.Function, ...]]] = []
     verdicts: list[Verdict] = []
@@ -230,7 +230,7 @@ def refusal(project: Project, name: str) -> str:
 def history(project: Project) -> list[rank.History]:
     return [
         rank.History(function, summary.bytes, summary.exact, summary.minutes)
-        for function, summary in attempts.summaries(project).items()
+        for function, summary in attempts.ledger(project).summaries().items()
     ]
 
 
@@ -253,7 +253,7 @@ def next_action(project: Project, host: Host, *, undrafted: bool) -> Action:
             if not row.carryover:
                 break
             file = project.work / row.function / f"{row.function}.c"
-            found = attempts.read(project, row.function)
+            found = attempts.ledger(project).history(row.function)
             if found and found[-1].exact:
                 return Action(("publish", str(file)), f"{row.function}: exact in every version; land it", row.function)
             best = f"{row.best_percent:.2f}%" if row.best_percent is not None else "not compared"

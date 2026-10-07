@@ -11,6 +11,7 @@ from pathlib import Path
 from unbake.cdecl import declaration_source
 from unbake.config import Held, Project
 from unbake.layout import index
+from unbake.process import named as cause_named
 from unbake.project.headers import Graph, Include
 
 
@@ -49,9 +50,15 @@ class _OwnedBytes:
             if isinstance(text, str) and hashlib.sha256(text.encode()).hexdigest() == digest:
                 return text
         raise Held(
-            "land",
-            f"land.header_dependency: {name}: current manifest owns missing header, "
-            "but its exact bytes are unavailable in the render cache; recompute headers",
+            cause_named(
+                "land.header_dependency",
+                (
+                    f"land.header_dependency: {name}: current manifest owns missing header, "
+                    f"but its exact bytes are unavailable in the render cache; recompute headers"
+                ),
+                owner="project.header_dependencies",
+                stage="land",
+            )
         )
 
 
@@ -111,7 +118,14 @@ def complete(project: Project, source: str, headers: dict[str, str]) -> Closed:
             nonlocal owned, signatures
             name = include.name
             if include.unknown:
-                raise Held("land", f"land.header_dependency: {parent}: native dependency proof required for {name}")
+                raise Held(
+                    cause_named(
+                        "land.header_dependency",
+                        f"land.header_dependency: {parent}: native dependency proof required for {name}",
+                        owner="project.header_dependencies",
+                        stage="land",
+                    )
+                )
             path = graph.resolve(parent, include).target or expected.resolve(parent, include).target
             if path is None:
                 return original
@@ -138,9 +152,13 @@ def complete(project: Project, source: str, headers: dict[str, str]) -> Closed:
                 homes = signatures.get(_signature(body), [])
                 if len(homes) > 1:
                     raise Held(
-                        "land",
-                        f"land.header_home: {relative}: multiple installed homes have its full payload: "
-                        + ", ".join(homes),
+                        cause_named(
+                            "project.header_dependencies.replace_import",
+                            f"land.header_home: {relative}: multiple installed homes have its full payload: "
+                            + ", ".join(homes),
+                            owner="project.header_dependencies",
+                            stage="land",
+                        )
                     )
                 if homes:
                     replacement = homes[0]

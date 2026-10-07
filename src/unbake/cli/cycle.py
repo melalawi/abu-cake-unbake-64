@@ -8,6 +8,7 @@ import re
 from unbake.cli.args import Context, positive
 from unbake.cli.output import Result
 from unbake.config import Held
+from unbake.process import named as cause_named
 
 NAME = "cycle"
 HELP = "Work a round: pick, draft, compare on every save, land each exact function at once."
@@ -83,9 +84,23 @@ def run(context: Context) -> Result:
         )
     interactive = engine.interactive()
     if not interactive and args.pick is None and args.functions is None:
-        raise Held("cycle", "cycle.pick: supply --pick N or --functions A,B,C (no terminal to choose on)")
+        raise Held(
+            cause_named(
+                "cycle.pick",
+                "cycle.pick: supply --pick N or --functions A,B,C (no terminal to choose on)",
+                owner="cli.cycle",
+                stage="cycle",
+            )
+        )
     if not interactive and args.stop is None:
-        raise Held("cycle", "cycle.stop: supply --stop all-landed|idle:SECONDS|after:MINUTES (no terminal)")
+        raise Held(
+            cause_named(
+                "cycle.stop",
+                "cycle.stop: supply --stop all-landed|idle:SECONDS|after:MINUTES (no terminal)",
+                owner="cli.cycle",
+                stage="cycle",
+            )
+        )
     functions = tuple(name for name in (args.functions or "").split(",") if name)
     outcome = engine.run(
         context.project(),

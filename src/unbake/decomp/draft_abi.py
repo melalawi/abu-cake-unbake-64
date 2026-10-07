@@ -10,6 +10,7 @@ from unbake.config import Held, Host, Project
 from unbake.decomp.draft_context import preprocess_context
 from unbake.layout import split
 from unbake.layout.structs_types import SCALARS
+from unbake.process import named as cause_named
 
 
 def declared_void_exit(
@@ -339,7 +340,14 @@ def mapped_body(project: Project, function: str, version: str) -> dict[str, Any]
     )
     rows = [row for row in split.functions(project, version) if function in row.aliases]
     if len(rows) != 1 or hashlib.sha256(split.words(project, rows[0])).hexdigest() != body.get("target_sha256"):
-        raise Held("m2c", f"{function}: types.abi.target_stale: caller bytes changed; run unbake recompute types")
+        raise Held(
+            cause_named(
+                f"{function}",
+                f"{function}: types.abi.target_stale: caller bytes changed; run unbake recompute types",
+                owner="decomp.draft_abi",
+                stage="m2c",
+            )
+        )
     return body
 
 

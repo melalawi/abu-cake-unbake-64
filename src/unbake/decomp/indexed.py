@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from unbake.config import Held, Project
 from unbake.decomp.rom import FunctionSpan, project_reader
 from unbake.layout import split
+from unbake.process import named as cause_named
 
 
 @dataclass(frozen=True)
@@ -25,7 +26,14 @@ def indexed_references(target_words: Sequence[int]) -> list[IndexedReference]:
     reset_after_slot = False
     for index, word in enumerate(target_words):
         if type(word) is not int or not 0 <= word <= 0xFFFFFFFF:
-            raise Held("symbols", f"target_words[{index}]: expected unsigned word")
+            raise Held(
+                cause_named(
+                    f"target_words[{index}]",
+                    f"target_words[{index}]: expected unsigned word",
+                    owner="decomp.indexed",
+                    stage="symbols",
+                )
+            )
         reset_now, reset_after_slot = reset_after_slot, False
         op, rs, rt = word >> 26, word >> 21 & 31, word >> 16 & 31
         rd, function = word >> 11 & 31, word & 63

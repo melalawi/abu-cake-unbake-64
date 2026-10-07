@@ -14,6 +14,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from unbake.config import Held
+from unbake.process import named as cause_named
 
 
 def path(root: Path) -> Path:
@@ -30,7 +31,11 @@ def project_lock(root: Path, command: str) -> Iterator[None]:
             fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             holder = os.pread(descriptor, 4096, 0).decode(errors="replace").strip() or "unknown holder"
-            raise Held("lock", f"project.lock: {holder} is writing this project") from None
+            raise Held(
+                cause_named(
+                    "project.lock", f"project.lock: {holder} is writing this project", owner="lock", stage="lock"
+                )
+            ) from None
         started = datetime.now(UTC).isoformat(timespec="seconds")
         record = f"{command} pid {os.getpid()} (started {started})".encode()
         os.ftruncate(descriptor, 0)

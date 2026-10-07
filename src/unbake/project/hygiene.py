@@ -5,7 +5,8 @@ import subprocess
 from pathlib import Path
 
 from unbake.config import Held, Host, Project
-from unbake.process import temporary_environment
+from unbake.process import capture, temporary_environment
+from unbake.process import named as cause_named
 
 
 def compiler_directories(project: Project) -> tuple[Path, ...]:
@@ -95,13 +96,27 @@ def indexed_contents(root: Path, blobs: list[bytes]) -> dict[bytes, bytes]:
         check=False,
     )
     if result.returncode:
-        raise Held("check", f"git cat-file: {result.stderr.decode(errors='replace').strip()}")
+        raise Held(
+            cause_named(
+                "project.hygiene.indexed_contents",
+                f"git cat-file: {result.stderr.decode(errors='replace').strip()}",
+                owner="project.hygiene",
+                stage="check",
+            )
+        )
     stream = io.BytesIO(result.stdout)
     contents = {}
     for blob in blobs:
         header = stream.readline().split()
         if len(header) != 3 or header[1] != b"blob":
-            raise Held("check", f"indexed object {blob.decode()}: missing blob")
+            raise Held(
+                cause_named(
+                    "project.hygiene.indexed_contents",
+                    f"indexed object {blob.decode()}: missing blob",
+                    owner="project.hygiene",
+                    stage="check",
+                )
+            )
         contents[blob] = stream.read(int(header[2]))
         stream.read(1)
     return contents
@@ -119,7 +134,14 @@ def tracked_findings(project: Project, policy: Host) -> list[str]:
         check=False,
     )
     if result.returncode:
-        raise Held("check", f"git ls-files: {result.stderr.decode(errors='replace').strip()}")
+        raise Held(
+            cause_named(
+                "project.hygiene.tracked_findings",
+                f"git ls-files: {result.stderr.decode(errors='replace').strip()}",
+                owner="project.hygiene",
+                stage="check",
+            )
+        )
     directories = compiler_directories(project)
     prefixes = tuple("/" + name + "/" for name in ("home", "mnt", "opt"))
     policy_paths = tuple(
@@ -151,7 +173,9 @@ def tracked_findings(project: Project, policy: Host) -> list[str]:
             if path.is_file():
                 candidates.add(path.read_bytes())
         except OSError as error:
-            raise Held("check", f"{name}: {error}") from error
+            raise Held(
+                capture(error, cause=cause_named(f"{name}", f"{name}: {error}", owner="project.hygiene", stage="check"))
+            ) from error
         locations = set()
         for content in candidates:
             if b"\0" in content:

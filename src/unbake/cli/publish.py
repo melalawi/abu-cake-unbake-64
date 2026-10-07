@@ -8,6 +8,7 @@ from typing import Any
 
 from unbake.cli.args import Context
 from unbake.cli.output import Result
+from unbake.process import named as cause_named
 
 NAME = "publish"
 HELP = "Publish exact FILEs or retain fuzzy C with --fuzzy."
@@ -81,7 +82,9 @@ def run(context: Context) -> Result:
     from unbake.cycle.events import Emitter
 
     if not context.args.files and not context.args.original and not getattr(context.args, "push", None):
-        raise Held("publish", "publish: name a FILE or --original FUNC")
+        raise Held(
+            cause_named("publish", "publish: name a FILE or --original FUNC", owner="cli.publish", stage="publish")
+        )
     emitter = Emitter(context.stdout) if context.args.events else None
 
     def committed(record: dict[str, Any]) -> None:

@@ -21,6 +21,9 @@ from unbake import cache as retention
 from unbake import effort, tui
 from unbake.cache import key
 from unbake.config import Held, Host, Project
+from unbake.inputs import DependencySet
+from unbake.process import Action, capture
+from unbake.process import named as cause_named
 
 if TYPE_CHECKING:
     from unbake.decomp.checks import Findings, SourceFinding
@@ -69,9 +72,13 @@ class Prepared:
         resume = self.request.resume_command
         action = f"stop: fix {finding.rule} at {place}" + (f", then run {resume}" if resume else "")
         raise Held(
-            "preflight",
-            f"check.source_rules: {place} {finding.rule}{provenance}; build not started",
-            next_action=action,
+            cause_named(
+                "check.source_rules",
+                f"check.source_rules: {place} {finding.rule}{provenance}; build not started",
+                owner="steps",
+                stage="preflight",
+                action=Action("stop", reason=action),
+            ),
             data=self.document(),
         )
 
@@ -81,9 +88,23 @@ class Prepared:
 
         expected = self.findings.dependency_hashes
         if checks.recipe() != expected["recipe:source-rules"]:
-            raise Held("preflight", "prepare.changed: source-rule recipe changed since preparation")
+            raise Held(
+                cause_named(
+                    "prepare.changed",
+                    "prepare.changed: source-rule recipe changed since preparation",
+                    owner="steps",
+                    stage="preflight",
+                )
+            )
         if self.request.project_scope and tuple(sorted(project.src.glob("*.c"))) != self.source_inventory:
-            raise Held("preflight", "prepare.changed: source inventory changed since preparation")
+            raise Held(
+                cause_named(
+                    "prepare.changed",
+                    "prepare.changed: source inventory changed since preparation",
+                    owner="steps",
+                    stage="preflight",
+                )
+            )
         for name, digest in expected.items():
             if name.startswith("recipe:"):
                 continue
@@ -92,7 +113,14 @@ class Prepared:
                 inputs.digest(path, algorithm="sha256", reuse=retention.configured()) if path.is_file() else "missing"
             )
             if current != digest:
-                raise Held("preflight", f"prepare.changed: {name}: changed since preparation")
+                raise Held(
+                    cause_named(
+                        "prepare.changed",
+                        f"prepare.changed: {name}: changed since preparation",
+                        owner="steps",
+                        stage="preflight",
+                    )
+                )
 
 
 def prepare(project: Project, host: Host, request: PrepareRequest) -> Prepared:
@@ -101,53 +129,71 @@ def prepare(project: Project, host: Host, request: PrepareRequest) -> Prepared:
     from unbake.decomp import checks
 
     if request.rules not in ("all", "unmarked"):
-        raise Held("preflight", "prepare.rules: expected all or unmarked")
+        raise Held(
+            cause_named("prepare.rules", "prepare.rules: expected all or unmarked", owner="steps", stage="preflight")
+        )
     inventory = tuple(sorted(project.src.glob("*.c")))
     paths = tuple(sorted(set(inventory if request.project_scope else request.sources) | set(request.proposed)))
     for path in paths:
         if not path.resolve().is_relative_to(project.root.resolve()):
-            raise Held("preflight", f"prepare.source: {path}: outside project")
+            raise Held(
+                cause_named(
+                    "prepare.source", f"prepare.source: {path}: outside project", owner="steps", stage="preflight"
+                )
+            )
         if path not in request.proposed and not path.is_file():
-            raise Held("preflight", f"prepare.source: {path}: missing source")
-    result = Prepared(
-        request, checks.findings(project, paths, Cache(project.build / "cache"), proposed=request.proposed), inventory
+            raise Held(
+                cause_named(
+                    "prepare.source", f"prepare.source: {path}: missing source", owner="steps", stage="preflight"
+                )
+            )
+    from unbake import inputs
+    from unbake.work.attempts import RetryScope
+
+    dependencies = inputs.DependencySet(
+        tuple(
+            inputs.file_pin(path, root=project.root, root_id="project", reuse=retention.configured()) for path in paths
+        ),
+        {
+            "proposed": {
+                str(p.relative_to(project.root)): inputs.bytes_digest(v.encode(), algorithm="sha256")
+                for p, v in request.proposed.items()
+            },
+            "rules": request.rules,
+        },
+        {"source-rules": checks.recipe()},
     )
-    result.refuse()
-    result.assert_current(project)
-    if request.required_steps:
-        ensure(project, host, request.required_steps)
-    return result
-
-
-def _path(project: Project) -> Path:
-    return project.build / "steps.json"
-
-
-def _read(project: Project) -> dict[str, dict[str, Any]]:
-    """Each step's record: the input key it ran for and the digest of each output it left (relative path)."""
-    path = _path(project)
-    if not path.is_file():
-        return {}
-    try:
-        value = json.loads(path.read_text())
-    except (OSError, ValueError) as error:
-        raise Held("steps", f"steps.json: {path}: {error}") from error
-    if not isinstance(value, dict):
-        raise Held("steps", f"steps.json: {path}: expected object")
-    return {
-        name: entry for name, entry in value.items() if isinstance(entry, dict) and isinstance(entry.get("key"), str)
-    }
+    with RetryScope(
+        project,
+        "prepare",
+        request.operation,
+        {"sources": [str(p.relative_to(project.root)) for p in request.sources], "rules": request.rules},
+        dependencies,
+    ) as scope:
+        result = Prepared(
+            request,
+            checks.findings(project, paths, Cache(project.build / "cache"), proposed=request.proposed),
+            inventory,
+        )
+        result.refuse()
+        result.assert_current(project)
+        if request.required_steps:
+            ensure(project, host, request.required_steps)
+        scope.value = result.document()
+        return result
 
 
 def recorded(project: Project, step: str) -> str | None:
-    entry = _read(project).get(step)
-    return None if entry is None else entry["key"]
+    from unbake.work.attempts import ledger
+
+    entry = ledger(project).step(step)
+    return entry["key"] if entry else None
 
 
 def record(project: Project, step: str, content_key: str, outputs: dict[str, str] | None = None) -> None:
-    value = _read(project)
-    value[step] = {"key": content_key, "outputs": outputs or {}}
-    atomic_files.text(_path(project), json.dumps(value, indent=1, sort_keys=True) + "\n")
+    from unbake.work.attempts import ledger
+
+    ledger(project).record_step(step, content_key, outputs or {})
 
 
 def _digests(project: Project, paths: Iterable[Path]) -> dict[str, str]:
@@ -166,8 +212,9 @@ def acknowledge_outputs(project: Project, step: str, paths: Iterable[Path]) -> N
     Keep the input key: a later solve still refreshes declarations from the new
     source. Other outputs retain their digests so hand edits remain detectable.
     """
-    value = _read(project)
-    entry = value.get(step)
+    from unbake.work.attempts import ledger
+
+    entry = ledger(project).step(step)
     if entry is None:
         return
     outputs = dict(entry.get("outputs", {}))
@@ -179,14 +226,15 @@ def acknowledge_outputs(project: Project, step: str, paths: Iterable[Path]) -> N
             outputs[name] = inputs.digest(path, algorithm="sha256", reuse=retention.configured())
     if outputs != entry.get("outputs", {}):
         entry["outputs"] = outputs
-        atomic_files.text(_path(project), json.dumps(value, indent=1, sort_keys=True) + "\n")
+        record(project, step, entry["key"], outputs)
 
 
 def altered(project: Project, step: str) -> list[str]:
     """The recorded outputs of STEP that are now missing or hold other bytes."""
     from unbake import inputs
+    from unbake.work.attempts import ledger
 
-    entry = _read(project).get(step)
+    entry = ledger(project).step(step)
     changed = []
     for name, digest in sorted((entry or {}).get("outputs", {}).items()):
         path = project.root / name
@@ -196,9 +244,10 @@ def altered(project: Project, step: str) -> list[str]:
 
 
 def forget(project: Project, step: str) -> None:
-    value = _read(project)
-    if value.pop(step, None) is not None:
-        atomic_files.text(_path(project), json.dumps(value, indent=1, sort_keys=True) + "\n")
+    from unbake.inputs import DependencySet
+    from unbake.work.attempts import ledger
+
+    ledger(project).note("step", step, {"invalidated": True}, dependencies=DependencySet((), {}, {}))
 
 
 @dataclass(frozen=True)
@@ -289,8 +338,8 @@ def _types(project: Project, host: Host) -> dict[str, Any]:
     # regenerated from the recorded solution.
     if types_db.compatible(types_db.path(project)) and header_step.missing(project):
         header_step.run(project, host)
-    changes: dict[str, Any] = solver.solve(project, host)["changes"]
-    return changes
+    result = solver.solve(project, host)
+    return {**result["changes"], "post_input_key": result["post_input_key"]}
 
 
 def _headers_key(project: Project, host: Host) -> str:
@@ -491,7 +540,14 @@ def order(names: Iterable[str]) -> list[str]:
 
     def visit(name: str) -> None:
         if name not in STEPS:
-            raise Held("steps", f"steps.{name}: unknown step; expected one of {', '.join(NAMES)}")
+            raise Held(
+                cause_named(
+                    f"steps.{name}",
+                    f"steps.{name}: unknown step; expected one of {', '.join(NAMES)}",
+                    owner="steps",
+                    stage="steps",
+                )
+            )
         if name in result:
             return
         for needed in STEPS[name].needs:
@@ -527,7 +583,10 @@ def ensure(
         stale.rollback()
     command = Command(project)
     try:
-        results = _ensure(project, host, names, force=force, report=report, command=command)
+        from unbake.work.attempts import command_ledger
+
+        with command_ledger(project):
+            results = _ensure(project, host, names, force=force, report=report, command=command)
     except BaseException:
         command.rollback()
         raise
@@ -558,9 +617,15 @@ class Command:
         for path in sorted(directory.glob("*.json")) if directory.is_dir() else ():
             if not path.stem.isdigit():
                 raise Held(
-                    "steps",
-                    f"steps.journal: {path} is not named for a process id; roll it back by moving it out of "
-                    "the journal directory, then rerun",
+                    cause_named(
+                        "steps.journal",
+                        (
+                            f"steps.journal: {path} is not named for a process id; roll it back by "
+                            f"moving it out of the journal directory, then rerun"
+                        ),
+                        owner="steps",
+                        stage="steps",
+                    )
                 )
             pid = int(path.stem)
             try:
@@ -620,6 +685,11 @@ def _ensure(
             started = time.monotonic()
             effort.window()
             spent = effort.mark()
+            from unbake.work.attempts import RetryScope
+
+            trial = RetryScope(project, "step.request", name, {}, operation_dependencies(project, host, name))
+            trial.__enter__()
+            trial.scope.__exit__(None, None, None)
             current = _reading_current(project, partial(step.key, project, host))
             same = recorded(project, name) == current
             changed = altered(project, name) if same and step.outputs is not None else []
@@ -637,28 +707,35 @@ def _ensure(
             )
             command.running(name)
             changes: dict[str, Any] = {}
+            from unbake.work.attempts import RetryScope
+
             try:
-                with tui.task(step.label) as shown:
+                with (
+                    RetryScope(project, "step.request", name, {}, operation_dependencies(project, host, name)),
+                    tui.task(step.label) as shown,
+                ):
                     changes = _reading_current(project, partial(step.run, project, host)) or {}
                     if name == "types":
-                        count = sum(kind["count"] for kind in changes.values())
+                        count = sum(
+                            kind["count"] for kind in changes.values() if isinstance(kind, dict) and "count" in kind
+                        )
                         shown.note = f"; changed {count} answers" if count else "; nothing changed"
             except Held:
                 raise
             except Exception as error:
-                where = f" reading {error.filename}" if isinstance(error, OSError) and error.filename else ""
-                raise Held("steps", f"steps.{name}: {type(error).__name__}{where}: {error}") from error
+                raise Held(
+                    capture(
+                        error,
+                        cause=cause_named(
+                            f"steps.{name}", f"{type(error).__name__}: {error}", owner="steps", stage="steps"
+                        ),
+                    )
+                ) from error
             recorded_key = current
             if name in ("extract", "rom-facts", "resident", "headers", "buildfiles"):
                 recorded_key = step.key(project, host)
             elif name == "types":
-                from unbake.typemap import solver
-
-                receipt = solver.marker(project)
-                if receipt.is_file():
-                    confirmed = receipt.read_text()
-                    if confirmed != current and confirmed == step.key(project, host):
-                        recorded_key = confirmed
+                recorded_key = changes.pop("post_input_key", current)
             record(
                 project,
                 name,
@@ -684,38 +761,18 @@ def _ensure(
         if not ran:
             return _checked(host, results, chain, force=force)
     raise Held(
-        "steps", f"steps.{ran[0]}: input key changes on every run ({', '.join(ran)}); a step rewrites its inputs"
+        cause_named(
+            f"steps.{ran[0]}",
+            f"steps.{ran[0]}: input key changes on every run ({', '.join(ran)}); a step rewrites its inputs",
+            owner="steps",
+            stage="steps",
+        )
     )
 
 
-VANISHED_RETRIES = 3
-
-
-def _vanished(project: Project, error: BaseException) -> bool:
-    """Whether ERROR (or a cause in its chain) is a project file that disappeared under the step."""
-    seen: set[int] = set()
-    while error is not None and id(error) not in seen:
-        seen.add(id(error))
-        name = getattr(error, "filename", None) if isinstance(error, FileNotFoundError) else None
-        if name is not None and Path(name).is_relative_to(project.root):
-            return True
-        # A worker's refusal crosses the process boundary without its cause: its fault names the exception.
-        if isinstance(error, Held) and (error.fault or {}).get("cause") == "FileNotFoundError":
-            return f"{project.root}/" in error.reason
-        error = error.__cause__ or error.__context__  # type: ignore[assignment]
-    return False
-
-
 def _reading_current(project: Project, call: Callable[[], Any]) -> Any:
-    """CALL, again when a project file it listed vanished: a checkout, rebase or land under a running command
-    changes the inputs, and the retry lists them again. A file still missing after the retries is refused."""
-    for attempt in range(VANISHED_RETRIES + 1):
-        try:
-            return call()
-        except (Held, OSError) as error:
-            if attempt == VANISHED_RETRIES or not _vanished(project, error):
-                raise
-    raise AssertionError("unreachable")
+    """An unchanged disappearance is a refusal, rather than a blind replay."""
+    return call()
 
 
 def _checked(host: Host, results: list[StepResult], chain: effort.Mark, *, force: bool) -> list[StepResult]:
@@ -735,7 +792,57 @@ def recompute(
     names = list(names)
     if "types" in order(names):
         # A forced types step solves again, whatever the last solution's inputs were.
-        from unbake.typemap import solver
 
-        solver.marker(project).unlink(missing_ok=True)
+        forget(project, "types")
     return ensure(project, host, names, force=True, report=report)
+
+
+def operation_dependencies(project: Project, host: Host, step: str) -> DependencySet:
+    from unbake import inputs
+
+    paths = {
+        project.root / "config.toml",
+        project.root / "layout.toml",
+        *(p for root in project.include for p in root.rglob("*.h")),
+        *(p for v in project.versions for p in (project.version(v).split, project.version(v).symbols)),
+    }
+    if step not in ("headers",):
+        paths.update(project.src.rglob("*.c"))
+    root = Path(__file__).parent
+    modules = {
+        "types": (
+            "typemap/solver.py",
+            "typemap/declarations.py",
+            "cdecl.py",
+            "typemap/facts.py",
+            "typemap/closure.py",
+            "typemap/database.py",
+            "typemap/regeneration.py",
+            "pool.py",
+            "cache.py",
+            "process.py",
+            "compilers/drivers.py",
+            "project/headers.py",
+        ),
+        "headers": ("layout/header_step.py", "layout/header_loss.py", "project/headers.py", "cdecl.py"),
+    }.get(step, ("steps.py",))
+    values: dict[str, Any] = {
+        "step": step,
+        "versions": list(project.versions),
+        "memory_worker_bytes": host.memory_worker_bytes,
+    }
+    if step in ("types", "headers") and isinstance(host, Host):
+        values["cache_memory_bytes"] = host.cache_memory_bytes
+        values["native"] = {
+            field: inputs.digest(Path(getattr(host, field)), algorithm="sha256", reuse=retention.configured())
+            for field in ("cpp", "m2c")
+        }
+        values["header_inventory"] = sorted(str(p.relative_to(project.root)) for p in paths if p.suffix == ".h")
+    return inputs.DependencySet(
+        tuple(
+            inputs.file_pin(p, root=project.root, root_id="project", reuse=retention.configured())
+            for p in sorted(paths)
+        ),
+        values,
+        {name: inputs.digest(root / name, algorithm="sha256", reuse=retention.configured()) for name in modules},
+    )

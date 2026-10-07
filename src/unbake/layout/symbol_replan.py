@@ -20,6 +20,8 @@ from unbake import tui
 from unbake.config import Held, Host, Project, SymbolPolicy
 from unbake.layout import planner, port, split, symbol_identity
 from unbake.layout.symbol_identity import similarity_distribution
+from unbake.process import capture
+from unbake.process import named as cause_named
 from unbake.project import setup
 from unbake.project.flow import FunctionRecord, LayoutManifest
 from unbake.project.rom import Rom, load
@@ -38,14 +40,28 @@ def retained_assertions(
     for assertion in assertions:
         placements = assertion["placements"]
         if any((f := current.get((p["version"], p["start"]))) is None or f.end != p["end"] for p in placements):
-            raise Held("setup", f"setup.symbol_assertion_stale: {assertion['name']}: boundary changed")
+            raise Held(
+                cause_named(
+                    "setup.symbol_assertion_stale",
+                    f"setup.symbol_assertion_stale: {assertion['name']}: boundary changed",
+                    owner="layout.symbol_replan",
+                    stage="setup",
+                )
+            )
         if verify_retained:
             for placement in placements:
                 checks[placement["version"]].append((placement, assertion["name"]))
     # Consume one cartridge at a time when verifying retained names.
     for version, placements in checks.items():
         if version not in images:
-            raise Held("setup", "setup.symbol_assertion_stale: unknown VERSION")
+            raise Held(
+                cause_named(
+                    "setup.symbol_assertion_stale",
+                    "setup.symbol_assertion_stale: unknown VERSION",
+                    owner="layout.symbol_replan",
+                    stage="setup",
+                )
+            )
         image = images[version].image()
         for placement, name in placements:
             start, end = placement["start"], placement["end"]
@@ -53,7 +69,14 @@ def retained_assertions(
                 not 0 <= start < end <= len(image)
                 or hashlib.sha256(image[start:end]).hexdigest() != placement["body_sha256"]
             ):
-                raise Held("setup", f"setup.symbol_assertion_stale: {name}: bytes changed")
+                raise Held(
+                    cause_named(
+                        "setup.symbol_assertion_stale",
+                        f"setup.symbol_assertion_stale: {name}: bytes changed",
+                        owner="layout.symbol_replan",
+                        stage="setup",
+                    )
+                )
         del image
     return assertions, []
 
@@ -73,7 +96,14 @@ def plan(project: Project, policy: Host, *, retain_names: bool = False) -> tuple
     try:
         layout = cast(LayoutManifest, json.loads(layout_path.read_bytes()))
     except (OSError, ValueError) as error:
-        raise Held("setup", f"setup.symbol_layout: {error}") from error
+        raise Held(
+            capture(
+                error,
+                cause=cause_named(
+                    "setup.symbol_layout", f"setup.symbol_layout: {error}", owner="layout.symbol_replan", stage="setup"
+                ),
+            )
+        ) from error
     pins = {v: project.version(v).baserom_sha1 for v in project.versions}
     if (
         {v: image.sha1 for v, image in images.items()} != pins
@@ -81,7 +111,14 @@ def plan(project: Project, policy: Host, *, retain_names: bool = False) -> tuple
         or layout.get("project_id") != project.id
         or set(layout.get("versions", {})) != set(project.versions)
     ):
-        raise Held("setup", "setup.symbol_layout_stale: ROM pins, project identity or layout versions differ")
+        raise Held(
+            cause_named(
+                "setup.symbol_layout_stale",
+                "setup.symbol_layout_stale: ROM pins, project identity or layout versions differ",
+                owner="layout.symbol_replan",
+                stage="setup",
+            )
+        )
     assertions = layout.get("symbol_assertions", [])
     if retain_names:
         retained_assertions(ff, images, assertions, verify_retained=True)
@@ -124,9 +161,13 @@ def plan(project: Project, policy: Host, *, retain_names: bool = False) -> tuple
     conflicts = [old for old, new in destinations.items() if len(new) != 1]
     if conflicts:
         raise Held(
-            "setup",
-            "setup.symbol_existing_conflict: existing symbols have inconsistent proved placements: "
-            + ", ".join(sorted(conflicts)),
+            cause_named(
+                "layout.symbol_replan.plan",
+                "setup.symbol_existing_conflict: existing symbols have inconsistent proved placements: "
+                + ", ".join(sorted(conflicts)),
+                owner="layout.symbol_replan",
+                stage="setup",
+            )
         )
     replacements = {old: next(iter(new)) for old, new in destinations.items() if old not in new}
     for v, rows in ff.items():
@@ -238,7 +279,14 @@ def run(project: Project, policy: Host, confirm: str | None, *, retain_names: bo
         tui.line(f"next: unbake setup --redo-symbol-matching --confirm {token}")
         return ["symbol proposal ready; executable boundaries retained"]
     if confirm != token:
-        raise Held("setup", "setup.symbol_proposal_stale: symbol proposal or project inputs changed")
+        raise Held(
+            cause_named(
+                "setup.symbol_proposal_stale",
+                "setup.symbol_proposal_stale: symbol proposal or project inputs changed",
+                owner="layout.symbol_replan",
+                stage="setup",
+            )
+        )
     if not replacements and not report["data_symbols"]["objects"] and not retain_names:
         (directory / "symbol-proposal.json").unlink(missing_ok=True)
         return ["symbol names unchanged"]
@@ -247,14 +295,25 @@ def run(project: Project, policy: Host, confirm: str | None, *, retain_names: bo
     for source in project.src.rglob("*.c"):
         if any(re.search(r"\b" + re.escape(name) + r"\b", source.read_text()) for name in changed_data):
             raise Held(
-                "setup", f"data.authored_source: {source.relative_to(project.root)}: review changed data identities"
+                cause_named(
+                    "data.authored_source",
+                    f"data.authored_source: {source.relative_to(project.root)}: review changed data identities",
+                    owner="layout.symbol_replan",
+                    stage="setup",
+                )
             )
         text = source.read_text()
         if rewrite(text, replacements) != text or source.stem in replacements:
             raise Held(
-                "setup",
-                f"setup.symbol_authored_source: {source.relative_to(project.root)}: "
-                "changed identities require reviewed C before replanning",
+                cause_named(
+                    "setup.symbol_authored_source",
+                    (
+                        f"setup.symbol_authored_source: {source.relative_to(project.root)}: "
+                        f"changed identities require reviewed C before replanning"
+                    ),
+                    owner="layout.symbol_replan",
+                    stage="setup",
+                )
             )
     result = publish(project, policy, replacements, report, inputs)
     (directory / "symbol-proposal.json").unlink(missing_ok=True)
@@ -305,7 +364,14 @@ def publish(
             if source.stem in replacements:
                 target = source.with_name(replacements[source.stem] + ".c")
                 if target.exists() and target.read_bytes() != source.read_bytes():
-                    raise Held("split", f"split.join.authored_source: {source.name}: joined C sources differ")
+                    raise Held(
+                        cause_named(
+                            "split.join.authored_source",
+                            f"split.join.authored_source: {source.name}: joined C sources differ",
+                            owner="layout.symbol_replan",
+                            stage="split",
+                        )
+                    )
                 removed.append(source.relative_to(tree).as_posix())
                 source.replace(target)
         for v, version in report["layout"]["versions"].items():

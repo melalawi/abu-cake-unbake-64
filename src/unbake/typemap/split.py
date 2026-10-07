@@ -10,6 +10,7 @@ from unbake import cache as retention
 from unbake.cache import memo
 from unbake.cdecl import SOURCE_TOKEN, NameParser, declaration_context, declaration_source
 from unbake.config import Held
+from unbake.process import named as cause_named
 
 _INCLUDE = re.compile(r'^\s*#\s*include\s*[<"]([^>"\n]+)[>"]', re.M)
 
@@ -117,9 +118,15 @@ def _split(text: str) -> tuple[str, ...]:
             elif directive[1] == "endif":
                 conditional -= 1
                 if conditional < 0:
-                    raise Held("solve", "types.split: unmatched endif")
+                    raise Held(
+                        cause_named("types.split", "types.split: unmatched endif", owner="typemap.split", stage="solve")
+                    )
             elif directive[1] in ("else", "elif") and not conditional:
-                raise Held("solve", "types.split: unmatched conditional branch")
+                raise Held(
+                    cause_named(
+                        "types.split", "types.split: unmatched conditional branch", owner="typemap.split", stage="solve"
+                    )
+                )
             if not conditional and not stack and declaration is None:
                 result.append(text[start : match.end()])
                 start = None
@@ -133,7 +140,14 @@ def _split(text: str) -> tuple[str, ...]:
             stack.append(pairs[token])
         elif token in pairs.values():
             if not stack or stack.pop() != token:
-                raise Held("solve", "types.split: unmatched declaration delimiter")
+                raise Held(
+                    cause_named(
+                        "types.split",
+                        "types.split: unmatched declaration delimiter",
+                        owner="typemap.split",
+                        stage="solve",
+                    )
+                )
             boundary = token == "}" and not stack and function
         elif token == ";" and not stack:
             boundary = True
@@ -145,5 +159,12 @@ def _split(text: str) -> tuple[str, ...]:
                 start = None
         previous = token
     if stack or conditional or start is not None:
-        raise Held("solve", "types.split: incomplete declaration or conditional")
+        raise Held(
+            cause_named(
+                "types.split",
+                "types.split: incomplete declaration or conditional",
+                owner="typemap.split",
+                stage="solve",
+            )
+        )
     return tuple(result)

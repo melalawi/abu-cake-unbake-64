@@ -7,6 +7,8 @@ import struct
 from collections import Counter
 from collections.abc import Sequence
 
+from unbake.process import named as cause_named
+
 OPCODES = frozenset((*range(2, 28), *range(32, 64)))
 
 
@@ -261,7 +263,14 @@ def copied_mappings(data: bytes, text: Sequence[tuple[int, int, int]]) -> list[d
             if row["address"] - row["start"] != previous["address"] - previous["start"]:
                 from unbake.config import Held
 
-                raise Held("setup", "layout.loaded_mapping: conflicting copied spans")
+                raise Held(
+                    cause_named(
+                        "layout.loaded_mapping",
+                        "layout.loaded_mapping: conflicting copied spans",
+                        owner="layout.split_analysis",
+                        stage="setup",
+                    )
+                )
             previous["end"] = max(previous["end"], row["end"])
         else:
             merged.append(row)

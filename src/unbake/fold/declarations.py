@@ -22,6 +22,7 @@ from unbake.layout.header_context import Headers, header_guard
 from unbake.layout.split import Edit
 from unbake.layout.structs_fold import _scalar_include, fold, scalar_edits
 from unbake.layout.structs_types import Aggregate
+from unbake.process import named as cause_named
 from unbake.typemap.header_names import alias_types, callback_renames, type_identity
 from unbake.work.attempts import Attempt
 
@@ -268,7 +269,14 @@ def fold_source(
 
     owner = map.load(project).owners.get(function)
     if owner is None:
-        raise Held("layout", f"layout.member.{function}: source has no group")
+        raise Held(
+            cause_named(
+                f"layout.member.{function}",
+                f"layout.member.{function}: source has no group",
+                owner="fold.declarations",
+                stage="layout",
+            )
+        )
     destination = project.include[0] / owner.header
     context, promoted, moved_spans = _local_typedefs(project, headers, parsers, records, destination)
     edits = fold(

@@ -15,6 +15,7 @@ from unbake.config import Held
 from unbake.decomp.draft_asm import _TRANSFER
 from unbake.decomp.measured_access import _NO_RESULT, _VIEWS, _register
 from unbake.layout.structs_types import SCALARS
+from unbake.process import named as cause_named
 
 _NUMBER = r"[+-]?(?:0[xX][\da-fA-F]+|\d+)"
 _RELOCATION = re.compile(r"%([hl]i|lo)\(([A-Za-z_]\w*)(?:\s*([+-])\s*(0[xX][\da-fA-F]+|\d+))?\)")
@@ -298,7 +299,14 @@ def lower(function: str, source: str, assembly: str) -> str:
                     break
                 tail += 1
             if depth:
-                raise Held("m2c", f"{function}: unclosed memory operand")
+                raise Held(
+                    cause_named(
+                        f"{function}",
+                        f"{function}: unclosed memory operand",
+                        owner="decomp.measured_memory",
+                        stage="m2c",
+                    )
+                )
             operand = source[tokens[head].end() : tokens[tail].start()].strip()
         else:
             operand = tokens[head][0]
@@ -307,7 +315,14 @@ def lower(function: str, source: str, assembly: str) -> str:
             continue
         displacement = _displacement(match[2])
         if displacement is None:
-            raise Held("m2c", f"{function}.{match[1]}: unsupported non-affine memory address")
+            raise Held(
+                cause_named(
+                    f"{function}.{match[1]}",
+                    f"{function}.{match[1]}: unsupported non-affine memory address",
+                    owner="decomp.measured_memory",
+                    stage="m2c",
+                )
+            )
         address = Origin(f"arg:{transports[match[1]]}", *displacement)
         candidates.append((token.start(), tokens[tail].end(), match[1], operand, address))
     if not candidates and not byte_candidates:
@@ -330,12 +345,26 @@ def lower(function: str, source: str, assembly: str) -> str:
                 rows = [a for a in rows if a.value is None or a.value == stored]
         choices = {a.spelling for a in rows}
         if len(choices) != 1:
-            raise Held("m2c", f"{function}.{name}: memory {'store' if store else 'load'} lacks a unique measured view")
+            raise Held(
+                cause_named(
+                    f"{function}.{name}",
+                    f"{function}.{name}: memory {('store' if store else 'load')} lacks a unique measured view",
+                    owner="decomp.measured_memory",
+                    stage="m2c",
+                )
+            )
         spelling = next(iter(choices))
         if compound and {SCALARS[a.spelling][0] for a in accesses if a.address == address and a.store} != {
             SCALARS[spelling][0]
         }:
-            raise Held("m2c", f"{function}.{name}: read/modify/write lacks a measured width")
+            raise Held(
+                cause_named(
+                    f"{function}.{name}",
+                    f"{function}.{name}: read/modify/write lacks a measured width",
+                    owner="decomp.measured_memory",
+                    stage="m2c",
+                )
+            )
         # Cast the base before adding displacement; casting the completed
         # pointer expression would leave C's element scaling in place.
         byte_address = operand.replace(name, f"(unsigned char *){name}", 1)
@@ -346,12 +375,26 @@ def lower(function: str, source: str, assembly: str) -> str:
         else:
             declaration = re.search(r"\bextern\s+([^;]+?)\s+" + re.escape(name) + r"\s*;", clean)
             if declaration and SCALARS.get(declaration[1].strip(), (0, 0))[0] > 1:
-                raise Held("m2c", f"{function}.{name}: byte address lacks a measured displacement")
+                raise Held(
+                    cause_named(
+                        f"{function}.{name}",
+                        f"{function}.{name}: byte address lacks a measured displacement",
+                        owner="decomp.measured_memory",
+                        stage="m2c",
+                    )
+                )
     edits.sort(reverse=True)
     following = len(source)
     for start, end, value in edits:
         if end > following:
-            raise Held("m2c", f"{function}: overlapping memory operands need separate provenance")
+            raise Held(
+                cause_named(
+                    f"{function}",
+                    f"{function}: overlapping memory operands need separate provenance",
+                    owner="decomp.measured_memory",
+                    stage="m2c",
+                )
+            )
         source = source[:start] + value + source[end:]
         following = start
     return source

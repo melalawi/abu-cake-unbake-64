@@ -17,6 +17,8 @@ from unbake import config, inputs, tui
 from unbake.compilers import files as compiler_files
 from unbake.compilers import registry as toolchain
 from unbake.config import Held, Host, PendingProject, Project
+from unbake.process import attached, capture
+from unbake.process import named as cause_named
 from unbake.project import hygiene, setup_config
 
 _AUDIO_CALLBACKS = "audio_callbacks.h"
@@ -31,7 +33,9 @@ def _read(path: Path) -> bytes:
     try:
         return path.read_bytes()
     except OSError as error:
-        raise Held("setup", f"{path}: {error}") from error
+        raise Held(
+            capture(error, cause=cause_named(f"{path}", f"{path}: {error}", owner="project.setup", stage="setup"))
+        ) from error
 
 
 def _comment(line: str) -> bool:
@@ -65,13 +69,21 @@ def restore_roms(project: Project, source: Path) -> None:
     for version in missing:
         if version.baserom_sha1 not in contents:
             raise Held(
-                "setup",
-                f"[version.{version.name}].baserom_sha1: {source}: missing supplied SHA-1 {version.baserom_sha1}",
+                cause_named(
+                    f"[version.{version.name}].baserom_sha1",
+                    f"[version.{version.name}].baserom_sha1: {source}: missing supplied SHA-1 {version.baserom_sha1}",
+                    owner="project.setup",
+                    stage="setup",
+                )
             )
     for version in missing:
         target = project.root / version.baserom
         if target.is_symlink():
-            raise Held("setup", f"{target}: baserom symlink target is missing")
+            raise Held(
+                cause_named(
+                    f"{target}", f"{target}: baserom symlink target is missing", owner="project.setup", stage="setup"
+                )
+            )
         compiler_files.atomic_copy(target, contents[version.baserom_sha1], mode=0o600)
 
 
@@ -88,13 +100,24 @@ def run(project: Project, policy: Host, *, supply: Path | None = None) -> list[s
         digest = hashlib.sha1(rom_content).hexdigest()
         if digest != version.baserom_sha1:
             raise Held(
-                "setup",
-                f"{version.baserom}: [version.{name}].baserom_sha1 expected {version.baserom_sha1}, got {digest}",
+                cause_named(
+                    f"{version.baserom}",
+                    f"{version.baserom}: [version.{name}].baserom_sha1 expected {version.baserom_sha1}, got {digest}",
+                    owner="project.setup",
+                    stage="setup",
+                )
             )
         text = _read(version.split).decode()
         for number, line in enumerate(text.splitlines(), 1):
             if _comment(line):
-                raise Held("setup", f"{version.split}:{number}: split YAML comment")
+                raise Held(
+                    cause_named(
+                        f"{version.split}",
+                        f"{version.split}:{number}: split YAML comment",
+                        owner="project.setup",
+                        stage="setup",
+                    )
+                )
         _read(version.symbols)
         receipts.append(f"{name}: baserom and compilers verified")
     ignore = hygiene.ignore_text(project)
@@ -113,7 +136,14 @@ def _inputs(project: PendingProject | Project) -> dict[str, str]:
         for name in names:
             path = parent / name
             if path.is_symlink() and not any(path.is_relative_to(output) for output in excluded):
-                raise Held("setup", f"setup.publication: input directory symlink {path.relative_to(project.root)}")
+                raise Held(
+                    cause_named(
+                        "setup.publication",
+                        f"setup.publication: input directory symlink {path.relative_to(project.root)}",
+                        owner="project.setup",
+                        stage="setup",
+                    )
+                )
         names[:] = [
             name
             for name in names
@@ -122,7 +152,14 @@ def _inputs(project: PendingProject | Project) -> dict[str, str]:
         for name in files:
             path = parent / name
             if path.is_symlink():
-                raise Held("setup", f"setup.publication: input symlink {path.relative_to(project.root)}")
+                raise Held(
+                    cause_named(
+                        "setup.publication",
+                        f"setup.publication: input symlink {path.relative_to(project.root)}",
+                        owner="project.setup",
+                        stage="setup",
+                    )
+                )
             result[path.relative_to(project.root).as_posix()] = inputs.digest(
                 path, algorithm="sha256", reuse=retention.configured()
             )
@@ -161,7 +198,14 @@ def _copy_inputs(project: PendingProject | Project, tree: Path, fingerprint: dic
 def _write(tree: Path, relative: str, content: str) -> None:
     path = Path(relative)
     if path.is_absolute() or ".." in path.parts:
-        raise Held("setup", f"setup.publication: invalid output path {relative}")
+        raise Held(
+            cause_named(
+                "setup.publication",
+                f"setup.publication: invalid output path {relative}",
+                owner="project.setup",
+                stage="setup",
+            )
+        )
     destination = tree / path
     destination.parent.mkdir(parents=True, exist_ok=True)
     atomic_files.text(destination, content)
@@ -227,7 +271,12 @@ def _sdk_headers(project: Project) -> None:
                     if spans:
                         line = path.read_text()[: spans[0][0]].count("\n") + 1
                         raise Held(
-                            "setup", f"setup.gfx_type: {path.relative_to(project.root)}:{line}: duplicate SDK Gfx"
+                            cause_named(
+                                "setup.gfx_type",
+                                f"setup.gfx_type: {path.relative_to(project.root)}:{line}: duplicate SDK Gfx",
+                                owner="project.setup",
+                                stage="setup",
+                            )
                         )
     files = {
         "gfx.h": (
@@ -261,7 +310,12 @@ def _sdk_headers(project: Project) -> None:
         ):
             key = "setup.gbi_header" if name == "gbi.h" else "setup.gfx_type"
             raise Held(
-                "setup", f"{key}: {target.relative_to(project.root)}: existing header differs; preserve human input"
+                cause_named(
+                    f"{key}",
+                    f"{key}: {target.relative_to(project.root)}: existing header differs; preserve human input",
+                    owner="project.setup",
+                    stage="setup",
+                )
             )
     for name, content in files.items():
         target = root / name
@@ -317,11 +371,25 @@ def _publish(
     obsolete += [project.root / relative for relative in fingerprint if _retired_evidence(relative)]
     before: dict[Path, bytes | None] = {}
     if _inputs(project) != fingerprint:
-        raise Held("setup", "setup.publication: project inputs changed during proof")
+        raise Held(
+            cause_named(
+                "setup.publication",
+                "setup.publication: project inputs changed during proof",
+                owner="project.setup",
+                stage="setup",
+            )
+        )
     try:
         for target in [*writes, *obsolete]:
             if target.is_symlink() or any(parent.is_symlink() for parent in target.parents):
-                raise Held("setup", f"setup.publication: output symlink {target}")
+                raise Held(
+                    cause_named(
+                        "setup.publication",
+                        f"setup.publication: output symlink {target}",
+                        owner="project.setup",
+                        stage="setup",
+                    )
+                )
             before[target] = target.read_bytes() if target.is_file() else None
         for target, source in writes.items():
             if target != config_path:
@@ -363,9 +431,15 @@ def _prove_publish(
     outcome = build.check(staged, policy)
     if not outcome.ok:
         raise Held(
-            "setup",
-            "setup.proof: make check failed on the staged project:\n" + "\n".join(outcome.lines()),
-            fault=outcome.fault,
+            attached(
+                cause_named(
+                    "project.setup._prove_publish",
+                    "setup.proof: make check failed on the staged project:\n" + "\n".join(outcome.lines()),
+                    owner="project.setup",
+                    stage="setup",
+                ),
+                outcome.fault,
+            )
         )
     if before_publish is not None:
         before_publish()
@@ -395,7 +469,14 @@ def prepare_setup(
     accepted_sha256 = inputs.digest(accepted_path, algorithm="sha256", reuse=retention.configured())
     guard = compiler_proposal.confirmation_guard(project, proposal, policy)
     if proposal["default_compiler"] is None:
-        raise Held("setup", "setup.compiler_candidate: explicit default compiler required")
+        raise Held(
+            cause_named(
+                "setup.compiler_candidate",
+                "setup.compiler_candidate: explicit default compiler required",
+                owner="project.setup",
+                stage="setup",
+            )
+        )
     facts = setup_config.facts(project, census, name=None, title=None)
     fingerprint = _inputs(project)
     directory = project.build / "setup"

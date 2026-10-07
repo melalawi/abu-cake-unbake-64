@@ -9,38 +9,134 @@ from __future__ import annotations
 import struct
 from collections import Counter, defaultdict
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from difflib import SequenceMatcher
-from typing import Literal
+from typing import Any, Literal
+
+from unbake.process import Fault
 
 TYPES = ("register", "order", "immediate", "relocation", "inserted", "missing", "changed")
 _REGISTER_FIELDS = ((21, "rs"), (16, "rt"), (11, "rd"))
 
 
 @dataclass
-class Compare:
+class Measurement:
     version: str
-    identical: int
-    of: int
-    typed: dict[str, int]
-    lines: list[str]
-    match_percent: float
+    available: bool
+    identical_words: int | None
+    target_words: int
+    candidate_words: int | None
+    target_words_different: int | None
+    inserted_words: int | None
+    typed: dict[str, int] | None
+    percent: float | None
+    fault: Fault | None
+    lines: list[str] = field(default_factory=list)
     register_changes: tuple[tuple[int, int, int, int], ...] = ()
-    target_words: tuple[int, ...] = ()
-    candidate_words: tuple[int, ...] = ()
+    target: tuple[int, ...] = ()
+    candidate: tuple[int, ...] = ()
+
+    def __post_init__(self) -> None:
+        import math
+
+        if (
+            not isinstance(self.version, str)
+            or not self.version
+            or type(self.available) is not bool
+            or type(self.target_words) is not int
+            or self.target_words < 0
+        ):
+            raise ValueError("measurement.fields: explicit version, availability and target count required")
+        counts = (self.identical_words, self.candidate_words, self.target_words_different, self.inserted_words)
+        if self.available:
+            if any(type(v) is not int or v < 0 for v in counts):
+                raise ValueError("measurement.counts: explicit nonnegative counts required")
+            assert self.identical_words is not None and self.candidate_words is not None
+            if not isinstance(self.typed, dict) or any(type(v) is not int or v < 0 for v in self.typed.values()):
+                raise ValueError("measurement.typed: explicit counts required")
+            if (
+                self.percent is None
+                or type(self.percent) not in (int, float)
+                or not math.isfinite(self.percent)
+                or not 0 <= self.percent <= 100
+            ):
+                raise ValueError("measurement.percent: finite measured percent required")
+            if (
+                self.identical_words > self.target_words
+                or self.identical_words > self.candidate_words
+                or self.target_words_different != self.target_words - self.identical_words
+                or self.fault is not None
+            ):
+                raise ValueError("measurement.counts: inconsistent available measurement")
+        elif any(v is not None for v in (*counts, self.typed, self.percent)) or not isinstance(self.fault, Fault):
+            raise ValueError("measurement.unavailable: counts and score must be null with a fault")
 
     @property
     def exact(self) -> bool:
-        return self.of > 0 and self.identical == self.of and not any(self.typed.values())
+        return (
+            self.available
+            and self.target_words > 0
+            and self.target_words_different == 0
+            and self.inserted_words == 0
+            and not any((self.typed or {}).values())
+        )
 
     def document(self) -> dict[str, object]:
         return {
-            "percent": round(self.match_percent, 6),
+            "version": self.version,
+            "available": self.available,
+            "identical_words": self.identical_words,
+            "target_words": self.target_words,
+            "candidate_words": self.candidate_words,
+            "target_words_different": self.target_words_different,
+            "inserted_words": self.inserted_words,
+            "typed": self.typed,
+            "percent": round(self.percent, 6) if self.percent is not None else None,
             "exact": self.exact,
-            "identical": self.identical,
-            "of": self.of,
-            "typed": dict(self.typed),
+            "fault": self.fault.document() if self.fault else None,
         }
+
+    @classmethod
+    def read(cls, value: dict[str, Any]) -> Measurement:
+        required = {
+            "version",
+            "available",
+            "identical_words",
+            "target_words",
+            "candidate_words",
+            "target_words_different",
+            "inserted_words",
+            "typed",
+            "percent",
+            "fault",
+        }
+        if required - value.keys():
+            raise ValueError("measurement.fields: complete M10 record required")
+        return cls(
+            value["version"],
+            value["available"],
+            value["identical_words"],
+            value["target_words"],
+            value["candidate_words"],
+            value["target_words_different"],
+            value["inserted_words"],
+            value["typed"],
+            value["percent"],
+            Fault.read(value["fault"]) if value["fault"] else None,
+        )
+
+    def description(self) -> str:
+        if not self.available:
+            return f"{self.version}: measurement unavailable"
+        different = self.target_words_different
+        return (
+            f"{self.version}: {self.identical_words}/{self.target_words} words identical; "
+            f"{different} target word{'s' if different != 1 else ''} different; {self.inserted_words} inserted words"
+        )
+
+
+def unavailable(version: str, target_words: int, fault: Fault) -> Measurement:
+    return Measurement(version, False, None, target_words, None, None, None, None, None, fault)
 
 
 def words(data: bytes) -> tuple[int, ...]:
@@ -99,7 +195,7 @@ def _register_changes(offset_t: int, offset_c: int, target: int, candidate: int)
     return changes
 
 
-def compare_words(version: str, target: bytes, candidate: bytes) -> Compare:
+def measure_words(version: str, target: bytes, candidate: bytes) -> Measurement:
     """Align two word sequences and count identical and typed differences."""
     left, right = words(target), words(candidate)
     typed = dict.fromkeys(TYPES, 0)
@@ -142,7 +238,22 @@ def compare_words(version: str, target: bytes, candidate: bytes) -> Compare:
     ]
     if details:
         lines.append("first divergence: " + details[0])
-    return Compare(version, identical, total, typed, lines, percent, tuple(register_changes), left, right)
+    return Measurement(
+        version,
+        True,
+        identical,
+        total,
+        len(right),
+        total - identical,
+        typed["inserted"],
+        typed,
+        percent,
+        None,
+        lines,
+        tuple(register_changes),
+        left,
+        right,
+    )
 
 
 def weakest(scores: dict[str, float]) -> float:

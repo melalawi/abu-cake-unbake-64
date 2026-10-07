@@ -15,10 +15,12 @@ from typing import Protocol
 
 from unbake import atomic as atomic_files
 from unbake import tui
+from unbake.compilers.families.types import Allocation
 from unbake.compilers.ranking import measured_candidate_rank
 from unbake.config import Held, Host, Project
 from unbake.decomp import explain
-from unbake.process import read_text, temporary_environment
+from unbake.process import capture, read_text, temporary_environment
+from unbake.process import named as cause_named
 from unbake.work.compare import Compared, measure
 
 
@@ -39,7 +41,7 @@ class Context:
     policy: Host
     out: Path
     source: Path
-    allocation: explain.Allocation
+    allocation: Allocation
     focus_lines: tuple[int, ...]
     deadline: float
 
@@ -48,8 +50,6 @@ class Context:
 class SearchResult:
     source: Path
     trial: Compared
-    score: int
-    fuzzy: float
     trials: int
     steps: Path
     skips: tuple[dict[str, str], ...] = ()
@@ -60,18 +60,20 @@ class _Candidate:
     source: str
     path: Path
     trial: Compared
-    score: int
-    fuzzy: float
 
     @property
     def rank(self) -> tuple[bool, int, int, float]:
-        return measured_candidate_rank(self.trial.compares, self.fuzzy)
+        return measured_candidate_rank(self.trial.compares, self.trial.best_percent)
 
 
 def _positive(policy: Host, name: str) -> int:
     value = getattr(policy, name, None)
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
-        raise Held("search", f"policy.{name}: positive integer required")
+        raise Held(
+            cause_named(
+                f"policy.{name}", f"policy.{name}: positive integer required", owner="search.core", stage="search"
+            )
+        )
     return value
 
 
@@ -82,7 +84,14 @@ def preprocess(project: Project, policy: Host, source: Path, version: str, deadl
     command = drivers.preprocess_command(project, str(policy.cpp), version, source.stem, source, non_matching=True)
     remaining = deadline - time.monotonic()
     if remaining <= 0:
-        raise Held("search", "context.deadline: preprocessing budget exhausted")
+        raise Held(
+            cause_named(
+                "context.deadline",
+                "context.deadline: preprocessing budget exhausted",
+                owner="search.core",
+                stage="search",
+            )
+        )
     try:
         result = subprocess.run(
             command,
@@ -93,11 +102,35 @@ def preprocess(project: Project, policy: Host, source: Path, version: str, deadl
             timeout=remaining,
         )
     except subprocess.TimeoutExpired as error:
-        raise Held("search", "context.deadline: preprocessing budget exhausted") from error
+        raise Held(
+            capture(
+                error,
+                cause=cause_named(
+                    "context.deadline",
+                    "context.deadline: preprocessing budget exhausted",
+                    owner="search.core",
+                    stage="search",
+                ),
+            )
+        ) from error
     except OSError as error:
-        raise Held("search", f"preprocessor {command[0]}: {error}") from error
+        raise Held(
+            capture(
+                error,
+                cause=cause_named(
+                    "search.core.preprocess", f"preprocessor {command[0]}: {error}", owner="search.core", stage="search"
+                ),
+            )
+        ) from error
     if result.returncode:
-        raise Held("search", f"preprocessor {command[0]} exited {result.returncode}: {result.stderr.strip()}")
+        raise Held(
+            cause_named(
+                "search.core.preprocess",
+                f"preprocessor {command[0]} exited {result.returncode}: {result.stderr.strip()}",
+                owner="search.core",
+                stage="search",
+            )
+        )
     expanded = re.sub(r"^\s*#\s*(?:line\s+)?\d+[^\n]*", "", result.stdout, flags=re.M)
     # Preprocessors discard comments; retain explicit source evidence in mutations.
     comments = re.findall(r'/\*.*?\*/|//[^\n]*|"(?:\\.|[^"\\])*"', source.read_text(), re.S)
@@ -105,7 +138,7 @@ def preprocess(project: Project, policy: Host, source: Path, version: str, deadl
     return "".join(comment + "\n" for comment in markers if comment not in expanded) + expanded
 
 
-def _focus_lines(allocation: explain.Allocation, original: str, expanded: str) -> tuple[int, ...]:
+def _focus_lines(allocation: Allocation, original: str, expanded: str) -> tuple[int, ...]:
     candidates = {number for difference in allocation.differences for number in difference.candidates}
     lines = {line for pseudo in allocation.pseudos if pseudo.number in candidates for line in pseudo.source_lines}
     source_lines = original.splitlines()
@@ -126,13 +159,21 @@ def run(
         or not math.isfinite(budget_seconds)
         or budget_seconds <= 0
     ):
-        raise Held("search", "budget_seconds: positive finite number required")
+        raise Held(
+            cause_named(
+                "budget_seconds", "budget_seconds: positive finite number required", owner="search.core", stage="search"
+            )
+        )
     generators = list(generators)
     if not generators:
-        raise Held("search", "generators: missing value")
+        raise Held(cause_named("generators", "generators: missing value", owner="search.core", stage="search"))
     for generator in generators:
         if not callable(getattr(generator, "propose", None)):
-            raise Held("search", f"generator {generator}: propose missing")
+            raise Held(
+                cause_named(
+                    "search.core.run", f"generator {generator}: propose missing", owner="search.core", stage="search"
+                )
+            )
     source = Path(source).resolve()
     text = read_text(source, "search")
     out.mkdir(parents=True, exist_ok=True)
@@ -141,7 +182,7 @@ def run(
     evaluated = 0
     deadline = time.monotonic() + budget_seconds
     mutation_seconds = 0.0
-    prepared: dict[tuple[str, str], tuple[str, explain.Allocation, tuple[int, ...]] | None] = {}
+    prepared: dict[tuple[str, str], tuple[str, Allocation, tuple[int, ...]] | None] = {}
     skips: list[dict[str, str]] = []
 
     def prepare(parent: _Candidate, generator: Generator, version: str, limit: float) -> None:
@@ -195,8 +236,14 @@ def run(
                 cache[digest] = None
             else:
                 if not result.compares:
-                    raise Held("search", "trial.compares: missing VERSION")
-                measured_score = min(c.identical for c in result.compares.values())
+                    raise Held(
+                        cause_named(
+                            "trial.compares", "trial.compares: missing VERSION", owner="search.core", stage="search"
+                        )
+                    )
+                measured_score = min(
+                    (c.identical_words for c in result.compares.values() if c.identical_words is not None), default=None
+                )
                 cache[digest] = None
                 if version is None or (
                     incumbent is not None
@@ -215,10 +262,7 @@ def run(
                     else:
                         confirmed = True
                     if confirmed:
-                        fuzzy = result.best_percent
-                        cache[digest] = _Candidate(
-                            content, path, result, min(c.identical for c in result.compares.values()), fuzzy
-                        )
+                        cache[digest] = _Candidate(content, path, result)
             evaluated += 1
             if version is not None:
                 mutation_seconds = max(mutation_seconds, time.monotonic() - started - (deadline - evaluation_deadline))
@@ -227,10 +271,15 @@ def run(
             "generator": method,
             "mutation": mutation.description,
             "kind": mutation.kind,
-            "score": candidate.score if candidate else measured_score,
+            "score": min(
+                (c.identical_words for c in candidate.trial.compares.values() if c.identical_words is not None),
+                default=None,
+            )
+            if candidate
+            else measured_score,
             "versions": list(candidate.trial.compares) if candidate else ([version] if version else []),
             "confirmed": confirmed or (cached and candidate is not None),
-            "fuzzy": candidate.fuzzy if candidate else None,
+            "fuzzy": candidate.trial.best_percent if candidate else None,
             "source_sha256": digest,
             "cached": cached,
             "refusal": error,
@@ -241,10 +290,17 @@ def run(
 
     initial = evaluate(text, "initial", Mutation("initial", "starting source", text))
     if initial is None:
-        raise Held("search", f"source {source}: initial trial failed; see {steps}")
+        raise Held(
+            cause_named(
+                "search.core.run",
+                f"source {source}: initial trial failed; see {steps}",
+                owner="search.core",
+                stage="search",
+            )
+        )
     best = initial
     # Baseline and initial compiler context are setup, outside the mutation budget.
-    representative = min(best.trial.compares, key=lambda v: (best.trial.compares[v].identical, v))
+    representative = min(best.trial.compares, key=lambda v: (best.trial.compares[v].identical_words, v))
     for generator in generators:
         version = generator.version if isinstance(generator, Permuter) else representative
         prepare(best, generator, version, time.monotonic() + budget_seconds)
@@ -282,7 +338,14 @@ def run(
                     if time.monotonic() >= deadline:
                         break
                     if not isinstance(mutation, Mutation) or not isinstance(mutation.source, str):
-                        raise Held("search", f"generator {method}.mutation: Mutation with source text required")
+                        raise Held(
+                            cause_named(
+                                "search.core.run",
+                                f"generator {method}.mutation: Mutation with source text required",
+                                owner="search.core",
+                                stage="search",
+                            )
+                        )
                     digest = hashlib.sha256(mutation.source.encode()).hexdigest()
                     fresh |= digest not in cache
                     candidate = evaluate(mutation.source, method, mutation, version, best)
@@ -307,17 +370,8 @@ def run(
             else:
                 break
     mutations = evaluated - 1
-    if mutations == 0 and time.monotonic() < deadline - mutation_seconds:
-        # The methods proposed nothing for this source with budget to spare: the start is the best they have.
-        tui.line(
-            "allocator context skipped; see search skips and steps"
-            if skips
-            else "no mutation proposed; the starting source is the best"
-        )
-    elif mutations == 0:
-        if not any(isinstance(generator, Permuter) and generator.ran for generator in generators):
-            raise Held("search", f"zero mutations evaluated; increase budget or select another method; see {steps}")
-        tui.line("external permuter ran; no improving candidates emitted")
+    if mutations == 0:
+        tui.line("tried 0 variants; no mutation proposed")
     if best.trial.identical_everywhere:
         tui.verdict("cracked", f"IDENTICAL {best.trial.function}: {best.path}")
-    return SearchResult(best.path, best.trial, best.score, best.fuzzy, evaluated, steps, tuple(skips))
+    return SearchResult(best.path, best.trial, evaluated, steps, tuple(skips))

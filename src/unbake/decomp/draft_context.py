@@ -9,6 +9,8 @@ from pathlib import Path
 
 from unbake.cdecl import Declarations, declarations
 from unbake.config import Held, Host, Project
+from unbake.process import capture
+from unbake.process import named as cause_named
 from unbake.project.headers import Graph
 
 
@@ -49,7 +51,14 @@ def ordered_headers(
 
     parsed = {}
     mapping = {}
-    graph = Graph.contents(contents, tuple(dict.fromkeys(p.parent for p in contents)))
+    include_roots = (
+        tuple(
+            dict.fromkeys((Path(os.path.commonpath([str(p.parent) for p in contents])), *(p.parent for p in contents)))
+        )
+        if contents
+        else ()
+    )
+    graph = Graph.contents(contents, include_roots)
     spellings = {Path(os.path.abspath(path)): path for path in contents}
     included = {
         path: {spellings[dep] for dep in graph.closure((path,)).paths if dep in spellings} - {path} for path in contents
@@ -63,11 +72,23 @@ def ordered_headers(
         try:
             projection = graph.projection(path)
             if projection.parse_error:
-                raise Held("m2c", projection.parse_error)
+                raise Held(
+                    cause_named(
+                        "decomp.draft_context.ordered_headers",
+                        projection.parse_error,
+                        owner="decomp.draft_context",
+                        stage="m2c",
+                    )
+                )
             parsed[path] = projection.declarations
             mapping.update(alias_types(text))
         except Held as error:
-            raise Held("m2c", f"{path}: {error.reason}") from error
+            raise Held(
+                capture(
+                    error,
+                    cause=cause_named(f"{path}", f"{path}: {error.reason}", owner="decomp.draft_context", stage="m2c"),
+                )
+            ) from error
     mapping.update(aliases or {})
     if roots is not None:
         effective = {}
@@ -106,7 +127,14 @@ def ordered_headers(
     def visit(path: Path) -> None:
         if path in active:
             cycle = [*active[active.index(path) :], path]
-            raise Held("m2c", "cyclic shared type context: " + " -> ".join(map(str, cycle)))
+            raise Held(
+                cause_named(
+                    "decomp.draft_context.visit",
+                    "cyclic shared type context: " + " -> ".join(map(str, cycle)),
+                    owner="decomp.draft_context",
+                    stage="m2c",
+                )
+            )
         if path in visited:
             return
         active.append(path)
@@ -139,7 +167,12 @@ def ordered_declarations(text: str, path: Path, *, aliases: dict[str, str] | Non
         mapping = {**alias_types(text), **(aliases or {})}
         return "\n".join(contents[key] for key in ordered_headers(contents, aliases=mapping)) + text[cursor:]
     except Held as error:
-        raise Held("m2c", f"{path}: {error.reason}") from error
+        raise Held(
+            capture(
+                error,
+                cause=cause_named(f"{path}", f"{path}: {error.reason}", owner="decomp.draft_context", stage="m2c"),
+            )
+        ) from error
 
 
 def required_headers(contents: dict[Path, str], output: str) -> set[Path]:

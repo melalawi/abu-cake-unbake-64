@@ -14,6 +14,7 @@ from unbake import atomic as atomic_files
 from unbake import cache as retention
 from unbake.compilers.families import Family
 from unbake.config import Compiler, Held, Host, Project
+from unbake.process import named as cause_named
 
 PREPROCESSOR_PAIRS = frozenset({"-I", "-D", "-U", "-include", "-imacros", "-isystem", "-iquote"})
 
@@ -112,7 +113,14 @@ def _options(values: list[str]) -> tuple[list[str], list[str]]:
         if flag in PREPROCESSOR_PAIRS:
             value = next(pending, None)
             if value is None or not value or value.startswith("-"):
-                raise Held("compile", f"compile.flags: {flag}: missing value")
+                raise Held(
+                    cause_named(
+                        "compile.flags",
+                        f"compile.flags: {flag}: missing value",
+                        owner="compilers.drivers",
+                        stage="compile",
+                    )
+                )
             preprocess.extend((flag, value))
         elif flag.startswith(("-I", "-D", "-U")):
             preprocess.append(flag)
@@ -150,7 +158,14 @@ def _supported(selector: str, values: list[str]) -> None:
     for flag in values:
         if flag in supported or family.accepts_codegen(flag):
             continue
-        raise Held("compile", f"compile.flags: {flag}: unsupported by the {kind} driver")
+        raise Held(
+            cause_named(
+                "compile.flags",
+                f"compile.flags: {flag}: unsupported by the {kind} driver",
+                owner="compilers.drivers",
+                stage="compile",
+            )
+        )
 
 
 def codegen_flags(values: list[str]) -> list[str]:
@@ -338,5 +353,12 @@ def assembler_release() -> str:
     values = {family_named(spec.family).assembler_release() for spec in registry().values()}
     values.discard(None)
     if len(values) != 1:
-        raise Held("buildfiles", "build.assembler_release: expected one external assembler release")
+        raise Held(
+            cause_named(
+                "build.assembler_release",
+                "build.assembler_release: expected one external assembler release",
+                owner="compilers.drivers",
+                stage="buildfiles",
+            )
+        )
     return next(value for value in values if value is not None)

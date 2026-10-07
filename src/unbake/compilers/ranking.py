@@ -2,7 +2,7 @@
 
 from collections.abc import Mapping
 
-from unbake.work.score import Compare, weakest
+from unbake.work.score import Measurement, weakest
 
 
 def candidate_rank(
@@ -16,15 +16,14 @@ def candidate_rank(
 
 
 def measured_candidate_rank(
-    compares: Mapping[str, Compare], fuzzy: float | None = None
+    compares: Mapping[str, Measurement], fuzzy: float | None = None
 ) -> tuple[bool, int, int, float]:
     """Adapt live trial evidence to the same ordering as retained draft records."""
     return candidate_rank(
-        bool(compares)
-        and all(
-            item.of > 0 and item.identical == item.of and not any(item.typed.values()) for item in compares.values()
-        ),
-        sum(item.identical for item in compares.values()),
-        sum(sum(item.typed.values()) for item in compares.values()),
-        {version: item.match_percent for version, item in compares.items()} if fuzzy is None else {"weakest": fuzzy},
+        bool(compares) and all(item.exact for item in compares.values()),
+        sum(item.identical_words or 0 for item in compares.values()),
+        sum(sum((item.typed or {}).values()) for item in compares.values()),
+        {version: item.percent for version, item in compares.items() if item.percent is not None}
+        if fuzzy is None
+        else {"weakest": fuzzy},
     )

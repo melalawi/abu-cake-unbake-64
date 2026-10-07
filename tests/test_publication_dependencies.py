@@ -9,6 +9,7 @@ from unbake import land, pool, process, runner
 from unbake.config import Held
 from unbake.fold.apply import Folded
 from unbake.layout import split
+from unbake.process import named
 
 
 class PublicationDependencyTests(ProjectCase):
@@ -97,10 +98,14 @@ class PublicationDependencyTests(ProjectCase):
             if args[0] == "add":
                 index.write_bytes(b"new publication stage")
             if "commit" in args:
-                raise Held("land", "git commit exited 1: hook refused")
+                raise Held(named("fixture.refusal", "git commit exited 1: hook refused", owner="fixture", stage="land"))
             return ""
 
-        with patch.object(land, "_git", side_effect=git), self.assertRaisesRegex(Held, "hook refused"):
+        with (
+            patch.object(land, "_git", side_effect=git),
+            patch.object(land, "_refuse_dangling_includes"),
+            self.assertRaisesRegex(Held, "hook refused"),
+        ):
             land._commit(self.project, self.host, [owned], "Publish owned input")
         self.assertEqual(index.read_bytes(), b"previous staged user state")
 
@@ -116,7 +121,7 @@ class PublicationDependencyTests(ProjectCase):
             self.assertRaises(Held) as caught,
         ):
             land._git(self.project, "commit", "--only", "--", "owned.h")
-        fault = process.fault(caught.exception)["chain"][0]["fault"]
+        fault = caught.exception.fault.document()["chain"][0]["result"]
         self.assertEqual(fault["args"], ("git", "commit", "--only", "--", "owned.h"))
         self.assertEqual(fault["cwd"], str(self.project.root))
         self.assertEqual((fault["exit"], fault["stdout"], fault["stderr"]), (1, "hook stdout\n", "hook stderr\n"))

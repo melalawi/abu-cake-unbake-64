@@ -26,6 +26,8 @@ from pycparser import c_ast  # type: ignore[import-untyped]
 from unbake import cache as retention
 from unbake import cdecl
 from unbake.config import Held, Project
+from unbake.process import capture
+from unbake.process import named as cause_named
 from unbake.typemap import declarations
 
 # Turns a line-marker or header path into the one spelling a cached value stores (see spelling).
@@ -56,14 +58,28 @@ def _spell_in(project_root: Path, machine_root: Path, text: str) -> str:
             return prefix + Path(clean).relative_to(root).as_posix()
         except ValueError:
             continue
-    raise Held("solve", f"facts.paths: {text} is outside the project and the machine root")
+    raise Held(
+        cause_named(
+            "facts.paths",
+            f"facts.paths: {text} is outside the project and the machine root",
+            owner="typemap.layers",
+            stage="solve",
+        )
+    )
 
 
 def suffix(text: str) -> str:
     """The unit after its preprocessor source boundary."""
     _, marker, rest = text.partition(declarations.BOUNDARY + "\n")
     if not marker:
-        raise Held("solve", "types.declaration: missing preprocessor source boundary")
+        raise Held(
+            cause_named(
+                "types.declaration",
+                "types.declaration: missing preprocessor source boundary",
+                owner="typemap.layers",
+                stage="solve",
+            )
+        )
     return rest
 
 
@@ -172,7 +188,17 @@ def header_part(text: str, header: Path, spell: Spell) -> dict[str, Any]:
     try:
         tree = declarations.unit_tree(cleaned)
     except Exception as error:
-        raise Held("solve", f"types.declaration: {header}: {cdecl.located(text, str(error))}") from error
+        raise Held(
+            capture(
+                error,
+                cause=cause_named(
+                    "types.declaration",
+                    f"types.declaration: {header}: {cdecl.located(text, str(error))}",
+                    owner="typemap.layers",
+                    stage="solve",
+                ),
+            )
+        ) from error
     aliases: dict[str, str] = {}
     for node in tree.ext:
         if isinstance(node, c_ast.Typedef):
@@ -255,7 +281,14 @@ def source_part(
     marked = Marked(suffix(text), own, spell)
     missing = [name for name, _ in marked.runs if name != own and name not in headers]
     if missing:
-        raise Held("solve", f"facts.headers: {source}: no header part for {missing[0]}")
+        raise Held(
+            cause_named(
+                "facts.headers",
+                f"facts.headers: {source}: no header part for {missing[0]}",
+                owner="typemap.layers",
+                stage="solve",
+            )
+        )
     if any(headers[name]["refused"] for name, _ in marked.runs if name != own):
         return None
     scope: dict[str, bool] = {}
@@ -312,7 +345,17 @@ def source_part(
         try:
             cdecl.parse("\n".join(prototypes), typedefs=scope)
         except Exception as error:
-            raise Held("solve", f"types.declaration: {provenance}: emitted prototype: {error}") from error
+            raise Held(
+                capture(
+                    error,
+                    cause=cause_named(
+                        "types.declaration",
+                        f"types.declaration: {provenance}: emitted prototype: {error}",
+                        owner="typemap.layers",
+                        stage="solve",
+                    ),
+                )
+            ) from error
     return {
         "runs": [[name, line] for name, line in marked.runs],
         **found,
@@ -371,7 +414,12 @@ class Context:
         part = self.headers.get(name) if own is None or name in self.headers else own
         if part is None:
             raise Held(
-                "solve", f"facts.headers: {name} is included by a source but has no header part for this version"
+                cause_named(
+                    "facts.headers",
+                    f"facts.headers: {name} is included by a source but has no header part for this version",
+                    owner="typemap.layers",
+                    stage="solve",
+                )
             )
         # Copy on write: a span that adds nothing of a kind shares its base's object, so units of one header
         # list share one alias map and one layout template (encoded and merged once).

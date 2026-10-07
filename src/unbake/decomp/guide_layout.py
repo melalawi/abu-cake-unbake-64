@@ -7,6 +7,7 @@ from pathlib import Path
 from unbake.config import Held, Host, Project
 from unbake.decomp.symbols import Reference
 from unbake.layout.structs import layouts, preprocess
+from unbake.process import named as cause_named
 
 
 def resolve(
@@ -40,7 +41,14 @@ def resolve(
                 }.values()
             )
         if len(candidates) > 1:
-            raise Held("guide", f"0x{ref.address:X}: ambiguous aggregate symbol layout")
+            raise Held(
+                cause_named(
+                    f"0x{ref.address:X}",
+                    f"0x{ref.address:X}: ambiguous aggregate symbol layout",
+                    owner="decomp.guide_layout",
+                    stage="guide",
+                )
+            )
         if not candidates:
             continue
         name, base, record = candidates[0]

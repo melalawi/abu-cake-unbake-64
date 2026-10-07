@@ -233,7 +233,9 @@ class HeaderDeclarationsTests(unittest.TestCase):
             scalar: "typedef int s32;",
             unused: "not a C declaration",
         }
-        with patch("unbake.decomp.draft_context.declarations", wraps=declarations) as parse:
+        with patch(
+            "unbake.project.headers.project", wraps=__import__("unbake.project.headers", fromlist=["project"]).project
+        ) as parse:
             result = ordered_headers(contents, roots=[consumer, wrapper])
         self.assertEqual(result, [wrapper, consumer])
         self.assertEqual(parse.call_count, 3)
@@ -246,10 +248,12 @@ class HeaderDeclarationsTests(unittest.TestCase):
             body: "struct Item { s32 word; };",
             consumer: "struct Holder { Final item; };",
         }
-        with patch("unbake.decomp.draft_context.declarations", wraps=declarations) as parse:
+        with patch(
+            "unbake.project.headers.project", wraps=__import__("unbake.project.headers", fromlist=["project"]).project
+        ) as parse:
             self.assertEqual(required_headers(contents, "struct Holder holder;"), set(contents))
         # Two bounded catalogue passes; closure traversal reuses those rows.
-        self.assertEqual(parse.call_count, 2 * len(contents))
+        self.assertEqual(parse.call_count, len(contents))
 
     def test_selector_keeps_tag_and_ordinary_providers_separate(self) -> None:
         scalar, alias, tag = map(Path, ("types.h", "alias.h", "tag.h"))

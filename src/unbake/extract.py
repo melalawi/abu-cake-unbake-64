@@ -23,6 +23,7 @@ from unbake import cache as retention
 from unbake import inputs
 from unbake.cache import Cache, key
 from unbake.config import Held, Host, Project
+from unbake.process import named as cause_named
 
 # Bump when the archive an extraction stores changes for the same inputs.
 EXTRACT_SCHEMA = 3
@@ -184,13 +185,27 @@ def _make_archive(project: Project, host: Host, version: str, destination: Path)
                 atomic_files.text(generated, written.replace(str(staging), storage.relative(project, staging)))
         dump = staging / ".splat" / "splat_symbols.csv"
         if not dump.is_file():
-            raise Held("extract", f"extract.splat.{version}: splat wrote no symbol dump")
+            raise Held(
+                cause_named(
+                    f"extract.splat.{version}",
+                    f"extract.splat.{version}: splat wrote no symbol dump",
+                    owner="extract",
+                    stage="extract",
+                )
+            )
         atomic_files.copyfile(dump, staging / "splat_symbols.csv")
         committed = instruction_symbols(staging / "asm", discovered_symbols(dump, symbols_from([configured.symbols])))
         units = unit_addresses(rows)
         for name, address in units.items():
             if name in committed and committed[name] != address:
-                raise Held("extract", f"extract.symbols.{version}: split and symbols disagree for {name}")
+                raise Held(
+                    cause_named(
+                        f"extract.symbols.{version}",
+                        f"extract.symbols.{version}: split and symbols disagree for {name}",
+                        owner="extract",
+                        stage="extract",
+                    )
+                )
             committed[name] = address
         atomic_files.text(
             staging / "symbol-addresses.txt",
@@ -230,7 +245,14 @@ def function_asm(project: Project, host: Host, version: str, row_path: str) -> s
     """Assembly text of one split row (its asm file, written by splat from the row's path)."""
     path = directory(project, host, version) / "asm" / (row_path + ".s")
     if not path.is_file():
-        raise Held("extract", f"extract.asm.{version}: no assembly for row {row_path}")
+        raise Held(
+            cause_named(
+                f"extract.asm.{version}",
+                f"extract.asm.{version}: no assembly for row {row_path}",
+                owner="extract",
+                stage="extract",
+            )
+        )
     return path.read_text()
 
 
@@ -254,7 +276,14 @@ def symbols_from(paths: list[Path]) -> dict[str, int]:
         for name, value in re.findall(r"([A-Za-z_.$][\w.$]*)\s*=\s*(0[xX][0-9A-Fa-f]+)\s*;", path.read_text()):
             address = int(value, 16)
             if name in found and found[name] != address:
-                raise Held("extract", f"extract.symbols: conflicting symbol {name} in {path}")
+                raise Held(
+                    cause_named(
+                        "extract.symbols",
+                        f"extract.symbols: conflicting symbol {name} in {path}",
+                        owner="extract",
+                        stage="extract",
+                    )
+                )
             found[name] = address
     return found
 
@@ -266,10 +295,24 @@ def discovered_symbols(path: Path, committed: dict[str, int]) -> dict[str, int]:
         for row in csv.DictReader(stream):
             name = row["name"]
             if not re.fullmatch(r"[A-Za-z_.$][\w.$]*", name):
-                raise Held("extract", f"extract.symbols: invalid discovered symbol {name}")
+                raise Held(
+                    cause_named(
+                        "extract.symbols",
+                        f"extract.symbols: invalid discovered symbol {name}",
+                        owner="extract",
+                        stage="extract",
+                    )
+                )
             address = int(row["vram_start"], 16)
             if name in found and found[name] != address:
-                raise Held("extract", f"extract.symbols: conflicting discovered symbol {name}")
+                raise Held(
+                    cause_named(
+                        "extract.symbols",
+                        f"extract.symbols: conflicting discovered symbol {name}",
+                        owner="extract",
+                        stage="extract",
+                    )
+                )
             found[name] = address
     return found
 
@@ -292,7 +335,14 @@ def instruction_symbols(directory: Path, committed: dict[str, int]) -> dict[str,
                 for high in pending.pop(name, []):
                     address = (high + low) & 0xFFFFFFFF
                     if name in found and found[name] != address:
-                        raise Held("extract", f"extract.symbols: conflicting address for {name} in {path.name}")
+                        raise Held(
+                            cause_named(
+                                "extract.symbols",
+                                f"extract.symbols: conflicting address for {name} in {path.name}",
+                                owner="extract",
+                                stage="extract",
+                            )
+                        )
                     found[name] = address
     return found
 
@@ -318,11 +368,25 @@ def unit_addresses(text: str) -> dict[str, int]:
         row = re.match(r"^      - \[\s*(0x[0-9A-Fa-f]+|\d+)\s*,\s*(asm|c)\s*,\s*([^\],]+)", line)
         if row:
             if not in_code or start is None or vram is None:
-                raise Held("extract", "extract.split: code segment requires type, start, vram before subsegments")
+                raise Held(
+                    cause_named(
+                        "extract.split",
+                        "extract.split: code segment requires type, start, vram before subsegments",
+                        owner="extract",
+                        stage="extract",
+                    )
+                )
             rom, _, name = row.groups()
             name = Path(scalar(name)).name
             address = vram + int(rom, 0) - start
             if name in found and found[name] != address:
-                raise Held("extract", f"extract.split: conflicting split unit symbol {name}")
+                raise Held(
+                    cause_named(
+                        "extract.split",
+                        f"extract.split: conflicting split unit symbol {name}",
+                        owner="extract",
+                        stage="extract",
+                    )
+                )
             found[name] = address
     return found

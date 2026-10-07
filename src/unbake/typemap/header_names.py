@@ -12,6 +12,8 @@ from unbake import cache as retention
 from unbake import inputs
 from unbake.cdecl import NAME_TOKEN, NameParser, attribute_source, declaration_source
 from unbake.config import Held, Host, Project
+from unbake.process import capture
+from unbake.process import named as cause_named
 from unbake.project.headers import Graph, Include
 
 _PLACEHOLDER = re.compile(r"M2C_UNK\d*\Z")
@@ -52,7 +54,14 @@ class _Declarations(NameParser):
             start += 1
         tag, alias = super().specifiers()
         if placeholder(alias) and alias not in self.replacements and self.replacements:
-            raise Held("solve", f"types.header_parse: {alias}: missing concrete placeholder type")
+            raise Held(
+                cause_named(
+                    "types.header_parse",
+                    f"types.header_parse: {alias}: missing concrete placeholder type",
+                    owner="typemap.header_names",
+                    stage="solve",
+                )
+            )
         if alias in self.replacements:
             match = self.matches[start]
             self.edits.append((match.start(), match.end(), self.replacements[alias]))
@@ -144,7 +153,17 @@ def alias_types(source: str) -> dict[str, str]:
         try:
             parser.parse()
         except Held as error:
-            raise Held("solve", f"types.header_parse: {error.reason}") from error
+            raise Held(
+                capture(
+                    error,
+                    cause=cause_named(
+                        "types.header_parse",
+                        f"types.header_parse: {error.reason}",
+                        owner="typemap.header_names",
+                        stage="solve",
+                    ),
+                )
+            ) from error
         return parser.alias_types
 
     return dict(memo("headers.aliases", source, parse, size=retention.memory_size, copy_out=retention.clone))
@@ -220,7 +239,14 @@ def type_identity(type_: str, aliases: dict[str, str], *, aggregates: dict[str, 
             return ("function", shape(node.type, active), params)
         if isinstance(node, c_ast.EllipsisParam):
             return ("variadic",)
-        raise Held("solve", "types.header_parse: unsupported compatible declarator")
+        raise Held(
+            cause_named(
+                "types.header_parse",
+                "types.header_parse: unsupported compatible declarator",
+                owner="typemap.header_names",
+                stage="solve",
+            )
+        )
 
     def parameter(node: Any, active: tuple[str, ...]) -> object:
         if isinstance(node, c_ast.EllipsisParam):
@@ -241,7 +267,17 @@ def type_identity(type_: str, aliases: dict[str, str], *, aggregates: dict[str, 
     try:
         return shape(parse(type_))
     except Exception as error:
-        raise Held("solve", f"types.header_parse: compatible declarator: {error}") from error
+        raise Held(
+            capture(
+                error,
+                cause=cause_named(
+                    "types.header_parse",
+                    f"types.header_parse: compatible declarator: {error}",
+                    owner="typemap.header_names",
+                    stage="solve",
+                ),
+            )
+        ) from error
 
 
 def callback_renames(local: dict[str, str], shared: dict[str, str], owner: str) -> dict[str, str]:
@@ -278,7 +314,17 @@ def rewrite(source: str, replacements: dict[str, str], blocked: set[str]) -> str
     try:
         parser.parse()
     except Held as error:
-        raise Held("solve", f"types.header_parse: {error.reason}") from error
+        raise Held(
+            capture(
+                error,
+                cause=cause_named(
+                    "types.header_parse",
+                    f"types.header_parse: {error.reason}",
+                    owner="typemap.header_names",
+                    stage="solve",
+                ),
+            )
+        ) from error
     for start, end, value in sorted(parser.edits, reverse=True):
         source = source[:start] + value + source[end:]
     return source
@@ -300,7 +346,14 @@ def _owned(item: tuple[Project, Host | None, Path, str]) -> tuple[list[str], lis
     views = {text} if re.search(r"\b(?:typedef|struct|union|enum)\b", declaration_source(text)) else set()
     if views and re.search(r"^\s*#\s*(?:if|ifdef|ifndef|elif)\b", text, re.M):
         if policy is None:
-            raise Held("solve", f"types.header_parse: {path}: policy.cpp required for conditional source names")
+            raise Held(
+                cause_named(
+                    "types.header_parse",
+                    f"types.header_parse: {path}: policy.cpp required for conditional source names",
+                    owner="typemap.header_names",
+                    stage="solve",
+                )
+            )
         views = set()
         for version in project.versions:
             views.add(active_source(project, policy, text, version, path.stem))
@@ -315,7 +368,17 @@ def _owned(item: tuple[Project, Host | None, Path, str]) -> tuple[list[str], lis
             try:
                 row = parser.parse()
             except Held as error:
-                raise Held("solve", f"types.header_parse: {path}: {error.reason}") from error
+                raise Held(
+                    capture(
+                        error,
+                        cause=cause_named(
+                            "types.header_parse",
+                            f"types.header_parse: {path}: {error.reason}",
+                            owner="typemap.header_names",
+                            stage="solve",
+                        ),
+                    )
+                ) from error
             # Tags and typedefs occupy separate namespaces. A forward tag
             # cannot reserve an alias used by another published consumer.
             atomic_files.text(output, json.dumps({"names": sorted(row.typedefs), "tags": sorted(row.tags)}))
@@ -335,7 +398,17 @@ def _header_owned(item: tuple[Path, str]) -> tuple[list[str], list[str]]:
     try:
         row = parser.parse()
     except Held as error:
-        raise Held("solve", f"types.header_parse: {path}: {error.reason}") from error
+        raise Held(
+            capture(
+                error,
+                cause=cause_named(
+                    "types.header_parse",
+                    f"types.header_parse: {path}: {error.reason}",
+                    owner="typemap.header_names",
+                    stage="solve",
+                ),
+            )
+        ) from error
     return sorted(parser.names | parser.external_names), sorted(row.tags)
 
 

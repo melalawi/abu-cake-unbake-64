@@ -21,6 +21,8 @@ from unbake.fold import imports
 from unbake.layout import split as inventory
 from unbake.layout.header_context import Headers
 from unbake.layout.split import Edit
+from unbake.process import capture
+from unbake.process import named as cause_named
 from unbake.project.headers import Graph, ProviderSet, scan
 from unbake.typemap import split, storage
 
@@ -42,7 +44,14 @@ def files(project: Project) -> tuple[Path, ...]:
     roots = getattr(project, "declaration_evidence", ())
     for root in roots:
         if not root.is_dir():
-            raise Held("types", f"declaration_evidence: include tree missing: {root}")
+            raise Held(
+                cause_named(
+                    "declaration_evidence",
+                    f"declaration_evidence: include tree missing: {root}",
+                    owner="typemap.declaration_evidence",
+                    stage="types",
+                )
+            )
     return tuple(sorted({path for root in roots for path in root.rglob("*.h") if path.name != "m2c_prelude.h"}))
 
 
@@ -76,7 +85,14 @@ def _units(path: Path, text: str) -> tuple[Unit, ...]:
     try:
         projection = Graph.contents({path: text}, (path.parent,)).projection(path)
         if projection.parse_error:
-            raise Held("headers", projection.parse_error)
+            raise Held(
+                cause_named(
+                    "typemap.declaration_evidence._units",
+                    projection.parse_error,
+                    owner="typemap.declaration_evidence",
+                    stage="headers",
+                )
+            )
         statements = projection.statements
     except Held:
         return ()
@@ -199,9 +215,13 @@ def select(project: Project, headers: Headers, text: str, function: str) -> tupl
         spellings = {re.sub(r"\s+", " ", u.text).strip() for u in options}
         if len(spellings) != 1:
             raise Held(
-                "types",
-                f"declaration_evidence: {name}: ambiguous authored declarations: "
-                + ", ".join(str(u.path) for u in options),
+                cause_named(
+                    "typemap.declaration_evidence.select",
+                    f"declaration_evidence: {name}: ambiguous authored declarations: "
+                    + ", ".join(str(u.path) for u in options),
+                    owner="typemap.declaration_evidence",
+                    stage="types",
+                )
             )
         unit = options[0]
         selected[unit.text] = unit
@@ -235,12 +255,33 @@ def validate_symbols(project: Project, selected: tuple[Unit, ...], versions: tup
         for name in row.declared | macro_addresses.keys():
             found = {version: values[name][0] for version, values in symbols.items() if name in values}
             if not found:
-                raise Held("types", f"declaration_evidence: {name}: absent live symbol/address inventory ({unit.path})")
+                raise Held(
+                    cause_named(
+                        "declaration_evidence",
+                        f"declaration_evidence: {name}: absent live symbol/address inventory ({unit.path})",
+                        owner="typemap.declaration_evidence",
+                        stage="types",
+                    )
+                )
             address = re.fullmatch(r"D_([0-9A-Fa-f]{8})(?:_\w+)?", name)
             if address and int(address[1], 16) not in found.values():
-                raise Held("types", f"declaration_evidence: {name}: live address disagrees with declaration identity")
+                raise Held(
+                    cause_named(
+                        "declaration_evidence",
+                        f"declaration_evidence: {name}: live address disagrees with declaration identity",
+                        owner="typemap.declaration_evidence",
+                        stage="types",
+                    )
+                )
             if name in macro_addresses and not macro_addresses[name] <= set(found.values()):
-                raise Held("types", f"declaration_evidence: {name}: address-valued macro disagrees with live inventory")
+                raise Held(
+                    cause_named(
+                        "declaration_evidence",
+                        f"declaration_evidence: {name}: address-valued macro disagrees with live inventory",
+                        owner="typemap.declaration_evidence",
+                        stage="types",
+                    )
+                )
 
 
 def inject(project: Project, headers: Headers, text: str, function: str, versions: tuple[str, ...]) -> tuple[str, int]:
@@ -301,7 +342,14 @@ def promote(project: Project, headers: Headers, final: str, prefix_end: int) -> 
     # change its length. Everything before it still belongs to the evidence.
     prefix, marker, source = final.partition("/* unbake declaration evidence boundary */\n")
     if not marker:
-        raise Held("types", "declaration_evidence: lost source boundary during layout fold")
+        raise Held(
+            cause_named(
+                "declaration_evidence",
+                "declaration_evidence: lost source boundary during layout fold",
+                owner="typemap.declaration_evidence",
+                stage="types",
+            )
+        )
     components = {}
     for statement in split.statements(_body(prefix)):
         if re.match(r"\s*#\s*include\b", statement):
@@ -435,10 +483,16 @@ def validate_published(
         if not agrees:
             homes = value.get("published_homes", {}).get(unit.path.relative_to(project.include[0]).as_posix(), [])
             raise Held(
-                "headers",
-                f"headers.declaration: {name}: published `{unit.text.strip()}` "
-                f"({', '.join(homes) or str(unit.path)}) is incompatible with proven "
-                f"`{candidate}` ({record.get('provenance')})",
+                cause_named(
+                    "headers.declaration",
+                    (
+                        f"headers.declaration: {name}: published `{unit.text.strip()}` ("
+                        f"{', '.join(homes) or str(unit.path)}) is incompatible with proven `"
+                        f"{candidate}` ({record.get('provenance')})"
+                    ),
+                    owner="typemap.declaration_evidence",
+                    stage="headers",
+                )
             )
 
 
@@ -520,7 +574,17 @@ def feedback_components(project: Project) -> dict[Path, str]:
                 try:
                     unit = base64.b64decode(retained[1], validate=True).decode()
                 except (ValueError, UnicodeDecodeError) as error:
-                    raise Held("types", f"declaration_evidence: {path}: malformed retained input") from error
+                    raise Held(
+                        capture(
+                            error,
+                            cause=cause_named(
+                                "declaration_evidence",
+                                f"declaration_evidence: {path}: malformed retained input",
+                                owner="typemap.declaration_evidence",
+                                stage="types",
+                            ),
+                        )
+                    ) from error
             result[virtual] = unit
     return result
 

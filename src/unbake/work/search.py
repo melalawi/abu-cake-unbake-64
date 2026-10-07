@@ -13,20 +13,22 @@ from typing import Any
 from unbake import atomic as atomic_files
 from unbake.config import Held, Host, Project
 from unbake.layout import split
+from unbake.process import named as cause_named
 from unbake.work import compare
+from unbake.work.score import Measurement
 
 
 @dataclass(frozen=True)
 class Searched:
     function: str
     best_file: Path
-    best_percent: float
+    best_percent: float | None
     exact: bool
     steps: Path
     # Mutations the methods proposed and measured (the starting source is not one).
     mutations: int
     # Words that still differ in the best text, and the wall time the search ran.
-    words: int
+    measurements: dict[str, Measurement]
     seconds: float
     skips: tuple[dict[str, str], ...] = ()
 
@@ -34,20 +36,27 @@ class Searched:
         return {
             "function": self.function,
             "best_file": str(self.best_file),
-            "best_percent": round(self.best_percent, 6),
+            "best_percent": round(self.best_percent, 6) if self.best_percent is not None else None,
             "exact": self.exact,
             "steps": str(self.steps),
             "mutations": self.mutations,
-            "words": self.words,
+            "measurements": {version: value.document() for version, value in self.measurements.items()},
             "skips": list(self.skips),
         }
 
     def lines(self) -> list[str]:
-        state = "EXACT" if self.exact else f"best {self.best_percent:.2f}%"
+        state = (
+            "EXACT"
+            if self.exact
+            else f"best {self.best_percent:.2f}%"
+            if self.best_percent is not None
+            else "measurement unavailable"
+        )
         return [
             f"{self.function}: {state}: {self.best_file}",
-            f"{self.function}: tried {self.mutations} variants in {self.seconds:g}s; "
-            f"best leaves {self.words} words different",
+            f"{self.function}: tried {self.mutations} variants"
+            + ("; no mutation proposed" if self.mutations == 0 else ""),
+            *(f"{self.function}: {value.description()}" for value in self.measurements.values()),
             f"steps: {self.steps}",
             *(f"skipped {skip['key']}: {skip['reason']}" for skip in self.skips),
         ]
@@ -56,9 +65,23 @@ class Searched:
 def target_object(function: str, code: bytes) -> bytes:
     """Wrap a cartridge function in a big-endian MIPS ELF32 relocatable object."""
     if not isinstance(function, str) or not function or "\x00" in function:
-        raise Held("search", "target_object.function is missing or invalid")
+        raise Held(
+            cause_named(
+                "work.search.target_object",
+                "target_object.function is missing or invalid",
+                owner="work.search",
+                stage="search",
+            )
+        )
     if not code or len(code) % 4:
-        raise Held("search", f"target_object.code for {function} must contain whole MIPS words")
+        raise Held(
+            cause_named(
+                "work.search.target_object",
+                f"target_object.code for {function} must contain whole MIPS words",
+                owner="work.search",
+                stage="search",
+            )
+        )
     strings = b"\x00" + function.encode("utf-8") + b"\x00"
     section_names = b"\x00.text\x00.symtab\x00.strtab\x00.shstrtab\x00"
     symbols = bytes(16) + struct.pack(">IIIBBH", 0, 0, 0, 3, 0, 1) + struct.pack(">IIIBBH", 1, 0, len(code), 18, 0, 1)
@@ -130,11 +153,11 @@ def search(project: Project, host: Host, file: Path, method: str, seconds: int) 
     return Searched(
         function,
         best,
-        result.fuzzy,
+        result.trial.best_percent,
         result.trial.exact,
         steps,
         result.trials - 1,
-        result.score,
+        result.trial.compares,
         time.monotonic() - started,
         result.skips,
     )

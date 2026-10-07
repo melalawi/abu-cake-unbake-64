@@ -18,6 +18,7 @@ from unbake.fold import declarations, self_prototype
 from unbake.fold.callee_contracts import _signature
 from unbake.layout import map as ownership
 from unbake.layout import redeclarations
+from unbake.process import named
 from unbake.typemap import evidence, o32
 from unbake.typemap.mips import Analysis
 from unbake.work.attempts import Attempt
@@ -281,7 +282,14 @@ class PublicEntryFoldTests(ProjectCase):
                 patch("unbake.land._prove_versions", return_value=set()) as own,
                 patch(
                     "unbake.layout.header_step.validate",
-                    side_effect=Held("headers", "headers.nonregression: consumer uses incompatible result")
+                    side_effect=Held(
+                        named(
+                            "headers.nonregression",
+                            "headers.nonregression: consumer uses incompatible result",
+                            owner="fixture",
+                            stage="headers",
+                        )
+                    )
                     if fail
                     else None,
                 ) as consumers,

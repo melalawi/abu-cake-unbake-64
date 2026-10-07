@@ -8,6 +8,7 @@ import sys
 from typing import TYPE_CHECKING, Literal, TextIO
 
 from unbake.config import Held
+from unbake.process import named as cause_named
 from unbake.tui import progress
 from unbake.tui.render import Live, Plain
 
@@ -30,7 +31,7 @@ def start(stream: TextIO, interactive: bool) -> None:
     """Choose Live (a terminal) or Plain (a pipe or file) for the rest of the process."""
     global _stream, _console
     if progress._renderer is not None:
-        raise Held("tui", "tui.start: called twice")
+        raise Held(cause_named("tui.start", "tui.start: called twice", owner="tui.output", stage="tui"))
     _stream = stream
     if interactive:
         _console = console()

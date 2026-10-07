@@ -10,6 +10,7 @@ from unbake import buildfiles, config, land
 from unbake.config import Held
 from unbake.decomp import original_asm
 from unbake.layout import split
+from unbake.process import named
 from unbake.report import progress
 from unbake.work import shape
 
@@ -166,7 +167,14 @@ class SourceTextTests(OriginalAsmCase):
         data = struct.pack(">3I", *MTC0)
         lines = ["mtc0 a0,$12", "jr ra", "nop"]
         cases = {
-            "gas rejects line 9": [Held("original-asm", "as exited 1: alpha.s:9: Error: bad"), data],
+            "gas rejects line 9": [
+                Held(
+                    named(
+                        "fixture.refusal", "as exited 1: alpha.s:9: Error: bad", owner="fixture", stage="original-asm"
+                    )
+                ),
+                data,
+            ],
             "gas encodes word 1 otherwise": [data[:4] + b"\0\0\0\0" + data[8:], data],
         }
         for label, results in cases.items():

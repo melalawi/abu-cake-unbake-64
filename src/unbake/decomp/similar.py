@@ -10,6 +10,8 @@ from pathlib import Path
 from unbake.config import Held, Project
 from unbake.fold.drafts import is_partial
 from unbake.layout import split
+from unbake.process import capture
+from unbake.process import named as cause_named
 from unbake.work.score import fields
 
 
@@ -28,7 +30,14 @@ class Similar:
 def opcodes(data: bytes) -> tuple[int, ...]:
     """Discard operands using the shared MIPS III instruction masks."""
     if not data or len(data) % 4:
-        raise Held("similar", "opcodes require nonempty complete big-endian words")
+        raise Held(
+            cause_named(
+                "decomp.similar.opcodes",
+                "opcodes require nonempty complete big-endian words",
+                owner="decomp.similar",
+                stage="similar",
+            )
+        )
     result = []
     for (word,) in struct.iter_unpack(">I", data):
         registers, immediates = fields(word)
@@ -39,7 +48,14 @@ def opcodes(data: bytes) -> tuple[int, ...]:
 def levenshtein(left: tuple[int, ...], right: tuple[int, ...], bound: int) -> int:
     """Banded edit distance; return bound + 1 when the distance exceeds it."""
     if bound < 0:
-        raise Held("similar", "distance bound must be nonnegative")
+        raise Held(
+            cause_named(
+                "decomp.similar.levenshtein",
+                "distance bound must be nonnegative",
+                owner="decomp.similar",
+                stage="similar",
+            )
+        )
     if abs(len(left) - len(right)) > bound:
         return bound + 1
     if len(left) < len(right):
@@ -79,13 +95,31 @@ def retrieve(
     are excluded, bounding work without truncating either opcode sequence.
     """
     if not isinstance(function, str) or not re.fullmatch(r"[A-Za-z_]\w*", function):
-        raise Held("similar", "function must be a C identifier")
+        raise Held(
+            cause_named(
+                "decomp.similar.retrieve", "function must be a C identifier", owner="decomp.similar", stage="similar"
+            )
+        )
     if top_k <= 0 or bound < 0:
-        raise Held("similar", "top_k must be positive and bound nonnegative")
+        raise Held(
+            cause_named(
+                "decomp.similar.retrieve",
+                "top_k must be positive and bound nonnegative",
+                owner="decomp.similar",
+                stage="similar",
+            )
+        )
     functions = split.functions(project, version)
     targets = [item for item in functions if function in (item.name, *item.aliases)]
     if len(targets) != 1:
-        raise Held("similar", f"{function}: expected one function row in VERSION {version}, found {len(targets)}")
+        raise Held(
+            cause_named(
+                f"{function}",
+                f"{function}: expected one function row in VERSION {version}, found {len(targets)}",
+                owner="decomp.similar",
+                stage="similar",
+            )
+        )
     target = targets[0]
     tokens = opcodes(split.words(project, target))
     names = {target.name, *target.aliases}
@@ -99,7 +133,11 @@ def retrieve(
         try:
             c = source.read_text()
         except (OSError, UnicodeError) as error:
-            raise Held("similar", f"{source}: {error}") from error
+            raise Held(
+                capture(
+                    error, cause=cause_named(f"{source}", f"{source}: {error}", owner="decomp.similar", stage="similar")
+                )
+            ) from error
         if (
             not c.strip()
             or is_partial(c)

@@ -1,5 +1,6 @@
 """Public publish reaches reconciliation before fold's strict read on saved RW source and catalog slices.
 
+from tests.ledger_fixture import log_attempt
 Native compile/proof, declaration solving and Git are seams; CLI dispatch, admission, map inference,
 fold/view, source rules, writer and receipts remain real. No ROM build or full type solve runs.
 """
@@ -14,6 +15,7 @@ from unittest.mock import patch
 
 import toml
 
+from tests.ledger_fixture import log_attempt
 from tests.project_fixture import ProjectCase
 from unbake import buildfiles, config, land, steps
 from unbake.cli import publish
@@ -57,7 +59,7 @@ class PublicMembershipTests(ProjectCase):
             path.write_text(data["source"])
             self.assertEqual(hashlib.sha256(path.read_bytes()).hexdigest(), data["sha256"])
             self.files[function] = path
-            attempts.append(
+            log_attempt(
                 self.project,
                 attempts.Attempt(
                     "2026-10-07T04:29:20+00:00",

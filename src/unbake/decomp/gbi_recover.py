@@ -27,6 +27,8 @@ from unbake.decomp.gbi_source import (
     tokens,
     word_builder,
 )
+from unbake.process import capture
+from unbake.process import named as cause_named
 
 RULES = frozenset({"raw-gfx", "local-gbi-macro"})
 
@@ -385,7 +387,14 @@ def lower(source: str, catalogue: list[Pattern]) -> str:
     if blockers:
         first = min(blockers, key=lambda f: f.line)
         line = source.splitlines()[first.line - 1].strip()
-        raise Held("gbi", f"SDK macro recovery: first unmatched write {checks.message(first)}: {line}")
+        raise Held(
+            cause_named(
+                "decomp.gbi_recover.lower",
+                f"SDK macro recovery: first unmatched write {checks.message(first)}: {line}",
+                owner="decomp.gbi_recover",
+                stage="gbi",
+            )
+        )
     return source
 
 
@@ -403,7 +412,14 @@ def catalogue(project: Project, policy: Host, unit: Path, version: str, source: 
         if re.search(r"^\s*#\s*define\s+g(?:s)?[DS]P\w+\(", path.read_text(), re.M)
     ]
     if not headers:
-        raise Held("gbi", "SDK macro recovery: raw-gfx/local-gbi-macro requires project SDK macro definitions")
+        raise Held(
+            cause_named(
+                "decomp.gbi_recover.catalogue",
+                "SDK macro recovery: raw-gfx/local-gbi-macro requires project SDK macro definitions",
+                owner="decomp.gbi_recover",
+                stage="gbi",
+            )
+        )
     directives = []
     for line in source.splitlines():
         included = re.match(r'\s*#\s*include\s*[<"]([^>"]+)[>"]', line)
@@ -455,8 +471,8 @@ def proven(
     from dataclasses import replace as replaced
 
     from unbake.decomp import gbi_proof
-    from unbake.fold.imports import _INCLUDE, _without_comments
     from unbake.layout import split as layout_split
+    from unbake.project.headers import scan
 
     before = import_aliases(project, source, headers, sdk_aliases=False)
     source = import_aliases(project, source, headers)
@@ -472,14 +488,21 @@ def proven(
         versions = layout_split.holding_versions(project, unit.stem) if versions is None else versions
         recovered = [lower(source, catalogue(staged, policy, unit, version, source)) for version in versions]
         if not recovered or any(text != recovered[0] for text in recovered):
-            raise Held("gbi", f"{unit.stem}: SDK macro recovery differs between owning VERSIONs")
+            raise Held(
+                cause_named(
+                    f"{unit.stem}",
+                    f"{unit.stem}: SDK macro recovery differs between owning VERSIONs",
+                    owner="decomp.gbi_recover",
+                    stage="gbi",
+                )
+            )
         from unbake.fold import imports
         from unbake.layout.header_context import Headers
 
         after = imports.resolve(staged, Headers.read(staged), recovered[0], unit.stem)
         # The raw form sees its actual legacy SDK macros, not the replacement
         # header. Only private proof inputs receive these read-only bytes.
-        for name in _INCLUDE.findall(_without_comments(before)):
+        for name in (include.name for include in scan(before) if not include.unknown):
             if any((include / name).is_file() for include in staged.include):
                 continue
             evidence = next(
@@ -494,7 +517,15 @@ def proven(
         except Held as error:
             first = next(f for f in checks.run(source) if f.rule in RULES)
             raise Held(
-                "gbi", f"SDK macro recovery: first unmatched write {checks.message(first)}; {error.reason}"
+                capture(
+                    error,
+                    cause=cause_named(
+                        "decomp.gbi_recover.proven",
+                        f"SDK macro recovery: first unmatched write {checks.message(first)}; {error.reason}",
+                        owner="decomp.gbi_recover",
+                        stage="gbi",
+                    ),
+                )
             ) from error
         return after
 
@@ -524,7 +555,8 @@ def import_aliases(
     """
     if not any(f.rule in rules for f in checks.run(source)):
         return source
-    from unbake.fold.imports import _INCLUDE, _without_comments
+    from unbake.fold.imports import _without_comments
+    from unbake.project.headers import scan, without_includes
 
     scalar_decl = re.compile(r"\btypedef\s+((?:(?:unsigned|signed|char|short|int|long|float|double)\s+)+)(\w+)\s*;")
 
@@ -535,8 +567,10 @@ def import_aliases(
         }
 
     sdk = [path for path, text in headers.items() if re.search(r"^\s*#\s*define\s+g(?:s)?[DS]P\w+\(", text, re.M)]
-    for match in reversed(list(_INCLUDE.finditer(_without_comments(source)))):
-        name = match[1]
+    for match in reversed(scan(source)):
+        if match.unknown:
+            continue
+        name = match.name
         if any(root / name in headers for root in project.include):
             continue
         evidence = next(
@@ -553,7 +587,7 @@ def import_aliases(
             aliases = scalars(text)
             remainder = scalar_decl.sub("", text)
             remainder = re.sub(r"^\s*#.*$", "", remainder, flags=re.M).strip()
-            used = set(re.findall(r"\b\w+\b", _INCLUDE.sub("", source)))
+            used = set(re.findall(r"\b\w+\b", without_includes(source)))
             local_macros = set(re.findall(r"^\s*#\s*define\s+(\w+)(?:\s|$)", _without_comments(source), re.M))
             object_names = set(re.findall(r"^\s*#\s*define\s+(\w+)(?:\s|$)", text, re.M)) & used - local_macros
             if aliases and not remainder and not object_names:
@@ -564,5 +598,5 @@ def import_aliases(
             include = next(
                 candidate.relative_to(root).as_posix() for root in project.include if candidate.is_relative_to(root)
             )
-            source = source[: match.start()] + f'#include "{include}"' + source[match.end() :]
+            source = source[: match.start] + f'#include "{include}"' + source[match.end :]
     return source

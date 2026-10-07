@@ -4,12 +4,14 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from unbake import cache as retention
 from unbake.compilers.families.types import Schedule
 from unbake.objects.elf import Object
 from unbake.objects.rodata import Pool
+from unbake.process import Fault
+from unbake.process import named as cause_named
 
 if TYPE_CHECKING:
     from unbake.compilers.families.mips import Relocation, Shape
@@ -26,6 +28,9 @@ if TYPE_CHECKING:
 
 
 class Ido:
+    def diagnose(self, result: Any, context: Any) -> Any | None:
+        return None
+
     def source_intrinsics(self) -> tuple[str, ...]:
         return ("__builtin_classof", "__builtin_alignof")
 
@@ -145,7 +150,14 @@ class Ido:
         )
         listing = work / "source.s"
         if not listing.is_file():
-            raise Held("explain", "dumps.ido: -K emitted no textual assignment listing")
+            raise Held(
+                cause_named(
+                    "dumps.ido",
+                    "dumps.ido: -K emitted no textual assignment listing",
+                    owner="compilers.families.ido.__init__",
+                    stage="explain",
+                )
+            )
         return self.allocation({"ido": listing.read_text()})
 
     def collect_schedule(self, project: Project, policy: Host, source: Path, version: str, work: Path) -> Schedule:
@@ -178,7 +190,6 @@ class Ido:
         import re
         import shlex
         import tempfile
-        from dataclasses import asdict
 
         from unbake import atomic, inputs, process
         from unbake.cache import memo
@@ -199,9 +210,15 @@ class Ido:
                 lines = [line for line in result.stderr.splitlines() if line.startswith("/usr/lib/cfe ")]
                 if len(lines) != 1 or str(source) not in lines[0]:
                     raise Held(
-                        "compile",
-                        "compile.analysis_environment: IDO did not report one cfe invocation",
-                        fault=asdict(result),
+                        Fault(
+                            cause_named(
+                                "compile.analysis_environment",
+                                "compile.analysis_environment: IDO did not report one cfe invocation",
+                                owner="compilers.families.ido.__init__",
+                                stage="compile",
+                            ),
+                            (result,),
+                        )
                     )
                 before, _, after = lines[0].partition(str(source))
                 before_words, after_words = shlex.split(before), shlex.split(after)
@@ -246,7 +263,14 @@ class Ido:
             ):
                 from unbake.config import Held
 
-                raise Held("compile", f"compile.flags: {flag}: unsupported by the ido driver")
+                raise Held(
+                    cause_named(
+                        "compile.flags",
+                        f"compile.flags: {flag}: unsupported by the ido driver",
+                        owner="compilers.families.ido.__init__",
+                        stage="compile",
+                    )
+                )
         return (*preprocess, *self.public_defines(), *(flag for flag in codegen if not flag.startswith(("-O", "-g"))))
 
     def shape(self, compiler: str, cflags: tuple[str, ...]) -> Shape:

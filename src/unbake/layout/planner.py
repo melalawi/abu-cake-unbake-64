@@ -21,6 +21,7 @@ from unbake import inputs as input_pins
 from unbake.config import Held, Host, PendingProject, SymbolPolicy
 from unbake.layout import boundary, boundary_signatures, rodata_owners, split, split_analysis, split_create
 from unbake.layout.rodata_references import collect, words
+from unbake.process import named as cause_named
 from unbake.process import temporary_environment
 from unbake.project.census import Census
 from unbake.project.flow import CrossVersionItem, FunctionRecord, LayoutManifest, ProviderRecord, Span, VersionLayout
@@ -100,8 +101,15 @@ def measure(image: bytes, yaml: str, executable: Path, work: Path, version: str)
     )
     if result.returncode:
         raise Held(
-            "setup",
-            f"layout.function_boundary: splat exit {result.returncode}: {result.stdout[-3000:]}{result.stderr[-3000:]}",
+            cause_named(
+                "layout.function_boundary",
+                (
+                    f"layout.function_boundary: splat exit {result.returncode}: "
+                    f"{result.stdout[-3000:]}{result.stderr[-3000:]}"
+                ),
+                owner="layout.planner",
+                stage="setup",
+            )
         )
     return split.extracted_text(SimpleNamespace(asm=work / "asm"), version)
 
@@ -114,13 +122,27 @@ def mappings(image: bytes, ranges: tuple[split.Function, ...]) -> tuple[list[dic
         if address is None:
             fitted = {row.address - row.start for row in ranges if start <= row.start < row.end <= end}
             if len(fitted) != 1:
-                raise Held("setup", f"layout.loaded_mapping: copy ROM 0x{start:X}: destination missing")
+                raise Held(
+                    cause_named(
+                        "layout.loaded_mapping",
+                        f"layout.loaded_mapping: copy ROM 0x{start:X}: destination missing",
+                        owner="layout.planner",
+                        stage="setup",
+                    )
+                )
             address = start + fitted.pop()
         result.append(dict(start=start, end=end, address=address, table_entry_bias=0))
     if not result:
         bounds = split_analysis.loaded_bounds(image)
         if bounds is None:
-            raise Held("setup", "layout.loaded_mapping: entry clear-loop or copied extent required")
+            raise Held(
+                cause_named(
+                    "layout.loaded_mapping",
+                    "layout.loaded_mapping: entry clear-loop or copied extent required",
+                    owner="layout.planner",
+                    stage="setup",
+                )
+            )
         entry = int.from_bytes(image[8:12], "big")
         result.append(dict(start=0x1000, end=bounds[0] - entry + 0x1000, address=entry, table_entry_bias=0))
     ordered = sorted(result, key=lambda row: row["start"])
@@ -236,7 +258,12 @@ def normalized_functions(
             # Padding is accepted only as the proved trailing alignment of the preceding body.
             if cursor not in nominations:
                 raise Held(
-                    "setup", f"layout.partition: {parent.version} {parent.name} ROM 0x{cursor:X}: entry source missing"
+                    cause_named(
+                        "layout.partition",
+                        f"layout.partition: {parent.version} {parent.name} ROM 0x{cursor:X}: entry source missing",
+                        owner="layout.planner",
+                        stage="setup",
+                    )
                 )
             candidate = split.Function(
                 parent.version,
@@ -255,8 +282,12 @@ def normalized_functions(
             )
             if failures:
                 raise Held(
-                    "setup",
-                    f"layout.partition: {parent.version} {parent.name} ROM 0x{cursor:X}: " + "; ".join(failures),
+                    cause_named(
+                        "layout.planner.normalized_functions",
+                        f"layout.partition: {parent.version} {parent.name} ROM 0x{cursor:X}: " + "; ".join(failures),
+                        owner="layout.planner",
+                        stage="setup",
+                    )
                 )
             stop = max(reached, default=cursor - 4) + 4
             next_entry = min((at for at in nominations if at >= stop), default=parent.end)
@@ -282,7 +313,12 @@ def normalized_functions(
             if not proved:
                 causes = sorted({cause for _, verdict in verdicts for cause in verdict.unproven})
                 raise Held(
-                    "setup", f"layout.partition: {parent.version} {parent.name} ROM 0x{cursor:X}: " + "; ".join(causes)
+                    cause_named(
+                        "layout.planner.normalized_functions",
+                        f"layout.partition: {parent.version} {parent.name} ROM 0x{cursor:X}: " + "; ".join(causes),
+                        owner="layout.planner",
+                        stage="setup",
+                    )
                 )
             result.append(
                 split.Function(
@@ -307,8 +343,12 @@ def require_boundaries(layout: LayoutManifest) -> None:
             owned = function["evidence"].get("boundary")
             if not isinstance(owned, dict) or type(owned.get("unproven")) not in (list, tuple) or owned["unproven"]:
                 raise Held(
-                    "setup",
-                    f"layout.function_boundary: {version} {function['name']}: required proved executable partition",
+                    cause_named(
+                        "layout.function_boundary",
+                        f"layout.function_boundary: {version} {function['name']}: required proved executable partition",
+                        owner="layout.planner",
+                        stage="setup",
+                    )
                 )
 
 
@@ -437,23 +477,51 @@ def correspondence(
             key = (placement["version"], placement["start"])
             asserted_function = functions.get(key)
             if asserted_function is None or asserted_function.end != placement["end"]:
-                raise Held("setup", f"setup.symbol_assertion_stale: {assertion['name']}: boundary changed")
+                raise Held(
+                    cause_named(
+                        "setup.symbol_assertion_stale",
+                        f"setup.symbol_assertion_stale: {assertion['name']}: boundary changed",
+                        owner="layout.planner",
+                        stage="setup",
+                    )
+                )
             cartridge = images[key[0]]
             image = cartridge if isinstance(cartridge, bytes) else cartridge.image()
             if (
                 hashlib.sha256(image[asserted_function.start : asserted_function.end]).hexdigest()
                 != placement["body_sha256"]
             ):
-                raise Held("setup", f"setup.symbol_assertion_stale: {assertion['name']}: bytes changed")
+                raise Held(
+                    cause_named(
+                        "setup.symbol_assertion_stale",
+                        f"setup.symbol_assertion_stale: {assertion['name']}: bytes changed",
+                        owner="layout.planner",
+                        stage="setup",
+                    )
+                )
             del image
             keys.append(key)
         roots = {root(key) for key in keys}
         asserted_component = [key for key in functions if root(key) in roots]
         if len({v for v, _ in asserted_component}) != len(asserted_component):
-            raise Held("setup", f"setup.symbol_assertion_conflict: {assertion['name']}: automatic evidence conflicts")
+            raise Held(
+                cause_named(
+                    "setup.symbol_assertion_conflict",
+                    f"setup.symbol_assertion_conflict: {assertion['name']}: automatic evidence conflicts",
+                    owner="layout.planner",
+                    stage="setup",
+                )
+            )
         for key in keys:
             if key in asserted and asserted[key]["name"] != assertion["name"]:
-                raise Held("setup", f"setup.symbol_assertion_conflict: {assertion['name']}: overlapping assertions")
+                raise Held(
+                    cause_named(
+                        "setup.symbol_assertion_conflict",
+                        f"setup.symbol_assertion_conflict: {assertion['name']}: overlapping assertions",
+                        owner="layout.planner",
+                        stage="setup",
+                    )
+                )
             join(keys[0], key)
             asserted[key] = assertion
     from unbake.layout.symbol_identity import join_symbols
@@ -480,7 +548,14 @@ def correspondence(
         repeated = len(indexes[version][signatures[version, start]]) > 1
         forced = {asserted[key]["name"] for key in rows if key in asserted}
         if len(forced) > 1:
-            raise Held("setup", "setup.symbol_assertion_conflict: automatic evidence combines asserted names")
+            raise Held(
+                cause_named(
+                    "setup.symbol_assertion_conflict",
+                    "setup.symbol_assertion_conflict: automatic evidence combines asserted names",
+                    owner="layout.planner",
+                    stage="setup",
+                )
+            )
         name = next(iter(forced)) if forced else f.name
         if (
             not preserve_names and ((len(rows) == 1 and repeated) or re.fullmatch(r"func_[0-9A-Fa-f]+", name))
@@ -682,7 +757,14 @@ def complete_providers(
     cursor = 0
     for p in ordered:
         if p["start"] < cursor:
-            raise Held("setup", f"layout.pool_span: overlapping provider at ROM 0x{p['start']:X}")
+            raise Held(
+                cause_named(
+                    "layout.pool_span",
+                    f"layout.pool_span: overlapping provider at ROM 0x{p['start']:X}",
+                    owner="layout.planner",
+                    stage="setup",
+                )
+            )
         if p["start"] > cursor:
             result.extend(retained(cursor, p["start"], "unclaimed bytes retained"))
         result.append(p)
@@ -758,14 +840,23 @@ def render_yaml(template: str, providers: list[ProviderRecord], size: int) -> st
 def plan_layout(project: PendingProject, census: Census, policy: Host) -> LayoutManifest:
     executable = shutil.which(str(policy.splat))
     if executable is None:
-        raise Held("setup", "policy.splat: missing executable")
+        raise Held(
+            cause_named("policy.splat", "policy.splat: missing executable", owner="layout.planner", stage="setup")
+        )
     project.build.mkdir(parents=True, exist_ok=True)
     from unbake.compilers.families import family_for
     from unbake.compilers.registry import registry
 
     candidate_shapes = {ident: family_for(ident).shape(ident, spec.cflags) for ident, spec in registry().items()}
     if not candidate_shapes:
-        raise Held("setup", "layout.compiler_shapes: required pinned compiler candidates")
+        raise Held(
+            cause_named(
+                "layout.compiler_shapes",
+                "layout.compiler_shapes: required pinned compiler candidates",
+                owner="layout.planner",
+                stage="setup",
+            )
+        )
     signatures = boundary_signatures.configured() if __import__("os").environ.get("UNBAKE_BOUNDARY_SIGNATURES") else ()
     inputs = {
         **{
@@ -922,7 +1013,14 @@ def plan_layout(project: PendingProject, census: Census, policy: Host) -> Layout
                 break
             previous = current
         else:
-            raise Held("setup", f"layout.plan_unstable: VERSION {version}: ownership did not converge")
+            raise Held(
+                cause_named(
+                    "layout.plan_unstable",
+                    f"layout.plan_unstable: VERSION {version}: ownership did not converge",
+                    owner="layout.planner",
+                    stage="setup",
+                )
+            )
         signatures = (
             boundary_signatures.configured() if __import__("os").environ.get("UNBAKE_BOUNDARY_SIGNATURES") else ()
         )
@@ -944,7 +1042,14 @@ def plan_layout(project: PendingProject, census: Census, policy: Host) -> Layout
                 table_edges(image, f, constants),
             )
             if not evidence.proven:
-                raise Held("setup", f"layout.function_boundary: {version} {f.name}: " + "; ".join(evidence.unproven))
+                raise Held(
+                    cause_named(
+                        "layout.planner.plan_layout",
+                        f"layout.function_boundary: {version} {f.name}: " + "; ".join(evidence.unproven),
+                        owner="layout.planner",
+                        stage="setup",
+                    )
+                )
             records.append(
                 FunctionRecord(
                     start=f.start,
@@ -1015,7 +1120,14 @@ def render_layout(project: PendingProject, census: Census, layout: LayoutManifes
     facts = tomllib.loads((project.root / "config.toml").read_text())["project"]
     name = facts.get("name", project.root.name)
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", name):
-        raise Held("setup", "project.name: supply setup --name for the artifact stem")
+        raise Held(
+            cause_named(
+                "project.name",
+                "project.name: supply setup --name for the artifact stem",
+                owner="layout.planner",
+                stage="setup",
+            )
+        )
     files = {}
     for version, row in layout["versions"].items():
         text = row["evidence"]["split_yaml"].replace("basename: layout", "basename: " + name)

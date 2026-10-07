@@ -20,6 +20,7 @@ from unbake.compilers.propose import (
 from unbake.compilers.registry import CompilerSpec
 from unbake.config import Held, Host, Project
 from unbake.layout.split import Function
+from unbake.process import named as cause_named
 from unbake.project.rom import Rom, shingles
 
 
@@ -79,7 +80,14 @@ def idioms(rom: Rom, ranges: Iterable[tuple[int, int]]) -> dict[tuple[int, int],
     image = rom.image()
     for start, end in ranges:
         if not 0 <= start < end <= len(image) or start % 4 or end % 4:
-            raise Held("setup", f"idioms ROM range 0x{start:X}-0x{end:X}: invalid word range")
+            raise Held(
+                cause_named(
+                    "compilers.fingerprint.idioms",
+                    f"idioms ROM range 0x{start:X}-0x{end:X}: invalid word range",
+                    owner="compilers.fingerprint",
+                    stage="setup",
+                )
+            )
         result[start, end] = _counts(image[start:end])
     return result
 
@@ -88,7 +96,11 @@ def regions(functions: Iterable[Function], rom: Rom) -> list[Region]:
     """Classify instruction copies per function, then coalesce adjacent families."""
     ordered = sorted(functions, key=lambda function: function.start)
     if not ordered:
-        raise Held("setup", f"{rom.path}: splat found no functions")
+        raise Held(
+            cause_named(
+                f"{rom.path}", f"{rom.path}: splat found no functions", owner="compilers.fingerprint", stage="setup"
+            )
+        )
     measured = idioms(rom, [(function.start, function.end) for function in ordered])
     families = []
     for function in ordered:
@@ -152,9 +164,15 @@ def confirm(
             families = index.get(shingles(image[function.start : function.end]))
             if families is not None and region.family not in families:
                 raise Held(
-                    "init",
-                    f"region {region.key} VERSION {version}: "
-                    f"family {region.family} disagrees with reference {families}",
+                    cause_named(
+                        "compilers.fingerprint.confirm",
+                        (
+                            f"region {region.key} VERSION {version}: family {region.family} "
+                            f"disagrees with reference {families}"
+                        ),
+                        owner="compilers.fingerprint",
+                        stage="init",
+                    )
                 )
     return observed
 
@@ -177,10 +195,16 @@ def _body(path: Path, function: str) -> tuple[bytes, dict[int, int]]:
     """Read a named ELF32 MIPS body and masks from its relocation sections."""
     data = path.read_bytes()
     if data[:6] != b"\x7fELF\x01\x02" or len(data) < 52:
-        raise Held("setup", f"{path}: expected ELF32 big-endian object")
+        raise Held(
+            cause_named(
+                f"{path}", f"{path}: expected ELF32 big-endian object", owner="compilers.fingerprint", stage="setup"
+            )
+        )
     header = struct.unpack_from(">16sHHIIIIIHHHHHH", data)
     if header[2] != 8:
-        raise Held("setup", f"{path}: expected MIPS object")
+        raise Held(
+            cause_named(f"{path}", f"{path}: expected MIPS object", owner="compilers.fingerprint", stage="setup")
+        )
     offset, size, count = header[6], header[11], header[12]
     sections = [struct.unpack_from(">10I", data, offset + index * size) for index in range(count)]
     symbols = []
@@ -196,11 +220,22 @@ def _body(path: Path, function: str) -> tuple[bytes, dict[int, int]]:
                 symbols.append((label, address, length, info, section_index))
     definitions = [symbol for symbol in symbols if symbol[0] == function]
     if len(definitions) != 1:
-        raise Held("setup", f"{path}: expected one defined symbol {function}")
+        raise Held(
+            cause_named(
+                f"{path}",
+                f"{path}: expected one defined symbol {function}",
+                owner="compilers.fingerprint",
+                stage="setup",
+            )
+        )
     _, start, length, _, section_index = definitions[0]
     section = sections[section_index]
     if not section[2] & 4:
-        raise Held("setup", f"{path}: {function} is not executable")
+        raise Held(
+            cause_named(
+                f"{path}", f"{path}: {function} is not executable", owner="compilers.fingerprint", stage="setup"
+            )
+        )
     end = (
         start + length
         if length
@@ -223,7 +258,14 @@ def _body(path: Path, function: str) -> tuple[bytes, dict[int, int]]:
             address, info = struct.unpack_from(">II", data, index)
             kind = info & 255
             if kind not in kinds:
-                raise Held("setup", f"{path}: unsupported MIPS relocation {kind}")
+                raise Held(
+                    cause_named(
+                        f"{path}",
+                        f"{path}: unsupported MIPS relocation {kind}",
+                        owner="compilers.fingerprint",
+                        stage="setup",
+                    )
+                )
             if start <= address < end:
                 masks[address - start] = kinds[kind]
     return body, masks
@@ -246,7 +288,14 @@ def choose(
 ) -> Decision:
     """A winner needs exclusive matches and no exclusive counterexample."""
     if any(len(results) != len(probes) for results in matches.values()):
-        raise Held("setup", "setup.compiler_proposal: probe result denominator differs")
+        raise Held(
+            cause_named(
+                "setup.compiler_proposal",
+                "setup.compiler_proposal: probe result denominator differs",
+                owner="compilers.fingerprint",
+                stage="setup",
+            )
+        )
     failures = errors or {}
     comparable = tuple(
         index
@@ -277,15 +326,36 @@ def prove(project_scratch: Project, region: Region, candidates: Sequence[Compile
     from unbake.project.rom import load
 
     if not candidates:
-        raise Held("setup", f"region {region.key}: compiler candidates missing")
+        raise Held(
+            cause_named(
+                "compilers.fingerprint.prove",
+                f"region {region.key}: compiler candidates missing",
+                owner="compilers.fingerprint",
+                stage="setup",
+            )
+        )
     if type(getattr(policy, "probe_count", None)) is not int or policy.probe_count <= 0:
-        raise Held("setup", "policy.probe_count: required positive integer")
+        raise Held(
+            cause_named(
+                "policy.probe_count",
+                "policy.probe_count: required positive integer",
+                owner="compilers.fingerprint",
+                stage="setup",
+            )
+        )
     project = project_scratch
     policy.require(["tools.m2c"])
     compilers = dict(project.compilers)
     for candidate in candidates:
         if candidate.id not in compilers:
-            raise Held("setup", f"compilers.{candidate.id}: probe compiler is not installed")
+            raise Held(
+                cause_named(
+                    f"compilers.{candidate.id}",
+                    f"compilers.{candidate.id}: probe compiler is not installed",
+                    owner="compilers.fingerprint",
+                    stage="setup",
+                )
+            )
         toolchain.verify(project.tools / candidate.id, candidate)
     project = replace(project, compilers=compilers)
     version = project.names_from

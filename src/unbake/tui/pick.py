@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from unbake.config import Held
 from unbake.cycle import rank
+from unbake.process import named as cause_named
 
 
 def _label(row: rank.Candidate) -> str:
@@ -22,7 +23,7 @@ def pick(order: list[rank.Candidate]) -> list[rank.Candidate]:
     choices += [questionary.Choice(_label(row), value=row.function) for row in order[:200]]
     answer = questionary.checkbox("Pick functions (bytes per minute)", choices=choices, qmark="?").unsafe_ask()
     if not answer:
-        raise Held("cycle", "cycle.pick: nothing picked")
+        raise Held(cause_named("cycle.pick", "cycle.pick: nothing picked", owner="tui.pick", stage="cycle"))
     if "auto" in answer:
         return order[:auto]
     chosen = set(answer)

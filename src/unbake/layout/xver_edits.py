@@ -10,6 +10,7 @@ from unbake import scratch
 from unbake.config import Held
 from unbake.decomp.needs import Need, PlacementNeed
 from unbake.layout import split, split_edits
+from unbake.process import named as cause_named
 
 
 def _rename(project: Any, need: PlacementNeed) -> list[split.Edit]:
@@ -22,17 +23,38 @@ def _rename(project: Any, need: PlacementNeed) -> list[split.Edit]:
         if Path(row.path).name == need.value and row.start == need.start
     ]
     if len(rows) != 1 or rows[0].kind != "asm" or split.end(rows[0]) != need.end:
-        raise Held("placement", f"{need.function} rename: missing proved assembly row {need.value}")
+        raise Held(
+            cause_named(
+                "layout.xver_edits._rename",
+                f"{need.function} rename: missing proved assembly row {need.value}",
+                owner="layout.xver_edits",
+                stage="placement",
+            )
+        )
     row = rows[0]
     address = split.address(row, version.split)
     symbols_before, symbols = split.symbols(version.symbols)
     canonical = symbols.get(need.function)
     if canonical is not None and canonical[0] != address:
-        raise Held("placement", f"{need.function} rename: conflicting canonical address")
+        raise Held(
+            cause_named(
+                "layout.xver_edits._rename",
+                f"{need.function} rename: conflicting canonical address",
+                owner="layout.xver_edits",
+                stage="placement",
+            )
+        )
     if any(
         Path(other.path).name == need.function for segment in segments for other in segment.rows if other is not row
     ):
-        raise Held("placement", f"{need.function} rename: already has a row")
+        raise Held(
+            cause_named(
+                "layout.xver_edits._rename",
+                f"{need.function} rename: already has a row",
+                owner="layout.xver_edits",
+                stage="placement",
+            )
+        )
     lines[row.line] = split.replace_row(lines[row.line], row.match, path=str(Path(row.path).with_name(need.function)))
     edits = [split.Edit(version.split, before, "".join(lines), (need.version,))]
     old = symbols.get(cast(str, need.value))
@@ -58,7 +80,7 @@ def resolve(needs: list[Need], project: Any, policy: Any) -> list[split.Edit]:
 
     selected = [need for need in needs if isinstance(need, PlacementNeed)]
     if policy is None:
-        raise Held("placement", "policy: required")
+        raise Held(cause_named("policy", "policy: required", owner="layout.xver_edits", stage="placement"))
     if not selected:
         return []
     # The temporary view lets successive cuts and renames share one edit base.
@@ -81,7 +103,14 @@ def resolve(needs: list[Need], project: Any, policy: Any) -> list[split.Edit]:
         view: Any = SimpleNamespace(version=lambda version: versions[version])
         for need in selected:
             if need.value is None:
-                raise Held("placement", f"{need.function} {need.action}.value: required")
+                raise Held(
+                    cause_named(
+                        "layout.xver_edits.resolve",
+                        f"{need.function} {need.action}.value: required",
+                        owner="layout.xver_edits",
+                        stage="placement",
+                    )
+                )
             if need.action == "cut":
                 edits = split_edits.cut(view, need.version, need.function, need.start, need.end)
             elif need.action == "rename":
@@ -91,7 +120,14 @@ def resolve(needs: list[Need], project: Any, policy: Any) -> list[split.Edit]:
             elif need.action == "align":
                 edits = split_edits.align(view, need.version, need.function, need.value)
             else:
-                raise Held("placement", f"{need.function} action {need.action}: unsupported")
+                raise Held(
+                    cause_named(
+                        "layout.xver_edits.resolve",
+                        f"{need.function} action {need.action}: unsupported",
+                        owner="layout.xver_edits",
+                        stage="placement",
+                    )
+                )
             for edit in edits:
                 atomic_files.text(edit.path, edit.after)
         return [

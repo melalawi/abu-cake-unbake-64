@@ -20,6 +20,7 @@ from unbake.fold import declarations, notes
 from unbake.layout import map as layout_map
 from unbake.layout import split
 from unbake.layout.split import Edit
+from unbake.process import named as cause_named
 from unbake.work.attempts import Attempt
 
 
@@ -38,7 +39,14 @@ def view(project: Project, function: str) -> Project:
     drafted = draft_view(project, function)
     owner = layout_map.load(project).owners.get(function)
     if owner is None:
-        raise Held("layout", f"layout.member.{function}: function has no group in layout.toml")
+        raise Held(
+            cause_named(
+                f"layout.member.{function}",
+                f"layout.member.{function}: function has no group in layout.toml",
+                owner="fold.apply",
+                stage="layout",
+            )
+        )
     work_root = drafted.work_include[0]
     shared = project.include[-1] / owner.header
     private = work_root / owner.header
@@ -48,7 +56,14 @@ def view(project: Project, function: str) -> Project:
         if not isinstance(bases, dict) or any(
             not isinstance(k, str) or not isinstance(v, str) for k, v in bases.items()
         ):
-            raise Held("fold", f"fold.header_bases: {book}: expected header digests")
+            raise Held(
+                cause_named(
+                    "fold.header_bases",
+                    f"fold.header_bases: {book}: expected header digests",
+                    owner="fold.apply",
+                    stage="fold",
+                )
+            )
         shared_digest = hashlib.sha256(shared.read_bytes()).hexdigest()
         private_digest = hashlib.sha256(private.read_bytes()).hexdigest() if private.is_file() else None
         # Untouched copies follow the current shared header after another land.
@@ -125,12 +140,21 @@ def fold(
         else:
             split_edits.append(edit)
     if folded is None:
-        raise Held("fold", f"fold.source: {function}: fold produced no source")
+        raise Held(
+            cause_named(
+                "fold.source", f"fold.source: {function}: fold produced no source", owner="fold.apply", stage="fold"
+            )
+        )
     blockers = [finding for finding in checks.run(folded) if finding.fakematch is None]
     if blockers:
         raise Held(
-            "fold",
-            f"fold.source_rules: {function} breaks the source rules: " + "; ".join(checks.plain(f) for f in blockers),
+            cause_named(
+                "fold.apply.fold",
+                f"fold.source_rules: {function} breaks the source rules: "
+                + "; ".join(checks.plain(f) for f in blockers),
+                owner="fold.apply",
+                stage="fold",
+            )
         )
     from unbake.fold import shared_consumers
     from unbake.layout import header_loss, header_step

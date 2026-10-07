@@ -10,6 +10,8 @@ import toml  # type: ignore[import-untyped]
 
 from unbake.compilers import files as compiler_files
 from unbake.config import Held, PendingProject
+from unbake.process import capture
+from unbake.process import named as cause_named
 from unbake.project import header, rom
 from unbake.project.census import Census
 
@@ -18,7 +20,14 @@ def version_macros(versions: tuple[str, ...]) -> dict[str, str]:
     """Give generated version branches distinct, valid C identifiers."""
     macros = {version: "VERSION_" + re.sub(r"[^A-Za-z0-9_]", "_", version).upper() for version in versions}
     if len(set(macros.values())) != len(macros):
-        raise Held("setup", "project.versions: VERSION macro collision; supply distinct --version-name labels")
+        raise Held(
+            cause_named(
+                "project.versions",
+                "project.versions: VERSION macro collision; supply distinct --version-name labels",
+                owner="project.setup_config",
+                stage="setup",
+            )
+        )
     return macros
 
 
@@ -40,12 +49,26 @@ def facts(project: PendingProject, census: Census, *, name: str | None, title: s
     try:
         name = rom.stem(name, "project.name")
     except Held as error:
-        raise Held("setup", "project.name: supply --name STEM with a valid file stem") from error
+        raise Held(
+            capture(
+                error,
+                cause=cause_named(
+                    "project.name",
+                    "project.name: supply --name STEM with a valid file stem",
+                    owner="project.setup_config",
+                    stage="setup",
+                ),
+            )
+        ) from error
     reference = next(item for item in census.cartridges if census.names[item.path] == census.names_from)
     if title is None:
         title = data["project"].get("title", reference.header.title)
     if not isinstance(title, str) or not title.strip():
-        raise Held("setup", "project.title: supply --title TITLE")
+        raise Held(
+            cause_named(
+                "project.title", "project.title: supply --title TITLE", owner="project.setup_config", stage="setup"
+            )
+        )
     macros = version_macros(census.versions)
     data["project"].update(name=name, title=title, names_from=census.names_from, versions=list(census.versions))
     data["version"] = {
@@ -65,7 +88,14 @@ def facts(project: PendingProject, census: Census, *, name: str | None, title: s
 def write_facts(project: PendingProject, census: Census, *, name: str | None = None, title: str | None = None) -> None:
     """Persist accepted ROM/name facts while retaining awaiting-roms readiness."""
     if project.state != "awaiting-roms":
-        raise Held("setup", "project.state: ready facts require the proved publication boundary")
+        raise Held(
+            cause_named(
+                "project.state",
+                "project.state: ready facts require the proved publication boundary",
+                owner="project.setup_config",
+                stage="setup",
+            )
+        )
     compiler_files.atomic_bytes(
         project.root / "config.toml", toml.dumps(facts(project, census, name=name, title=title)).encode()
     )
@@ -89,9 +119,23 @@ def render_ready(
 ) -> str:
     """Caller must confirm the proposal, then prove and atomically publish this text."""
     if not cflags or default_compiler not in cflags:
-        raise Held("setup", "project.default_compiler: explicit confirmed compiler required")
+        raise Held(
+            cause_named(
+                "project.default_compiler",
+                "project.default_compiler: explicit confirmed compiler required",
+                owner="project.setup_config",
+                stage="setup",
+            )
+        )
     if not assignments or set(assignments.values()) - cflags.keys():
-        raise Held("setup", "units: complete confirmed compiler assignments required")
+        raise Held(
+            cause_named(
+                "units",
+                "units: complete confirmed compiler assignments required",
+                owner="project.setup_config",
+                stage="setup",
+            )
+        )
     data = facts(project, census, name=name, title=title)
     data["project"].update(state="ready", default_compiler=default_compiler)
     data["compilers"] = {ident: {"cflags": list(flags)} for ident, flags in cflags.items()}

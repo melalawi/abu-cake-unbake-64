@@ -12,6 +12,8 @@ from typing import TYPE_CHECKING, Protocol
 
 from unbake import cache as retention
 from unbake.config import Held
+from unbake.process import capture
+from unbake.process import named as cause_named
 
 if TYPE_CHECKING:
     from unbake.config import Project
@@ -82,9 +84,23 @@ def extracted_text(project: AsmProject, version: str, paths: Sequence[Path] | No
             )
     functions.sort(key=lambda function: function.start)
     if not functions and not data:
-        raise Held("init", f"VERSION {version}: splat emitted no function boundaries in {root}")
+        raise Held(
+            cause_named(
+                "layout.split.extracted_text",
+                f"VERSION {version}: splat emitted no function boundaries in {root}",
+                owner="layout.split",
+                stage="init",
+            )
+        )
     if any(left.end > right.start for left, right in pairwise(functions)):
-        raise Held("init", f"VERSION {version}: overlapping splat function boundaries")
+        raise Held(
+            cause_named(
+                "layout.split.extracted_text",
+                f"VERSION {version}: overlapping splat function boundaries",
+                owner="layout.split",
+                stage="init",
+            )
+        )
     return ExtractedText(functions, tuple(sorted(set(data))))
 
 
@@ -149,7 +165,7 @@ CODE_KINDS = ("asm", "c", "hasm")
 
 def name(value: object, label: str = "function") -> str:
     if not isinstance(value, str) or not NAME.fullmatch(value):
-        raise Held("split", f"{label}: required symbol name")
+        raise Held(cause_named(f"{label}", f"{label}: required symbol name", owner="layout.split", stage="split"))
     return value
 
 
@@ -164,14 +180,18 @@ def number(value: object, label: str) -> int:
             raise ValueError
         return result
     except (ValueError, TypeError):
-        raise Held("split", f"{label}: required nonnegative address") from None
+        raise Held(
+            cause_named(f"{label}", f"{label}: required nonnegative address", owner="layout.split", stage="split")
+        ) from None
 
 
 def read(path: Path) -> str:
     try:
         return Path(path).read_bytes().decode("utf-8")
     except (OSError, UnicodeError) as exc:
-        raise Held("split", f"{path}: {exc}") from exc
+        raise Held(
+            capture(exc, cause=cause_named(f"{path}", f"{path}: {exc}", owner="layout.split", stage="split"))
+        ) from exc
 
 
 def plain(value: str) -> str:
@@ -202,7 +222,9 @@ def parse_layout(path: Path, text: str) -> tuple[str, list[str], list[Segment]]:
         if not stripped:
             continue
         if stripped.startswith("#"):
-            raise Held("split", f"{path}:{index + 1}: plain YAML required")
+            raise Held(
+                cause_named(f"{path}", f"{path}:{index + 1}: plain YAML required", owner="layout.split", stage="split")
+            )
         if stripped == "segments:":
             in_segments = True
             continue
@@ -217,21 +239,31 @@ def parse_layout(path: Path, text: str) -> tuple[str, list[str], list[Segment]]:
             if stripped.startswith("- ["):
                 match = re.match(rf"-\s*\[\s*({NUMBER})(?:\s*[,\]])", stripped)
                 if not match:
-                    raise Held("split", f"{path}:{index + 1}: segment start")
+                    raise Held(
+                        cause_named(
+                            f"{path}", f"{path}:{index + 1}: segment start", owner="layout.split", stage="split"
+                        )
+                    )
                 boundaries.append(number(match[1], f"{path}: start"))
             elif stripped.startswith("- {") and stripped.endswith("}"):
                 fields = {}
                 for item in stripped[3:-1].split(","):
                     match = re.fullmatch(r"\s*(\w+):\s*(.*?)\s*", item)
                     if match is None:
-                        raise Held("split", f"{path}:{index + 1}: segment mapping")
+                        raise Held(
+                            cause_named(
+                                f"{path}", f"{path}:{index + 1}: segment mapping", owner="layout.split", stage="split"
+                            )
+                        )
                     fields[match[1]] = plain(match[2])
                 current = Segment(fields)
                 segments.append(current)
             else:
                 match = re.match(r"-\s*(\w+):\s*(.*)", stripped)
                 if not match:
-                    raise Held("split", f"{path}:{index + 1}: segment row")
+                    raise Held(
+                        cause_named(f"{path}", f"{path}:{index + 1}: segment row", owner="layout.split", stage="split")
+                    )
                 current = Segment({match[1]: plain(match[2])})
                 segments.append(current)
             continue
@@ -243,7 +275,14 @@ def parse_layout(path: Path, text: str) -> tuple[str, list[str], list[Segment]]:
         if sub_indent is not None and indent > sub_indent:
             match = ROW.fullmatch(line)
             if not match:
-                raise Held("split", f"{path}:{index + 1}: plain subsegment row required")
+                raise Held(
+                    cause_named(
+                        f"{path}",
+                        f"{path}:{index + 1}: plain subsegment row required",
+                        owner="layout.split",
+                        stage="split",
+                    )
+                )
             row = Row(
                 index, number(match["start"], f"{path}: start"), match["kind"], plain(match["path"]), current, match
             )
@@ -254,7 +293,7 @@ def parse_layout(path: Path, text: str) -> tuple[str, list[str], list[Segment]]:
             if match:
                 current.fields[match[1]] = plain(match[2])
     if not in_segments:
-        raise Held("split", f"{path}: segments")
+        raise Held(cause_named(f"{path}", f"{path}: segments", owner="layout.split", stage="split"))
     for segment in segments:
         if "start" in segment.fields:
             boundaries.append(number(segment.fields["start"], f"{path}: segment start"))
@@ -268,7 +307,7 @@ def parse_layout(path: Path, text: str) -> tuple[str, list[str], list[Segment]]:
         elif following:
             segment.end = min(following)
         elif segment.rows:
-            raise Held("split", f"{path}: segment end")
+            raise Held(cause_named(f"{path}", f"{path}: segment end", owner="layout.split", stage="split"))
         if not segment.rows:
             continue
         assert segment.end is not None
@@ -280,7 +319,7 @@ def parse_layout(path: Path, text: str) -> tuple[str, list[str], list[Segment]]:
             or starts[-1] > segment.end
             or (starts[-1] == segment.end and terminal.kind not in ("bss", ".bss"))
         ):
-            raise Held("split", f"{path}: subsegment boundaries")
+            raise Held(cause_named(f"{path}", f"{path}: subsegment boundaries", owner="layout.split", stage="split"))
     return text, lines, segments
 
 
@@ -299,10 +338,10 @@ def _symbols(path: Path) -> tuple[str, dict[str, tuple[int, int, re.Match[str]]]
             continue
         match = SYMBOL.match(line)
         if not match:
-            raise Held("split", f"{path}:{index + 1}: symbol line")
+            raise Held(cause_named(f"{path}", f"{path}:{index + 1}: symbol line", owner="layout.split", stage="split"))
         name = match["name"]
         if name in result:
-            raise Held("split", f"{path}: duplicate symbol {name}")
+            raise Held(cause_named(f"{path}", f"{path}: duplicate symbol {name}", owner="layout.split", stage="split"))
         result[name] = (int(match["address"], 0), index, match)
     return text, result
 
@@ -329,13 +368,24 @@ def bss_end(project: Project, version: str, segment: str) -> int:
     _, _, segments = layout(path)
     selected = [item for item in segments if item.fields.get("name") == segment]
     if len(selected) != 1:
-        raise Held("split", f"{segment}.bss_end: required one named segment")
+        raise Held(
+            cause_named(
+                f"{segment}.bss_end",
+                f"{segment}.bss_end: required one named segment",
+                owner="layout.split",
+                stage="split",
+            )
+        )
     item = selected[0]
     if "bss_end" in item.fields:
         return number(item.fields["bss_end"], f"{segment}.bss_end")
     size = number(item.fields.get("bss_size"), f"{segment}.bss_size")
     if item.end is None:
-        raise Held("split", f"{segment}.bss_end: missing segment end")
+        raise Held(
+            cause_named(
+                f"{segment}.bss_end", f"{segment}.bss_end: missing segment end", owner="layout.split", stage="split"
+            )
+        )
     start = number(item.fields.get("start"), f"{segment}.start")
     vram = number(item.fields.get("vram"), f"{segment}.vram")
     return vram + item.end - start + size
@@ -425,7 +475,11 @@ def holding_versions(
         )
     )
     if not versions:
-        raise Held("match", f"{function}: split row missing in every VERSION")
+        raise Held(
+            cause_named(
+                f"{function}", f"{function}: split row missing in every VERSION", owner="layout.split", stage="match"
+            )
+        )
     return versions
 
 
@@ -516,11 +570,25 @@ def member_owners(project: Project, function: str) -> dict[str, Function]:
             if function in row.aliases or any(name == function for name, _ in row.entries)
         ]
         if len(rows) > 1:
-            raise Held("match", f"{function}: ambiguous containing unit in VERSION {version}")
+            raise Held(
+                cause_named(
+                    f"{function}",
+                    f"{function}: ambiguous containing unit in VERSION {version}",
+                    owner="layout.split",
+                    stage="match",
+                )
+            )
         if rows:
             result[version] = rows[0]
     if not result:
-        raise Held("match", f"{function}: function identity missing in every VERSION")
+        raise Held(
+            cause_named(
+                f"{function}",
+                f"{function}: function identity missing in every VERSION",
+                owner="layout.split",
+                stage="match",
+            )
+        )
     return result
 
 
@@ -547,7 +615,11 @@ def words(project: Project, function: Function) -> bytes:
             stream.seek(function.start)
             words = stream.read(function.end - function.start)
     except OSError as exc:
-        raise Held("split", f"{path}: {exc}") from exc
+        raise Held(
+            capture(exc, cause=cause_named(f"{path}", f"{path}: {exc}", owner="layout.split", stage="split"))
+        ) from exc
     if not words or len(words) != function.end - function.start or len(words) % 4:
-        raise Held("split", f"{path}: function {function.name} word range")
+        raise Held(
+            cause_named(f"{path}", f"{path}: function {function.name} word range", owner="layout.split", stage="split")
+        )
     return words

@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 import toml
 
+from tests.ledger_fixture import log_attempt
 from tests.project_fixture import ProjectCase
 from unbake import buildfiles, config, land, runner
 from unbake.cli import publish
@@ -45,6 +46,7 @@ class PublicationOptionsTests(ProjectCase):
         data["units"] = {FUNCTION: {"compiler": "ido-7.1"}}
         self.config_path.write_text(toml.dumps(data))
         (self.project.tools / "gcc-2.7.2-kmc").mkdir()
+        (self.project.tools / "gcc-2.7.2-kmc/cc1").write_bytes(b"fixture alternative compiler")
         Path(self.host.n64link).write_text("#!/bin/sh\nprintf '%s\\n' '" + buildfiles.N64LINK_RELEASE.strip() + "'\n")
         self.project = config.load(self.project.root)
         buildfiles.write(self.project, self.host)
@@ -88,7 +90,7 @@ class PublicationOptionsTests(ProjectCase):
             0.1,
             compiler,
         )
-        attempts.append(self.project, attempt)
+        log_attempt(self.project, attempt)
 
         def compile(view, host, file, version, **kwargs):
             self.compiled.append((version, view.compiler_reference(FUNCTION), drivers.flags(view, version, FUNCTION)))
@@ -129,7 +131,16 @@ class PublicationOptionsTests(ProjectCase):
         self.options()
         config_bytes = self.config_path.read_bytes()
         units_bytes = (self.project.root / "units.mk").read_bytes()
-        self.assertIn((PAYLOAD / "units.mk").read_bytes(), units_bytes)
+        expected = (
+            (PAYLOAD / "units.mk").read_text().replace("$(CONSUMER) -G0", "$(CONSUMER) -D__UNBAKE_STDARG_IDO=1 -G0")
+        )
+        expected = expected.replace(
+            "COMPILER_DEFINES := \n",
+            "COMPILER_DEFINES := \n"
+            + expected.splitlines()[0].split(": PREPROCESS_FLAGS")[0]
+            + ": ASSEMBLER_FLAGS := \n",
+        )
+        self.assertIn(expected.encode(), units_bytes)
         eu = self.project.version("eu").split.read_bytes()
         unrelated = self.project.root / "unrelated.txt"
         unrelated.write_text("independent staged work\n")

@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from unbake.config import Held
+from unbake.process import capture
+from unbake.process import named as cause_named
 from unbake.project import header
 
 if TYPE_CHECKING:
@@ -29,9 +31,21 @@ class Rom:
         try:
             data = normalise(self.path.read_bytes())
         except OSError as error:
-            raise Held("setup", f"{self.path}: {error}") from error
+            raise Held(
+                capture(
+                    error,
+                    cause=cause_named(f"{self.path}", f"{self.path}: {error}", owner="project.rom", stage="setup"),
+                )
+            ) from error
         if hashlib.sha1(data).hexdigest() != self.sha1:
-            raise Held("setup", f"setup.rom_changed: {self.path}: sha1 changed after census")
+            raise Held(
+                cause_named(
+                    "setup.rom_changed",
+                    f"setup.rom_changed: {self.path}: sha1 changed after census",
+                    owner="project.rom",
+                    stage="setup",
+                )
+            )
         return data
 
 
@@ -52,17 +66,27 @@ def load(path: Path, *, retain_data: bool = True) -> Rom:
     try:
         data = path.read_bytes()
     except OSError as error:
-        raise Held("setup", f"{path}: {error}") from error
+        raise Held(
+            capture(error, cause=cause_named(f"{path}", f"{path}: {error}", owner="project.rom", stage="setup"))
+        ) from error
     try:
         data = normalise(data)
     except Held as error:
         field, reason = error.reason.split(":", 1)
-        raise Held("setup", f"{field}: {path}:{reason}") from error
+        raise Held(
+            capture(
+                error, cause=cause_named(f"{field}", f"{field}: {path}:{reason}", owner="project.rom", stage="setup")
+            )
+        ) from error
     try:
         facts = header.parse(data, header.RETAIL)
     except Held as error:
         field, reason = error.reason.split(":", 1)
-        raise Held("setup", f"{field}: {path}:{reason}") from error
+        raise Held(
+            capture(
+                error, cause=cause_named(f"{field}", f"{field}: {path}:{reason}", owner="project.rom", stage="setup")
+            )
+        ) from error
     return Rom(path, data if retain_data else None, facts, hashlib.sha1(data).hexdigest())
 
 
@@ -71,10 +95,18 @@ def normalise(data: bytes) -> bytes:
     magic = data[:4]
     widths = {bytes.fromhex("80371240"): 1, bytes.fromhex("37804012"): 2, bytes.fromhex("40123780"): 4}
     if magic not in widths:
-        raise Held("setup", f"rom.magic: not an N64 ROM (magic {magic.hex()})")
+        raise Held(
+            cause_named(
+                "rom.magic", f"rom.magic: not an N64 ROM (magic {magic.hex()})", owner="project.rom", stage="setup"
+            )
+        )
     width = widths[magic]
     if len(data) < 0x40 or len(data) % 4:
-        raise Held("setup", f"rom.size: truncated N64 ROM (size 0x{len(data):X})")
+        raise Held(
+            cause_named(
+                "rom.size", f"rom.size: truncated N64 ROM (size 0x{len(data):X})", owner="project.rom", stage="setup"
+            )
+        )
     if width != 1:
         normalised = bytearray(len(data))
         for index in range(width):
@@ -88,13 +120,27 @@ def similarity_matrix(
 ) -> dict[tuple[Rom, Rom], float]:
     """Compute every symmetric pair using measured code, excluding assets/IPL3."""
     if not isinstance(inventories, Mapping):
-        raise Held("setup", "inventories: required mapping of ROM paths to detected code ranges")
+        raise Held(
+            cause_named(
+                "inventories",
+                "inventories: required mapping of ROM paths to detected code ranges",
+                owner="project.rom",
+                stage="setup",
+            )
+        )
     signatures: dict[Rom, frozenset[bytes]] = {}
     for cartridge in cartridges:
         image = cartridge.image()
         functions = inventories.get(cartridge.path)
         if not functions:
-            raise Held("setup", f"setup.same_game.code_ranges: {cartridge.path}: detected code ranges missing")
+            raise Held(
+                cause_named(
+                    "setup.same_game.code_ranges",
+                    f"setup.same_game.code_ranges: {cartridge.path}: detected code ranges missing",
+                    owner="project.rom",
+                    stage="setup",
+                )
+            )
         signature: set[bytes] = set()
         for function in functions:
             start, end = function.start, function.end
@@ -105,10 +151,24 @@ def similarity_matrix(
                 or start % 4
                 or end % 4
             ):
-                raise Held("setup", f"{cartridge.path}: detected code range {start!r}-{end!r}: invalid word range")
+                raise Held(
+                    cause_named(
+                        f"{cartridge.path}",
+                        f"{cartridge.path}: detected code range {start!r}-{end!r}: invalid word range",
+                        owner="project.rom",
+                        stage="setup",
+                    )
+                )
             signature.update(shingles(image[start:end]))
         if not signature:
-            raise Held("setup", f"setup.same_game.code_ranges: {cartridge.path}: detected code shingles missing")
+            raise Held(
+                cause_named(
+                    "setup.same_game.code_ranges",
+                    f"setup.same_game.code_ranges: {cartridge.path}: detected code shingles missing",
+                    owner="project.rom",
+                    stage="setup",
+                )
+            )
         signatures[cartridge] = frozenset(signature)
         del image
     matrix = {(cartridge, cartridge): 1.0 for cartridge in cartridges}
@@ -129,18 +189,35 @@ def same_game(
 ) -> Mapping[tuple[Rom, Rom], float]:
     """Require header identity and similarity to the reference and every peer."""
     if not cartridges:
-        raise Held("setup", "setup.roms: no ROM files")
+        raise Held(cause_named("setup.roms", "setup.roms: no ROM files", owner="project.rom", stage="setup"))
     if type(threshold) not in (int, float) or not 0 < threshold <= 1:
-        raise Held("setup", "policy.same_game_similarity: required fraction in (0, 1]")
+        raise Held(
+            cause_named(
+                "policy.same_game_similarity",
+                "policy.same_game_similarity: required fraction in (0, 1]",
+                owner="project.rom",
+                stage="setup",
+            )
+        )
     if reference not in cartridges:
-        raise Held("setup", "project.names_from: reference ROM is absent")
+        raise Held(
+            cause_named(
+                "project.names_from", "project.names_from: reference ROM is absent", owner="project.rom", stage="setup"
+            )
+        )
     seen: dict[str, Path] = {}
     for cartridge in cartridges:
         if cartridge.sha1 in seen:
             raise Held(
-                "setup",
-                f"setup.roms.duplicate_sha1: {cartridge.path}: duplicate sha1 "
-                f"{cartridge.sha1} ({seen[cartridge.sha1]})",
+                cause_named(
+                    "setup.roms.duplicate_sha1",
+                    (
+                        f"setup.roms.duplicate_sha1: {cartridge.path}: duplicate sha1 "
+                        f"{cartridge.sha1} ({seen[cartridge.sha1]})"
+                    ),
+                    owner="project.rom",
+                    stage="setup",
+                )
             )
         seen[cartridge.sha1] = cartridge.path
         if (cartridge.header.category, cartridge.header.game_code) != (
@@ -148,27 +225,40 @@ def same_game(
             reference.header.game_code,
         ):
             raise Held(
-                "setup",
-                f"setup.same_game.game_code: {cartridge.path}: game code "
-                f"{cartridge.header.category + cartridge.header.game_code} differs from "
-                f"{reference.header.category + reference.header.game_code} ({reference.path})",
+                cause_named(
+                    "setup.same_game.game_code",
+                    (
+                        f"setup.same_game.game_code: {cartridge.path}: game code "
+                        f"{cartridge.header.category + cartridge.header.game_code} differs from "
+                        f"{reference.header.category + reference.header.game_code} ("
+                        f"{reference.path})"
+                    ),
+                    owner="project.rom",
+                    stage="setup",
+                )
             )
     matrix = similarity_matrix(cartridges, inventories) if matrix is None else matrix
     for cartridge in cartridges:
         for other in cartridges:
             if matrix[cartridge, other] < threshold:
                 raise Held(
-                    "setup",
-                    f"setup.same_game.similarity: {cartridge.path} vs {other.path}: "
-                    f"code similarity {matrix[cartridge, other]:.6f} below {threshold:.6f}; "
-                    f"reference {reference.path}",
+                    cause_named(
+                        "setup.same_game.similarity",
+                        (
+                            f"setup.same_game.similarity: {cartridge.path} vs {other.path}: code "
+                            f"similarity {matrix[cartridge, other]:.6f} below {threshold:.6f}; "
+                            f"reference {reference.path}"
+                        ),
+                        owner="project.rom",
+                        stage="setup",
+                    )
                 )
     return matrix
 
 
 def stem(value: str, label: str) -> str:
     if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", value):
-        raise Held("setup", f"{label}: expected a valid file stem")
+        raise Held(cause_named(f"{label}", f"{label}: expected a valid file stem", owner="project.rom", stage="setup"))
     return value
 
 
@@ -183,12 +273,25 @@ def version_names(roms: list[Rom], renames: dict[str, str]) -> dict[Path, str]:
             used.add(old)
         if name in seen:
             raise Held(
-                "setup",
-                f"setup.roms.duplicate_version: {cartridge.path}: VERSION {name} also names {seen[name]}; "
-                "supply ROMs with distinct header labels",
+                cause_named(
+                    "setup.roms.duplicate_version",
+                    (
+                        f"setup.roms.duplicate_version: {cartridge.path}: VERSION {name} also "
+                        f"names {seen[name]}; supply ROMs with distinct header labels"
+                    ),
+                    owner="project.rom",
+                    stage="setup",
+                )
             )
         names[cartridge.path] = name
         seen[name] = cartridge.path
     for unused in renames.keys() - used:
-        raise Held("setup", f"--version-name {unused}: unknown derived VERSION")
+        raise Held(
+            cause_named(
+                "project.rom.version_names",
+                f"--version-name {unused}: unknown derived VERSION",
+                owner="project.rom",
+                stage="setup",
+            )
+        )
     return names

@@ -13,6 +13,7 @@ from unbake.cache import Cache
 from unbake.config import Held
 from unbake.fold import provider_reuse
 from unbake.layout import apply, index
+from unbake.process import named
 from unbake.typemap import database, regeneration
 
 FIXTURE = Path(__file__).parent / "fixtures/regeneration_shared_owner"
@@ -138,7 +139,14 @@ class RegenerationOwnerTests(ProjectCase):
             self.assertEqual(len(re.findall(r"struct QueryResult\s*\{", expanded)), 1)
             self.assertEqual(len(re.findall(r"struct QueryBox\s*\{", expanded)), 1)
             calls.append((SOURCE, "us", 0))
-            raise Held("compile", "compile.fixture: stop after retained default proof")
+            raise Held(
+                named(
+                    "compile.fixture",
+                    "compile.fixture: stop after retained default proof",
+                    owner="fixture",
+                    stage="compile",
+                )
+            )
 
         with (
             patch.object(regeneration, "Session", return_value=session),

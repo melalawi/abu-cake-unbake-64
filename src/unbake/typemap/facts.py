@@ -31,6 +31,8 @@ from unbake import cache as retention
 from unbake import inputs, pool, tui
 from unbake.cache import Cache, key
 from unbake.config import Held, Host, Project
+from unbake.process import capture
+from unbake.process import named as cause_named
 from unbake.project.headers import Graph, scan, topology
 from unbake.typemap import declarations, facts_decode, layers, storage
 
@@ -331,7 +333,9 @@ class Store:
     def _get_shared(self, digest: str) -> Any:
         path = self.cache.get(SHARED, digest)
         if path is None:
-            raise Held("solve", f"facts.shared: missing {digest}")
+            raise Held(
+                cause_named("facts.shared", f"facts.shared: missing {digest}", owner="typemap.facts", stage="solve")
+            )
         binary = self.cache.get("facts-shared-pickle", digest)
         value = self.cache.decode(binary or path, retention.PICKLE if binary else retention.JSON)
         self.written[id(value)] = value, digest
@@ -468,7 +472,14 @@ def source_facts(project: Project, policy: Host | None, output: Store, tasks: li
     result = []
     for function, task_source, version in tasks:
         if task_source != source:
-            raise Held("solve", f"facts.source: {task_source} grouped with {source}")
+            raise Held(
+                cause_named(
+                    "facts.source",
+                    f"facts.source: {task_source} grouped with {source}",
+                    owner="typemap.facts",
+                    stage="solve",
+                )
+            )
         command = _command(project, policy, version, source)
         # Only identical actual expansion inputs can share preprocessing. Version names alone are not inputs.
         contract = key(
@@ -537,7 +548,14 @@ class _Parts(Mapping[str, dict[str, Any]]):
         if found is None:
             found = self.output.json(HEADER, self.content[name])
             if found is None:
-                raise Held("solve", f"facts.headers: missing header part {self.content[name]} for {name}")
+                raise Held(
+                    cause_named(
+                        "facts.headers",
+                        f"facts.headers: missing header part {self.content[name]} for {name}",
+                        owner="typemap.facts",
+                        stage="solve",
+                    )
+                )
             self.loaded[name] = found
         return found
 
@@ -632,7 +650,14 @@ def _source_tasks(
             counts["sources"] += 1
             shared[identity] = layers.source_part(text, source, parts[version], placeholder, spell)
         if unit_key(project, host, source, version, snapshot) != content_key:
-            raise Held("solve", f"facts.inputs: {storage.relative(project, source)} changed during the solve; rerun")
+            raise Held(
+                cause_named(
+                    "facts.inputs",
+                    f"facts.inputs: {storage.relative(project, source)} changed during the solve; rerun",
+                    owner="typemap.facts",
+                    stage="solve",
+                )
+            )
         return shared[identity]
 
     # The source interface can stand while generated include edges move. Refresh its
@@ -686,7 +711,14 @@ def _source_tasks(
         if part is None:
             part = extracted()
             if part is None:
-                raise Held("solve", f"facts.layers: {storage.relative(project, source)} became a whole unit; rerun")
+                raise Held(
+                    cause_named(
+                        "facts.layers",
+                        f"facts.layers: {storage.relative(project, source)} became a whole unit; rerun",
+                        owner="typemap.facts",
+                        stage="solve",
+                    )
+                )
             output.put_json(SOURCE, part_key, part)
     else:
         output.put_json(SOURCE, part_key, part)
@@ -718,13 +750,27 @@ def _whole_tasks(
         encoded = source_facts(project, host, output, [task for _, task in missing])
         for (content_key, task), data in zip(missing, encoded, strict=True):
             if source_key(project, host, task, Graph.capture(project)) != content_key:
-                raise Held("solve", f"facts.inputs: {storage.relative(project, task[1])} changed during the solve")
+                raise Held(
+                    cause_named(
+                        "facts.inputs",
+                        f"facts.inputs: {storage.relative(project, task[1])} changed during the solve",
+                        owner="typemap.facts",
+                        stage="solve",
+                    )
+                )
             output.put_encoded(content_key, data)
     result: list[tuple[int, bytes]] = []
     for index, content_key, _ in keyed:
         entry = output.raw(content_key)
         if entry is None:
-            raise Held("solve", f"facts.{content_key}: missing after extraction")
+            raise Held(
+                cause_named(
+                    f"facts.{content_key}",
+                    f"facts.{content_key}: missing after extraction",
+                    owner="typemap.facts",
+                    stage="solve",
+                )
+            )
         result.append((index, entry))
     return result
 
@@ -810,8 +856,17 @@ def _unit_job(
         else _unit_identity(shared, versions)
     )
     pool.progress(identity, step="source")
+    from unbake import steps
+    from unbake.process import cause_scope
+
+    dependencies = (
+        steps.operation_dependencies(shared[0], shared[1], "types")
+        if shared[1] is not None
+        else inputs.DependencySet((), {"dependencies_unknown": True}, {})
+    )
     try:
-        return _unit_work(shared, versions)
+        with cause_scope(identity.source or "types", dependencies):
+            return _unit_work(shared, versions)
     except MemoryError as error:
         fault = dict(error.args[0]) if isinstance(error, WorkerMemory) else memory_fault(error)
         fault.update(
@@ -821,13 +876,16 @@ def _unit_job(
         )
         raise WorkerMemory(fault) from error
     except Held as error:
-        fault = {**(error.fault or {}), "action": "types", "identity": asdict(identity)}
-        raise Held(error.phase, f"{identity.source}: {error.reason}", fault=fault) from error
+        raise Held(
+            error.fault.framed("typemap.facts", error.phase, identity.source or "types", {"identity": asdict(identity)})
+        ) from error
     except Exception as error:
-        from unbake.process import fault as cause_fault
-
-        fault = {**cause_fault(error), "action": "types", "identity": asdict(identity)}
-        raise Held("solve", f"types.source: {identity.source}: {type(error).__name__}: {error}", fault=fault) from error
+        cause = cause_named(
+            "types.source", f"{identity.source}: {type(error).__name__}: {error}", owner="typemap.facts", stage="solve"
+        )
+        raise Held(
+            capture(error, cause=cause).framed("typemap.facts", "solve", "source task", {"identity": asdict(identity)})
+        ) from error
 
 
 _unit_job._pool_identity = _unit_identity  # type: ignore[attr-defined]
@@ -918,7 +976,9 @@ def _shared_job(cache_root: Path, digests: list[str]) -> None:
     for digest in digests:
         source = cache.get(SHARED, digest)
         if source is None:
-            raise Held("solve", f"facts.shared: missing {digest}")
+            raise Held(
+                cause_named("facts.shared", f"facts.shared: missing {digest}", owner="typemap.facts", stage="solve")
+            )
         cache.produce(
             "facts-shared-pickle",
             digest,
@@ -962,7 +1022,14 @@ def published(project: Project, policy: Host | None, output: Store, keys: list[s
     """Seeds of every published source in inventory order; keys come from published_keys."""
     tasks = declarations.published_sources(project)
     if len(tasks) != len(keys):
-        raise Held("solve", "facts.keys: published sources changed during the solve")
+        raise Held(
+            cause_named(
+                "facts.keys",
+                "facts.keys: published sources changed during the solve",
+                owner="typemap.facts",
+                stage="solve",
+            )
+        )
     snapshot = Graph.capture(project)
     versions = sorted({version for _, _, version in tasks})
     header_keys: dict[str, dict[str, str]] = {version: {} for version in versions}
@@ -1024,7 +1091,14 @@ def published(project: Project, policy: Host | None, output: Store, keys: list[s
             if cached is not None:
                 bundle_rows: list[bytes] = retention.Cache(cached.parent).decode(cached, retention.PICKLE)
                 if len(bundle_rows) != len(indices):
-                    raise Held("solve", "facts.unit: cached task inventory disagrees with its key")
+                    raise Held(
+                        cause_named(
+                            "facts.unit",
+                            "facts.unit: cached task inventory disagrees with its key",
+                            owner="typemap.facts",
+                            stage="solve",
+                        )
+                    )
                 encoded.update(zip(indices, bundle_rows, strict=True))
             else:
                 pending.append(versions_)

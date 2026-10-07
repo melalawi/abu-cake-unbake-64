@@ -25,6 +25,7 @@ from unbake import atomic as atomic_files
 from unbake.config import Held
 from unbake.decomp.exclusions import MANIFEST
 from unbake.layout import boundary, split
+from unbake.process import named as cause_named
 from unbake.work import attempts, shape
 
 if TYPE_CHECKING:
@@ -219,13 +220,27 @@ def split_text(path: Path, text: str, findings: Iterable[Finding], renamed: dict
     for finding in findings:
         row = rows.get(finding.start)
         if row is None or row.kind != "asm" or Path(row.path).name != finding.name:
-            raise Held("shape-edits", f"{path}: {finding.name}: no asm row at 0x{finding.start:X}")
+            raise Held(
+                cause_named(
+                    f"{path}",
+                    f"{path}: {finding.name}: no asm row at 0x{finding.start:X}",
+                    owner="layout.shape_edits",
+                    stage="shape-edits",
+                )
+            )
         if finding.kind == "continuation":
             position = row.segment.rows.index(row)
             previous = row.segment.rows[position - 1] if position else None
             previous_name = Path(previous.path).name if previous is not None else ""
             if previous is None or owners.get(previous_name, previous_name) != finding.owner:
-                raise Held("shape-edits", f"{path}: {finding.name}: owner {finding.owner} not before it")
+                raise Held(
+                    cause_named(
+                        f"{path}",
+                        f"{path}: {finding.name}: owner {finding.owner} not before it",
+                        owner="layout.shape_edits",
+                        stage="shape-edits",
+                    )
+                )
             lines[row.line] = ""
             continue
         template = lines[row.line]
@@ -292,7 +307,7 @@ def run(project: Project, host: Host) -> list[str]:
         project.root / "config.toml",
         layout,
         project.root / MANIFEST,
-        attempts.summary_path(project),
+        project.root / attempts.PATH,
         *(p for v in project.versions for p in (project.version(v).split, project.version(v).symbols)),
     ]
     backup = {path: path.read_bytes() for path in paths if path.is_file()}
@@ -300,9 +315,7 @@ def run(project: Project, host: Host) -> list[str]:
     # the commit, discarded on any failure.
     carries = attempts.stage_renames(project, renamed)
     try:
-        summary = attempts.renamed_summary(project, renamed)
-        if summary is not None:
-            atomic_files.write(attempts.summary_path(project), summary)
+        attempts.ledger(project).rename(renamed)
         for version, findings in kept.items():
             if not findings:
                 continue
@@ -345,7 +358,14 @@ def _relabel(project: Project, renamed: dict[str, str], continuations: set[str])
     units = configured.get("units", {})
     for old, new in renamed.items():
         if old in units and new in units:
-            raise Held("shape-edits", f"shape.config: {old}: renamed unit {new} already configured")
+            raise Held(
+                cause_named(
+                    "shape.config",
+                    f"shape.config: {old}: renamed unit {new} already configured",
+                    owner="layout.shape_edits",
+                    stage="shape-edits",
+                )
+            )
     relabeled = {renamed.get(name, name): row for name, row in units.items() if name not in gone}
     if relabeled != units:
         configured["units"] = relabeled

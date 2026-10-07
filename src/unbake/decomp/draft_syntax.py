@@ -6,6 +6,8 @@ from pycparser import c_ast, c_generator  # type: ignore[import-untyped]
 
 from unbake import cdecl
 from unbake.config import Held
+from unbake.process import capture
+from unbake.process import named as cause_named
 
 
 def address_arithmetic(source: str, context: str, function: str) -> str:
@@ -20,7 +22,17 @@ def address_arithmetic(source: str, context: str, function: str) -> str:
     try:
         tree = cdecl.parse(prefix + clean(source))
     except cdecl.ParseError as error:
-        raise Held("m2c", f"{function}: unsupported C draft syntax: {error}") from error
+        raise Held(
+            capture(
+                error,
+                cause=cause_named(
+                    f"{function}",
+                    f"{function}: unsupported C draft syntax: {error}",
+                    owner="decomp.draft_syntax",
+                    stage="m2c",
+                ),
+            )
+        ) from error
     aliases: dict[str, Any] = {}
     tags: dict[str, Any] = {}
     values: dict[str, Any] = {}

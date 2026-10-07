@@ -7,6 +7,7 @@ from pathlib import Path
 from unbake.config import Held, Project
 from unbake.layout import split
 from unbake.objects.elf import Object
+from unbake.process import named as cause_named
 
 
 def relocation_masks(path: Path, size: int) -> dict[int, int]:
@@ -14,14 +15,21 @@ def relocation_masks(path: Path, size: int) -> dict[int, int]:
     obj = Object(path)
     section = obj.section(".text")
     if section is None:
-        raise Held("port", f"{path}: missing .text")
+        raise Held(cause_named(f"{path}", f"{path}: missing .text", owner="layout.port", stage="port"))
     masks: dict[int, int] = {}
     for offset, kind, _ in obj.relocations(section):
         if offset >= size:
             continue
         mask = {2: 0xFFFFFFFF, 4: 0x03FFFFFF, 5: 0xFFFF, 6: 0xFFFF, 10: 0xFFFF}.get(kind)
         if mask is None or offset % 4:
-            raise Held("port", f"{path}: unsupported relocation {kind} at {offset:#x}")
+            raise Held(
+                cause_named(
+                    f"{path}",
+                    f"{path}: unsupported relocation {kind} at {offset:#x}",
+                    owner="layout.port",
+                    stage="port",
+                )
+            )
         masks[offset] = masks.get(offset, 0) | mask
     return masks
 

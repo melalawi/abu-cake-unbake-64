@@ -14,6 +14,8 @@ from unbake.cache import Cache
 from unbake.compilers import drivers
 from unbake.config import Held, Host, Project
 from unbake.layout import split
+from unbake.process import capture
+from unbake.process import named as cause_named
 from unbake.work import attempts
 
 ProofKey = tuple[str, str]
@@ -34,7 +36,7 @@ def snapshot(project: Project, host: Host) -> dict[ProofKey, str]:
     are parsed once, and cycles cannot truncate another source's closure.
     """
     rows = {version: split.functions(project, version) for version in project.versions}
-    fuzzy = attempts.fuzzy_sources(project)
+    fuzzy = attempts.ledger(project).fuzzy_sources()
     files: dict[Path, tuple[str, tuple[Path, ...], bool]] = {}
 
     def read(path: Path) -> tuple[str, tuple[Path, ...], bool]:
@@ -125,21 +127,33 @@ def _prove(job: tuple[Project, Host, str, str]) -> dict[str, Any] | None:
                 data = original_asm.assemble(project, host, source.read_text(), row, Path(temporary))
             original_asm.prove(project, row, data)
             equal = data == split.words(project, row)
-        elif unit in attempts.fuzzy_sources(project):
+        elif unit in attempts.ledger(project).fuzzy_sources():
             source = project.src / f"{unit}.c"
             measured, _ = land._fuzzy_builds_row((project, project, host, unit, source, version))
             equal = measured["compiled"]
         else:
             equal, _ = land._builds_row((project, project, host, unit, project.src / f"{unit}.c", version))
         if not equal:
-            raise Held("publish", f"publish.push_proof: {unit} VERSION {version}: rebased native proof differs")
+            raise Held(
+                cause_named(
+                    "publish.push_proof",
+                    f"publish.push_proof: {unit} VERSION {version}: rebased native proof differs",
+                    owner="project.publication_push",
+                    stage="publish",
+                )
+            )
     except Held as error:
         return {
             "function": unit,
             "version": version,
             "key": error.key,
             "reason": error.reason,
-            "fault": process.fault(error),
+            "fault": capture(
+                error,
+                cause=cause_named(
+                    "project.publication_push.unexpected", str(error), owner="project.publication_push", stage="project"
+                ),
+            ).document(),
         }
     return None
 
@@ -160,15 +174,19 @@ def reconcile(
     if sources:
         from unbake.decomp import checks
 
-        fuzzy = attempts.fuzzy_sources(project)
+        fuzzy = attempts.ledger(project).fuzzy_sources()
         findings = checks.findings(project, sources, Cache(project.cache))
         blocked = [row for row in findings.rows if Path(row.path).stem in fuzzy or row.finding.fakematch is None]
         if blocked:
             first = blocked[0]
             detail = checks.plain(first.finding)
             raise Held(
-                "publish",
-                f"publish.push_rules: {first.path}:{first.finding.line}: {detail}; nothing pushed",
+                cause_named(
+                    "publish.push_rules",
+                    f"publish.push_rules: {first.path}:{first.finding.line}: {detail}; nothing pushed",
+                    owner="project.publication_push",
+                    stage="publish",
+                )
             )
     failures = (
         tuple(
@@ -180,7 +198,15 @@ def reconcile(
         else ()
     )
     if failures:
-        raise Held("publish", "publish.push_proof: affected rebased proofs failed; nothing pushed", failures=failures)
+        raise Held(
+            cause_named(
+                "publish.push_proof",
+                "publish.push_proof: affected rebased proofs failed; nothing pushed",
+                owner="project.publication_push",
+                stage="publish",
+            ),
+            failures=failures,
+        )
     return [{"function": unit, "version": version} for unit, version in affected], after
 
 
@@ -192,7 +218,14 @@ def push(project: Project, host: Host, remote: str, *, attempts_limit: int = 5) 
     An unfinished proof restores the prior local commit for a fresh retry.
     """
     if not remote or remote.startswith("-"):
-        raise Held("publish", "publish.push_remote: supply a remote name or URL")
+        raise Held(
+            cause_named(
+                "publish.push_remote",
+                "publish.push_remote: supply a remote name or URL",
+                owner="project.publication_push",
+                stage="publish",
+            )
+        )
     branch = host.publish_branch
     _git(project, "check-ref-format", "refs/heads/" + branch)
     from unbake.report import state
@@ -207,7 +240,14 @@ def push(project: Project, host: Host, remote: str, *, attempts_limit: int = 5) 
         base = _git(project, "merge-base", "HEAD", "FETCH_HEAD")
         if base != tip:
             if _git(project, "status", "--porcelain", "--untracked-files=no"):
-                raise Held("publish", "publish.push_dirty: commit tracked edits before rebasing publication")
+                raise Held(
+                    cause_named(
+                        "publish.push_dirty",
+                        "publish.push_dirty: commit tracked edits before rebasing publication",
+                        owner="project.publication_push",
+                        stage="publish",
+                    )
+                )
             if before is None:
                 before = snapshot(config.load(project.root), host)
             prior = _git(project, "rev-parse", "HEAD")
@@ -222,7 +262,15 @@ def push(project: Project, host: Host, remote: str, *, attempts_limit: int = 5) 
             except Held as error:
                 _git(project, "rebase", "--abort")
                 raise Held(
-                    "publish", "publish.push_conflict: concurrent changes conflict; local commits retained"
+                    capture(
+                        error,
+                        cause=cause_named(
+                            "publish.push_conflict",
+                            "publish.push_conflict: concurrent changes conflict; local commits retained",
+                            owner="project.publication_push",
+                            stage="publish",
+                        ),
+                    )
                 ) from error
             try:
                 current = config.load(project.root)
@@ -241,7 +289,17 @@ def push(project: Project, host: Host, remote: str, *, attempts_limit: int = 5) 
             # Only a newly fetched remote tip authorizes another reconciliation.
             _git(project, "fetch", "--", remote, branch)
             if _git(project, "rev-parse", "FETCH_HEAD") == tip:
-                raise Held("publish", "publish.push_transport: remote refused push; local commits retained") from error
+                raise Held(
+                    capture(
+                        error,
+                        cause=cause_named(
+                            "publish.push_transport",
+                            "publish.push_transport: remote refused push; local commits retained",
+                            owner="project.publication_push",
+                            stage="publish",
+                        ),
+                    )
+                ) from error
             continue
         return {
             "remote": remote,
@@ -250,4 +308,11 @@ def push(project: Project, host: Host, remote: str, *, attempts_limit: int = 5) 
             "head": _git(project, "rev-parse", "HEAD"),
             "reconciled": reconciled,
         }
-    raise Held("publish", "publish.push_race: remote moved repeatedly; local commits retained, retry publish --push")
+    raise Held(
+        cause_named(
+            "publish.push_race",
+            "publish.push_race: remote moved repeatedly; local commits retained, retry publish --push",
+            owner="project.publication_push",
+            stage="publish",
+        )
+    )

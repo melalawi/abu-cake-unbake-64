@@ -14,6 +14,7 @@ from unbake.cli import guidance
 from unbake.config import Held
 from unbake.layout import header_step
 from unbake.layout import map as layout_map
+from unbake.process import named
 
 MEMBERS = {
     name: layout_map.Member(name, "span_1000", address, ("de",))
@@ -147,7 +148,10 @@ class LayoutHoldNextTests(TempCase):
         ]:
             with self.subTest(reason):
                 phase = reason.split(".", 1)[0]
-                self.assertEqual(guidance.after(context, Held(phase, reason)), expected)  # type: ignore[arg-type]
+                self.assertEqual(
+                    guidance.after(context, Held(named("fixture.refusal", reason, owner="fixture", stage=phase))),
+                    expected,
+                )  # type: ignore[arg-type]
 
 
 class HistoryRenameTests(TempCase):
@@ -225,7 +229,14 @@ class HeaderCompileFailureTests(ProjectCase):
                 )
 
         def refuse(view, host, file, version, *, unit, non_matching):
-            raise Held("compile", f"compile.{unit}: src/{unit}.c: `missing' undeclared")
+            raise Held(
+                named(
+                    "fixture.refusal",
+                    f"compile.{unit}: src/{unit}.c: `missing' undeclared",
+                    owner="fixture",
+                    stage="compile",
+                )
+            )
 
         with patch.object(runner, "compile_unit", side_effect=refuse):
             self.assertEqual(header_step._compile(job), expected[0])

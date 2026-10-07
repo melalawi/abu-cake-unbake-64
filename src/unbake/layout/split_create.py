@@ -16,6 +16,7 @@ from pathlib import Path
 from unbake import atomic as atomic_files
 from unbake.config import Held, Host
 from unbake.layout import split_analysis
+from unbake.process import named as cause_named
 from unbake.process import temporary_environment
 
 
@@ -56,14 +57,32 @@ def create(
     valid_stem(stem, "name")
     valid_stem(version, "VERSION")
     if policy is None:
-        raise Held("split", "split.create: the host config (unbake.toml) is required")
+        raise Held(
+            cause_named(
+                "split.create",
+                "split.create: the host config (unbake.toml) is required",
+                owner="layout.split_create",
+                stage="split",
+            )
+        )
     executable = shutil.which(str(policy.splat))
     if executable is None:
-        raise Held("init", f"policy.splat {policy.splat}: missing executable")
+        raise Held(
+            cause_named(
+                "layout.split_create.create",
+                f"policy.splat {policy.splat}: missing executable",
+                owner="layout.split_create",
+                stage="init",
+            )
+        )
     rom = Path(rom).resolve()
     data = rom.read_bytes()
     if len(data) < 0x1000 or data[:4] != bytes.fromhex("80371240"):
-        raise Held("init", f"{rom.name}: required normalized N64 ROM")
+        raise Held(
+            cause_named(
+                f"{rom.name}", f"{rom.name}: required normalized N64 ROM", owner="layout.split_create", stage="init"
+            )
+        )
     policy.cache_machine_root.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix=".create-", dir=policy.cache_machine_root) as temporary:
         work = Path(temporary)
@@ -81,11 +100,23 @@ def create(
         )
         if result.returncode:
             raise Held(
-                "init", f"splat create_config {rom.name}: exit {result.returncode}: {result.stdout}{result.stderr}"
+                cause_named(
+                    "layout.split_create.create",
+                    f"splat create_config {rom.name}: exit {result.returncode}: {result.stdout}{result.stderr}",
+                    owner="layout.split_create",
+                    stage="init",
+                )
             )
         outputs = list(work.glob("*.yaml"))
         if len(outputs) != 1:
-            raise Held("init", f"splat create_config {rom.name}: expected one YAML, found {len(outputs)}")
+            raise Held(
+                cause_named(
+                    "layout.split_create.create",
+                    f"splat create_config {rom.name}: expected one YAML, found {len(outputs)}",
+                    owner="layout.split_create",
+                    stage="init",
+                )
+            )
         text = without_comments(outputs[0].read_text())
     from unbake.project.header import decode
 
@@ -213,7 +244,14 @@ def complete_executable(text: str, data: bytes, *, code_ranges: Sequence[tuple[i
             data, start, limit, vram - start, measured_end=limit if loaded else measured_end
         )
         if end > limit:
-            raise Held("init", "executable end: crosses measured BSS boundary")
+            raise Held(
+                cause_named(
+                    "layout.split_create.complete_executable",
+                    "executable end: crosses measured BSS boundary",
+                    owner="layout.split_create",
+                    stage="init",
+                )
+            )
         if row:
             if end == limit:
                 block = block[: row.start()] + block[row.end() :]

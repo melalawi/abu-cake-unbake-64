@@ -17,35 +17,59 @@ from unbake import cache as retention
 from unbake import effort, pool, tui
 from unbake import inputs as input_pins
 from unbake.config import Held, Host, Project
+from unbake.process import Action, capture
+from unbake.process import named as cause_named
 from unbake.project.headers import Graph, recipe
 from unbake.typemap import header_names, namespace, regeneration, storage, types_db
 
 
-def load(project: Project, *, required: bool = True, allow_stale: bool = False) -> dict[str, Any] | None:
+def load(project: Project, *, required: bool = True) -> dict[str, Any] | None:
     """The whole solution from build/types.sqlite (the solver and the headers step need all of it)."""
     path = types_db.path(project)
     if not path.is_file():
         if not required:
             return None
-        raise Held("draft", f"types.database: {path} is missing; the types step builds it")
+        raise Held(
+            cause_named(
+                "types.database",
+                f"types.database: {path} is missing; the types step builds it",
+                owner="typemap.database",
+                stage="draft",
+            )
+        )
     value = types_db.read(path)
     storage.validate_identity(project, value, "types.database")
     shard = value.get("map_shard")
     if shard is not None:
         if not isinstance(shard, str) or Path(shard).name != shard:
-            raise Held("draft", "map.shards: invalid shard name in database")
+            raise Held(
+                cause_named(
+                    "map.shards", "map.shards: invalid shard name in database", owner="typemap.database", stage="draft"
+                )
+            )
         storage.verify_file(project.build / "map" / shard, value["map_shard_sha256"], "map.shards")
     supplement = value.get("abi_supplement")
     if supplement is not None:
         filename = supplement.get("path")
         if not isinstance(filename, str) or Path(filename).name != filename:
-            raise Held("draft", "map.abi.path: invalid ABI supplement name")
+            raise Held(
+                cause_named(
+                    "map.abi.path", "map.abi.path: invalid ABI supplement name", owner="typemap.database", stage="draft"
+                )
+            )
         storage.verify_file(project.build / "map" / filename, supplement["sha256"], "map.abi")
     for row in value.get("constraints", []):
         if row.get("kind") == "shard":
             shard_path = project.root / row["path"]
             if not shard_path.resolve().is_relative_to((project.build / "types").resolve()):
-                raise Held("draft", "types.constraints: shard is outside the generated type directory")
+                raise Held(
+                    cause_named(
+                        "types.constraints",
+                        "types.constraints: shard is outside the generated type directory",
+                        owner="typemap.database",
+                        stage="draft",
+                    )
+                )
             storage.verify_file(shard_path, row["sha256"], "types.constraints")
     return value
 
@@ -54,18 +78,32 @@ def digest(project: Project) -> str:
     """The content digest of the installed solution (what redraft marks pin)."""
     path = types_db.path(project)
     if not path.is_file():
-        raise Held("types", f"types.database: {path} is missing; the types step builds it")
+        raise Held(
+            cause_named(
+                "types.database",
+                f"types.database: {path} is missing; the types step builds it",
+                owner="typemap.database",
+                stage="types",
+            )
+        )
     return str(types_db.meta(path, "content_sha256"))
 
 
-def context(project: Project, *, function: str | None = None, allow_stale: bool = False) -> str:
+def context(project: Project, *, function: str | None = None) -> str:
     """Draft context: the function's header, then only the prototypes it depends on (rows read on demand)."""
     from unbake.layout import index
     from unbake.typemap.abi_declarations import for_caller
 
     path = types_db.path(project)
     if not path.is_file():
-        raise Held("types", f"types.database: {path} is missing; the types step builds it")
+        raise Held(
+            cause_named(
+                "types.database",
+                f"types.database: {path} is missing; the types step builds it",
+                owner="typemap.database",
+                stage="types",
+            )
+        )
     lookup = index.load(project)
     homes = lookup["symbols"]
     selected = [homes[function]] if function in homes else sorted(set(homes.values()))
@@ -88,18 +126,25 @@ def context(project: Project, *, function: str | None = None, allow_stale: bool 
 
 
 def redrafts(project: Project) -> dict[str, Any]:
-    path = types_db.path(project)
-    return types_db.redrafts(path) if path.is_file() else {}
+    from unbake.work.attempts import ledger
+
+    return ledger(project).redrafts()
 
 
 def clear_redraft(project: Project, function: str, type_db_sha256: str) -> None:
     path = types_db.path(project)
     if not path.is_file() or digest(project) != type_db_sha256:
-        raise Held("draft", "types.redraft: database changed during draft")
+        raise Held(
+            cause_named(
+                "types.redraft", "types.redraft: database changed during draft", owner="typemap.database", stage="draft"
+            )
+        )
     marks = redrafts(project)
     if function in marks and marks[function]["type_db_sha256"] == type_db_sha256:
         del marks[function]
-        types_db.set_redrafts(path, marks)
+        from unbake.work.attempts import ledger
+
+        ledger(project).mark_drafts(marks)
 
 
 def _semantic(value: Any) -> Any:
@@ -134,7 +179,14 @@ def _render(
     from unbake.typemap.declarations import declarator
 
     if not project.include:
-        raise Held("solve", "paths.include: required shared type destination")
+        raise Held(
+            cause_named(
+                "paths.include",
+                "paths.include: required shared type destination",
+                owner="typemap.database",
+                stage="solve",
+            )
+        )
     root = project.include[0]
     authored = list(session.authored)
     # Refer to existing homes; only missing generated prerequisites are emitted.
@@ -211,10 +263,22 @@ def _render(
             installed = split.statements(_body(path.read_text()))
         except Held as error:
             raise Held(
-                "solve",
-                f"{error.reason} in {storage.relative(project, path)}",
-                next_action=f"stop: repair or restore {storage.relative(project, path)} (a generated header is "
-                "retained layout evidence), then run the command again",
+                capture(
+                    error,
+                    cause=cause_named(
+                        "typemap.database._render",
+                        f"{error.reason} in {storage.relative(project, path)}",
+                        owner="typemap.database",
+                        stage="solve",
+                        action=Action(
+                            "stop",
+                            reason=(
+                                f"stop: repair or restore {storage.relative(project, path)} (a generated "
+                                f"header is retained layout evidence), then run the command again"
+                            ),
+                        ),
+                    ),
+                )
             ) from error
         for statement in installed:
             names = redeclarations.local_tags(statement)
@@ -275,7 +339,14 @@ def _render(
             break
         replacements = expanded
     else:
-        raise Held("solve", "types.header_parse: cyclic source-owned typedefs")
+        raise Held(
+            cause_named(
+                "types.header_parse",
+                "types.header_parse: cyclic source-owned typedefs",
+                owner="typemap.database",
+                stage="solve",
+            )
+        )
     generated_aliases = {alias for record in generated.values() for alias in record.get("aliases", [])}
     private: dict[str, str] = {}
     private_names: dict[tuple[str, str], str] = {}
@@ -330,7 +401,14 @@ def _render(
 
             type_ = canonical(type_, concrete)
             if alias in prerequisites and canonical(prerequisites[alias], concrete) != type_:
-                raise Held("solve", f"types.header_parse: conflicting generated typedef {alias}")
+                raise Held(
+                    cause_named(
+                        "types.header_parse",
+                        f"types.header_parse: conflicting generated typedef {alias}",
+                        owner="typemap.database",
+                        stage="solve",
+                    )
+                )
             prerequisites[alias] = type_
     for path in (
         *authored,
@@ -635,7 +713,14 @@ def _consumer_imports(
 
 def publish(project: Project, value: dict[str, Any], previous: dict[str, Any], *, policy: Host | None = None) -> None:
     if not project.include:
-        raise Held("solve", "paths.include: required shared type destination")
+        raise Held(
+            cause_named(
+                "paths.include",
+                "paths.include: required shared type destination",
+                owner="typemap.database",
+                stage="solve",
+            )
+        )
     with tui.task("Preparing header ownership"):
         session = regeneration.Session(project, policy)
     installed = {**session.authored, **session.installed}
@@ -671,7 +756,7 @@ def publish(project: Project, value: dict[str, Any], previous: dict[str, Any], *
     # Reconnect changed homes in the same installation as their consumers.
     # Obsolete, untouched homes remain until the regular headers step.
     with tui.task("Checking retained header declarations"):
-        header_loss.check(project, outputs, policy=policy)
+        header_check = header_loss.check(project, outputs, policy=policy)
     replacements = value["shared_aliases"]
     reserved = session.reserved
     abi_context = "\n".join(
@@ -701,7 +786,14 @@ def publish(project: Project, value: dict[str, Any], previous: dict[str, Any], *
             session=session,
         )
     if canonical and policy is None:
-        raise Held("headers", "headers.namespace: canonical function declarations require native publication proof")
+        raise Held(
+            cause_named(
+                "headers.namespace",
+                "headers.namespace: canonical function declarations require native publication proof",
+                owner="typemap.database",
+                stage="headers",
+            )
+        )
     if (reconnected or canonical) and policy is not None:
         native_outputs = {
             path: data.read_bytes() if isinstance(data, Path) else data
@@ -767,7 +859,7 @@ def publish(project: Project, value: dict[str, Any], previous: dict[str, Any], *
         # Carry pending marks forward so a draft against the newest revision can clear them.
         for mark in marks.values():
             mark.update(revision=value["revision"], type_db_sha256=digest)
-        staged, _ = types_db.stage(database, encoded, summary, marks)
+        staged, _ = types_db.stage(database, encoded, summary)
         from unbake.layout import index
 
         # Sources still include headers this render no longer produces until the headers step rewrites them, and
@@ -804,12 +896,15 @@ def publish(project: Project, value: dict[str, Any], previous: dict[str, Any], *
                     atomic_files.copyfile(path, backup_path)
                 else:
                     backups[path] = None
-            for path, content in outputs.items():
-                if isinstance(content, Path):
-                    storage.install(path, content)
-                else:
-                    storage.write(path, content)
+            from unbake.journal import Journal
+
+            with Journal(project.build / "types-headers.journal") as transaction:
+                # Existing homes remain listed until the headers operation owns their deletion.
+                header_step.publish(project, outputs, transaction, check=header_check)
             types_db.install(database, staged)
+            from unbake.work.attempts import ledger
+
+            ledger(project).mark_drafts(marks)
         except BaseException:
             for path, backup in backups.items():
                 if backup is None:
@@ -870,7 +965,14 @@ def validate_headers(
     if bundle is not None:
         total = json.loads(bundle.read_bytes())["rows"]
         if type(total) is not int or total < 0:
-            raise Held("solve", "types.validation.rows: expected nonnegative integer")
+            raise Held(
+                cause_named(
+                    "types.validation.rows",
+                    "types.validation.rows: expected nonnegative integer",
+                    owner="typemap.database",
+                    stage="solve",
+                )
+            )
         effort.count("validation.rows", 0, total)
         effort.count("validation.bundle_hit", 1, 1)
         return
@@ -878,7 +980,14 @@ def validate_headers(
     try:
         contents, closures, abi = Graph.validation(project, outputs, abi_context, authored=authored)
     except Held as error:
-        raise Held("solve", f"types.header_parse: {error.reason}") from error
+        raise Held(
+            capture(
+                error,
+                cause=cause_named(
+                    "types.header_parse", f"types.header_parse: {error.reason}", owner="typemap.database", stage="solve"
+                ),
+            )
+        ) from error
     digests = {path: remembered_digest(data) for path, data in contents.items()}
     certificates = (
         session.certificates if session is not None else cache.certificates("typemap-certificates", environment)
@@ -912,7 +1021,7 @@ def validate_headers(
     for version in project.versions:
         pending: dict[str, tuple[set[Path], str]] = {}
         for input_key, closure, text in rows:
-            content_key = version + ":" + input_key
+            content_key = key(version, input_key)
             if content_key not in validated and not certificates.contains((content_key,)):
                 pending[content_key] = closure, text
         effort.count("validation.rows", len(pending), len(rows))
@@ -1043,7 +1152,14 @@ def _validate_version(job: _Validation) -> str:
                 )
             else:
                 if isinstance(policy, Host):
-                    raise Held("solve", "policy.m2c: required shared context parser")
+                    raise Held(
+                        cause_named(
+                            "policy.m2c",
+                            "policy.m2c: required shared context parser",
+                            owner="typemap.database",
+                            stage="solve",
+                        )
+                    )
                 declarations.extract(context_text, {"kind": "declared"})
         except Held as error:
             context = project.build / "types" / f"held-header-context-{version}-{key(context_text)[:12]}.c"
@@ -1051,6 +1167,14 @@ def _validate_version(job: _Validation) -> str:
             atomic_files.text(context, context_text, durable=False)
             headers = ", ".join(map(str, entry_points))
             raise Held(
-                "solve", f"types.header_parse: {version}: headers {headers}; context {context}: {error.reason}"
+                capture(
+                    error,
+                    cause=cause_named(
+                        "types.header_parse",
+                        f"types.header_parse: {version}: headers {headers}; context {context}: {error.reason}",
+                        owner="typemap.database",
+                        stage="solve",
+                    ),
+                )
             ) from error
     return key(context_text)

@@ -4,11 +4,13 @@ import hashlib
 from contextlib import nullcontext
 from unittest.mock import patch
 
+from tests.ledger_fixture import log_attempt
 from tests.project_fixture import ProjectCase
 from unbake import land
 from unbake.config import Held
 from unbake.fold.apply import Folded
 from unbake.layout import split
+from unbake.process import named
 from unbake.work import attempts
 
 
@@ -21,7 +23,14 @@ class VersionPublicationTests(ProjectCase):
         def code(project, host, version, source, mode):
             measured.append((version, mode))
             if version == "eu":
-                raise Held("compile", "EU uses assembly, unsupported C macro configuration")
+                raise Held(
+                    named(
+                        "fixture.refusal",
+                        "EU uses assembly, unsupported C macro configuration",
+                        owner="fixture",
+                        stage="compile",
+                    )
+                )
             return ((".text", b"same machine code", ()),)
 
         with patch.object(gbi_proof, "code", side_effect=code):
@@ -44,7 +53,14 @@ class VersionPublicationTests(ProjectCase):
         def compile(project, host, file, version, **kwargs):
             compiled.append(version)
             if version == "eu":
-                raise Held("compile", "EU builds assembly; this C is deliberately not supported there")
+                raise Held(
+                    named(
+                        "fixture.refusal",
+                        "EU builds assembly; this C is deliberately not supported there",
+                        owner="fixture",
+                        stage="compile",
+                    )
+                )
             return nullcontext(self.root / "alpha.o")
 
         with (
@@ -82,7 +98,7 @@ class VersionPublicationTests(ProjectCase):
             for v in self.versions:
                 target = bytes(range(12))
                 exact = (own == "ido-7.1") == (v == "eu")
-                versions[v] = score.compare_words(v, target, target if exact else bytes(12))
+                versions[v] = score.measure_words(v, target, target if exact else bytes(12))
             return compare.Compared(
                 "alpha", file, hashlib.sha256(file.read_bytes()).hexdigest(), versions, compiler=own
             )
@@ -106,7 +122,11 @@ class VersionPublicationTests(ProjectCase):
         from unbake.compilers import choice
         from unbake.work import compare
 
-        refusal = Held("link", "link.undefined: eu has no identity for named_target")
+        refusal = Held(
+            named(
+                "link.undefined", "link.undefined: eu has no identity for named_target", owner="fixture", stage="link"
+            )
+        )
 
         def link(project, host, obj, version, row, file):
             if version == "eu":
@@ -123,11 +143,14 @@ class VersionPublicationTests(ProjectCase):
             result = compare.compare(self.project, self.host, self.file, required_versions=("us",))
         self.assertTrue(result.required_exact)
         self.assertFalse(result.exact)
-        self.assertFalse(attempts.read(self.project, "alpha")[-1].exact)
+        self.assertFalse(attempts.ledger(self.project).history("alpha")[-1].exact)
         self.assertEqual(result.document()["required_versions"], ["us"])
         self.assertIn("link.undefined", str(result.document()["versions"]["eu"]["fault"]))
         self.assertEqual(
-            land.publication_versions(self.project, "alpha", attempts.read(self.project, "alpha")[-1], ("us",)), ("us",)
+            land.publication_versions(
+                self.project, "alpha", attempts.ledger(self.project).history("alpha")[-1], ("us",)
+            ),
+            ("us",),
         )
 
     def test_scoped_write_uses_fresh_native_proof_and_keeps_other_rows_and_source_on_failure(self):
@@ -198,7 +221,7 @@ class VersionPublicationTests(ProjectCase):
             0.1,
             "ido-7.1",
         )
-        attempts.append(self.project, row)
+        log_attempt(self.project, row)
         return row
 
     def test_required_exact_other_mismatch_is_explicit_and_default_still_refuses(self):
@@ -238,7 +261,7 @@ class VersionPublicationTests(ProjectCase):
 
     def test_missing_required_compare_and_changed_source_refuse(self):
         self.record({"eu": {"percent": 100, "exact": True}})
-        with self.assertRaisesRegex(Held, "land.not_exact"):
+        with self.assertRaisesRegex(Held, "comparison unavailable without retained native evidence"):
             land.exact_attempt(self.project, "alpha", self.file, required_versions=("us",))
         self.file.write_text("int alpha(void) { return 2; }\n")
         with self.assertRaisesRegex(Held, "land.not_compared"):

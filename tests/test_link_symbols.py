@@ -9,6 +9,7 @@ from unittest.mock import patch
 from unbake import runner
 from unbake.compilers import candidates
 from unbake.config import Held
+from unbake.process import named
 from unbake.work import compare
 
 SOURCE = Path("build/work/func_800C3EF0_us/func_800C3EF0_us.c")
@@ -37,7 +38,14 @@ class DerivedSymbolsTests(unittest.TestCase):
 
 class LinkRefusalTests(unittest.TestCase):
     def test_a_link_refusal_is_never_a_zero_percent_compare(self) -> None:
-        refusal = Held("link", f"link.undefined: {SOURCE}: VERSION us: gMissing in neither ...")
+        refusal = Held(
+            named(
+                "link.undefined",
+                f"link.undefined: {SOURCE}: VERSION us: gMissing in neither ...",
+                owner="fixture",
+                stage="link",
+            )
+        )
         row = SimpleNamespace()
         with (
             patch.object(compare, "function_of", return_value="func_800C3EF0_us"),
@@ -54,7 +62,9 @@ class LinkRefusalTests(unittest.TestCase):
         self.assertIs(caught.exception, refusal)
 
     def test_an_undefined_symbol_is_not_retried_under_other_compilers(self) -> None:
-        refusal = Held("link", f"link.undefined: {SOURCE}: VERSION us: gMissing")
+        refusal = Held(
+            named("link.undefined", f"link.undefined: {SOURCE}: VERSION us: gMissing", owner="fixture", stage="link")
+        )
         project = SimpleNamespace(compiler_reference=lambda function: "gcc")
         with (
             patch.object(candidates.choice, "alternatives") as alternatives,

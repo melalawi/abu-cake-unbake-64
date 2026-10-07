@@ -7,8 +7,10 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import cast
 
+from unbake.compilers.families.types import Allocation
 from unbake.config import Held
-from unbake.decomp.explain import Allocation, leverage
+from unbake.decomp.explain import leverage
+from unbake.process import named as cause_named
 from unbake.search.core import Context, Mutation
 from unbake.work.compare import Compared
 
@@ -88,14 +90,25 @@ def propose(source: str, trial: Compared, ctx: Context) -> Iterator[Mutation]:
     split storage are limited to straight-line bodies with no address escapes.
     """
     if not isinstance(source, str) or not source.strip():
-        raise Held("search", "source: missing nonempty C text")
+        raise Held(cause_named("source", "source: missing nonempty C text", owner="search.registers", stage="search"))
     if ctx is None or not hasattr(ctx, "allocation") or not isinstance(ctx.allocation, Allocation):
-        raise Held("search", "context.allocation: missing Allocation")
+        raise Held(
+            cause_named(
+                "context.allocation", "context.allocation: missing Allocation", owner="search.registers", stage="search"
+            )
+        )
     if trial is None:
-        raise Held("search", "trial: missing value")
+        raise Held(cause_named("trial", "trial: missing value", owner="search.registers", stage="search"))
     deadline = getattr(ctx, "deadline", None)
     if type(deadline) not in (int, float) or not math.isfinite(cast(float, deadline)):
-        raise Held("search", "context.deadline: finite monotonic time required")
+        raise Held(
+            cause_named(
+                "context.deadline",
+                "context.deadline: finite monotonic time required",
+                owner="search.registers",
+                stage="search",
+            )
+        )
     deadline = cast(float, deadline)
     if time.monotonic() >= deadline:
         return

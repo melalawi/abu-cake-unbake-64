@@ -6,6 +6,7 @@ import argparse
 
 from unbake.cli.args import Context
 from unbake.cli.output import Result
+from unbake.process import named as cause_named
 
 NAME = "recompute"
 HELP = "Re-run internal steps, ignoring their cached results (debugging)."
@@ -43,14 +44,35 @@ def run(context: Context) -> Result:
 
     named = tuple(dict.fromkeys(context.args.steps))
     if context.args.all == bool(named):
-        raise Held("recompute", "recompute.steps: name one or more steps, or --all")
+        raise Held(
+            cause_named(
+                "recompute.steps",
+                "recompute.steps: name one or more steps, or --all",
+                owner="cli.recompute",
+                stage="recompute",
+            )
+        )
     unknown = [name for name in named if name not in steps.NAMES]
     if unknown:
-        raise Held("recompute", f"recompute.steps: unknown {', '.join(unknown)}; steps are {', '.join(steps.NAMES)}")
+        raise Held(
+            cause_named(
+                "recompute.steps",
+                f"recompute.steps: unknown {', '.join(unknown)}; steps are {', '.join(steps.NAMES)}",
+                owner="cli.recompute",
+                stage="recompute",
+            )
+        )
     names = steps.NAMES if context.args.all else named
     if context.args.rom_facts_only:
         if names != ("rom-facts",):
-            raise Held("recompute", "recompute.rom-facts-only: requires exactly rom-facts")
+            raise Held(
+                cause_named(
+                    "recompute.rom-facts-only",
+                    "recompute.rom-facts-only: requires exactly rom-facts",
+                    owner="cli.recompute",
+                    stage="recompute",
+                )
+            )
         from unbake.typemap import mapping
 
         facts = mapping.map_program(context.project(), context.require_host())

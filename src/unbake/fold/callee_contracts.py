@@ -11,6 +11,7 @@ from unbake.config import Held, Project
 from unbake.layout import index, redeclarations
 from unbake.layout.header_context import Headers
 from unbake.layout.split import Edit
+from unbake.process import named as cause_named
 from unbake.typemap import declarations, evidence, o32, types_db
 
 _INCLUDE = re.compile(r'^\s*#\s*include\s*[<"]([^>"\n]+)[>"]', re.M)
@@ -134,7 +135,14 @@ def reconcile(
             if name == function or _signature(declaration, aliases) is None:
                 continue
             if name in candidates and not redeclarations.equivalent(candidates[name], declaration, aliases):
-                raise Held("layout", f"layout.redeclaration.{name}: conflicting authored callee contracts")
+                raise Held(
+                    cause_named(
+                        f"layout.redeclaration.{name}",
+                        f"layout.redeclaration.{name}: conflicting authored callee contracts",
+                        owner="fold.callee_contracts",
+                        stage="layout",
+                    )
+                )
             candidates[name] = declaration
     collisions = {
         name for path in generated for name in redeclarations.catalog(headers.texts[path]) if name in candidates

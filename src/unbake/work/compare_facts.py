@@ -13,7 +13,7 @@ from difflib import SequenceMatcher
 from itertools import pairwise
 from typing import TYPE_CHECKING, Any
 
-from unbake.work.score import Compare, align_words, classify
+from unbake.work.score import Measurement, align_words, classify
 
 if TYPE_CHECKING:
     from unbake.config import Project
@@ -56,8 +56,11 @@ def _word(index: int, candidate: int | None, target: tuple[int, ...], other: tup
     }
 
 
-def facts(result: Compare, pc: int, names: dict[int, list[str]]) -> dict[str, Any]:
-    target, candidate = result.target_words, result.candidate_words
+def facts(result: Measurement, pc: int, names: dict[int, list[str]]) -> dict[str, Any]:
+    if not result.available:
+        return {"available": False, "fault": result.fault.document() if result.fault else None}
+    assert result.identical_words is not None and result.typed is not None
+    target, candidate = result.target, result.candidate
     mapping: dict[int, int] = {}
     different: dict[int, int | None] = {}
     inserted: list[int] = []
@@ -69,7 +72,7 @@ def facts(result: Compare, pc: int, names: dict[int, list[str]]) -> dict[str, An
             different.update((a + k, c + k) for k in range(pairs))
             different.update((i, None) for i in range(a + pairs, b))
             inserted.extend(range(c + pairs, d))
-    if len(different) != result.of - result.identical:
+    if len(different) != result.target_words - result.identical_words:
         raise ValueError("chosen score and retained words disagree")
     masks = {i: 0xFFFF if _branch(w) else 0x3FFFFFF for i, w in enumerate(candidate) if _branch(w) or w >> 26 in (2, 3)}
     diagnostic: dict[int, int] = {}
@@ -209,7 +212,7 @@ def attach(project: Project, chosen: Compared) -> None:
     from unbake.work.compare import row_of
 
     for version, result in chosen.compares.items():
-        if not result.target_words or version in chosen.faults:
+        if not result.target or version in chosen.faults:
             continue
         row = row_of(project, chosen.function, version)
         _, symbols = split.symbols(project.version(version).symbols)

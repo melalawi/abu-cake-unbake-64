@@ -1,4 +1,4 @@
-"""The cycle's JSON-lines event stream (schema v1). Every event is validated before it is written."""
+"""The cycle's JSON-lines event stream (schema v2). Every event is validated before it is written."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any, TextIO
 
-VERSION = 1
+VERSION = 2
 
 # event -> (required fields, optional fields)
 SCHEMA: dict[str, tuple[frozenset[str], frozenset[str]]] = {
@@ -28,10 +28,10 @@ SCHEMA: dict[str, tuple[frozenset[str], frozenset[str]]] = {
         ("fn.compare.start", "function sha256", ""),
         ("fn.compare.done", "function sha256 per_version best_percent tries seconds", "diagnostic fault"),
         ("fn.search.start", "function method", ""),
-        ("fn.search.done", "function method ok seconds", "diagnostic mutations words fault"),
+        ("fn.search.done", "function method ok seconds", "diagnostic mutations measurements fault"),
         ("fn.creative", "function best_percent methods trouble", ""),
         ("fn.exact", "function bytes sha256", ""),
-        ("fn.landed", "function bytes versions seconds retried", ""),
+        ("fn.landed", "function bytes versions seconds", ""),
         ("fn.fuzzy_landed", "function bytes versions commit best_percent", ""),
         ("fn.land_failed", "function versions diagnostic returned_to_worker", "fault"),
         ("fn.committed", "function commit message", "proof"),
@@ -88,7 +88,6 @@ def validate(event: str, fields: dict[str, Any]) -> None:
         "bytes",
         "tries",
         "mutations",
-        "words",
         "landed_bytes",
         "memory_total_bytes",
         "cap_bytes",
@@ -134,7 +133,7 @@ def validate(event: str, fields: dict[str, Any]) -> None:
             if name == "exit" and value > 255:
                 reject(name)
         elif name in numbers:
-            if not numeric(value):
+            if not (value is None and name == "seconds") and not numeric(value):
                 reject(name)
         elif name in booleans:
             if type(value) is not bool:
@@ -148,6 +147,18 @@ def validate(event: str, fields: dict[str, Any]) -> None:
         elif name == "best_percent":
             if value is not None and not numeric(value, percent=True):
                 reject(name)
+        elif name == "measurements":
+            if type(value) is not dict:
+                reject(name)
+            from unbake.work.score import Measurement
+
+            for version, record in value.items():
+                try:
+                    measured = Measurement.read(record)
+                    if measured.version != version:
+                        reject(name)
+                except (ValueError, KeyError, TypeError):
+                    reject(name)
         elif name == "methods":
             if type(value) is not dict:
                 reject(name)
@@ -174,7 +185,7 @@ def validate(event: str, fields: dict[str, Any]) -> None:
                 if "fault" in row and type(row["fault"]) is not dict:
                     reject(name)
                 if (
-                    not numeric(row["percent"], percent=True)
+                    (row["percent"] is not None and not numeric(row["percent"], percent=True))
                     or type(row["exact"]) is not bool
                     or type(row["first"]) is not str
                 ):

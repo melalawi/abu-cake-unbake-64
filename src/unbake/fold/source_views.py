@@ -323,11 +323,17 @@ def version_source(project: Project, text: str, version: str, unit: str, *, non_
     source-state validation never invents their active branch.
     """
     from unbake.config import Held
+    from unbake.process import named as cause_named
 
     active = _version_lines(project, None, text, version, unit, source_only=True, non_matching=non_matching)
     if active is None:
         raise Held(
-            "report", f"source.conditions: {unit} VERSION {version}: native source-state reconciliation required"
+            cause_named(
+                "source.conditions",
+                f"{unit} VERSION {version}: native source-state reconciliation required",
+                owner="fold.source_views",
+                stage="report",
+            )
         )
     return "".join(
         line if index in active else "".join("\n" if char == "\n" else " " for char in line)

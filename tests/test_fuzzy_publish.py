@@ -14,6 +14,7 @@ from unbake.cli import publish
 from unbake.cli.args import Context
 from unbake.config import Held
 from unbake.fold.apply import Folded
+from unbake.process import named
 from unbake.report import progress
 from unbake.work import attempts, draft
 
@@ -38,7 +39,13 @@ class FuzzyPublishTests(ProjectCase):
             patch("unbake.fold.apply.private_headers", return_value={}),
             patch.object(land, "prove", return_value=prove),
             patch.object(land, "exact_attempt", return_value=SimpleNamespace(compiler="ido-7.1", sha256="a" * 64)),
-            patch.object(land, "_commit", side_effect=Held("land", "hook refused") if fail_commit else None) as commit,
+            patch.object(
+                land,
+                "_commit",
+                side_effect=Held(named("fixture.refusal", "hook refused", owner="fixture", stage="land"))
+                if fail_commit
+                else None,
+            ) as commit,
             patch.object(
                 land,
                 "_git",
@@ -66,9 +73,9 @@ class FuzzyPublishTests(ProjectCase):
         source = self.project.src / "alpha.c"
         self.assertEqual(source.read_text(), attempts.guarded(SOURCE))
         self.assertEqual({v: self.project.version(v).split.read_bytes() for v in self.versions}, self.splits)
-        self.assertIn(attempts.summary_path(self.project), commit.args[2])
+        self.assertIn((self.project.root / attempts.PATH), commit.args[2])
         self.assertEqual(commit.args[3], "Fuzzy alpha")
-        receipt = attempts.fuzzy(self.project, "alpha")
+        receipt = attempts.ledger(self.project).fuzzy("alpha")
         self.assertEqual(receipt["source_sha256"], hashlib.sha256(source.read_bytes()).hexdigest())
         self.assertEqual(records[0]["proof"]["versions"], list(self.versions))
         self.assertEqual(draft.published_seed(self.project, "alpha"), SOURCE)
@@ -82,27 +89,27 @@ class FuzzyPublishTests(ProjectCase):
 
     def test_first_unknown_measurement_is_explicit_and_never_replaces(self):
         self.publish_source(None)
-        self.assertIsNone(attempts.fuzzy(self.project, "alpha")["score"])
-        self.assertEqual(attempts.summaries(self.project)["alpha"].best, {})
+        self.assertIsNone(attempts.ledger(self.project).fuzzy("alpha")["score"])
+        self.assertEqual(attempts.ledger(self.project).summaries()["alpha"].best, {})
         with self.assertRaisesRegex(Held, "strictly higher measured score"):
             self.publish_source(None)
 
     def test_only_strictly_improved_measured_draft_replaces(self):
         self.publish_source(20.0)
-        before = attempts.summary_path(self.project).read_bytes()
+        before = (self.project.root / attempts.PATH).read_bytes()
         for score in (None, 19.0, 20.0):
             with self.subTest(score=score), self.assertRaisesRegex(Held, "strictly higher measured score"):
                 self.publish_source(score)
-            self.assertEqual(attempts.summary_path(self.project).read_bytes(), before)
+            self.assertEqual((self.project.root / attempts.PATH).read_bytes(), before)
         self.file.write_text("int alpha(void) { return 2; }\n")
         self.publish_source(21.0)
-        self.assertEqual(attempts.fuzzy(self.project, "alpha")["score"], 21.0)
+        self.assertEqual(attempts.ledger(self.project).fuzzy("alpha")["score"], 21.0)
         self.assertIn("return 2", (self.project.src / "alpha.c").read_text())
 
     def test_exact_land_promotes_guarded_source_and_clears_receipt(self):
         self.publish_source(20.0)
         self.publish_source(100.0, fuzzy=False)
-        self.assertIsNone(attempts.fuzzy(self.project, "alpha"))
+        self.assertIsNone(attempts.ledger(self.project).fuzzy("alpha"))
         self.assertEqual((self.project.src / "alpha.c").read_text(), SOURCE)
         self.assertNotIn("-DNON_MATCHING", buildfiles.units_mk(config.load(self.project.root)))
         for version in self.versions:
@@ -114,12 +121,13 @@ class FuzzyPublishTests(ProjectCase):
 
     def test_commit_failure_restores_source_and_receipt(self):
         self.publish_source(20.0)
-        before = attempts.summary_path(self.project).read_bytes()
+        before = (self.project.root / attempts.PATH).read_bytes()
         source = (self.project.src / "alpha.c").read_bytes()
         self.file.write_text("int alpha(void) { return 2; }\n")
         with self.assertRaisesRegex(Held, "hook refused"):
             self.publish_source(30.0, fail_commit=True)
-        self.assertEqual(attempts.summary_path(self.project).read_bytes(), before)
+        self.assertTrue((self.project.root / attempts.PATH).read_bytes().startswith(before))
+        self.assertEqual(attempts.ledger(self.project).fuzzy("alpha")["score"], 20.0)
         self.assertEqual((self.project.src / "alpha.c").read_bytes(), source)
 
     def test_source_rules_refuse_even_with_an_exception_marker(self):
@@ -156,7 +164,11 @@ class FuzzyPublishTests(ProjectCase):
             patch.object(runner, "compile_unit", return_value=nullcontext(Path("alpha.o"))),
             patch("unbake.compilers.fingerprint._body", return_value=b"body"),
             patch.object(runner, "dependencies", return_value=set()),
-            patch.object(runner, "link_function", side_effect=Held("link", "unavailable")),
+            patch.object(
+                runner,
+                "link_function",
+                side_effect=Held(named("fixture.refusal", "unavailable", owner="fixture", stage="link")),
+            ),
         ):
             measured, _ = land._fuzzy_builds_row((self.project, self.project, self.host, "alpha", self.file, "us"))
         self.assertTrue(measured["compiled"])
@@ -200,7 +212,7 @@ class FuzzyPublishTests(ProjectCase):
             patch.object(progress, "render", return_value="progress"),
         ):
             progress.write(current, self.host)
-        self.assertIsNotNone(attempts.fuzzy(current, "alpha"))
+        self.assertIsNotNone(attempts.ledger(current).fuzzy("alpha"))
         report = progress.measure(current, self.host, "us")
         row = next(unit for unit in report["units"] if unit["name"] == "alpha_row")
         self.assertEqual(row["metadata"]["source_path"], "src/alpha.c")

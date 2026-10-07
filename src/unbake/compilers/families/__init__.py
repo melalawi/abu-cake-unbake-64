@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from unbake.compilers.families.types import Schedule
 
@@ -24,6 +24,8 @@ if TYPE_CHECKING:
     from unbake.objects.rodata import Pool
 
 from unbake.config import Held
+from unbake.process import capture
+from unbake.process import named as cause_named
 
 
 class CompilerIdentity(Protocol):
@@ -33,6 +35,7 @@ class CompilerIdentity(Protocol):
 
 @runtime_checkable
 class Family(Protocol):
+    def diagnose(self, result: Any, context: Any) -> Any | None: ...
     def source_intrinsics(self) -> tuple[str, ...]: ...
     def public_headers(self) -> tuple[PublicHeader, ...]: ...
     def public_defines(self) -> tuple[str, ...]: ...
@@ -95,7 +98,14 @@ def dependency_rules(output: str) -> tuple[str, ...]:
             continue
         target, separator, names = line.partition(":")
         if not target.strip() or not separator:
-            raise Held("compile", "compile.dependencies: invalid native dependency rule")
+            raise Held(
+                cause_named(
+                    "compile.dependencies",
+                    "compile.dependencies: invalid native dependency rule",
+                    owner="compilers.families.__init__",
+                    stage="compile",
+                )
+            )
         if names.strip():
             result.append(names.strip())
     return tuple(result)
@@ -107,14 +117,38 @@ def family_named(name: str) -> Family:
     import re
 
     if not re.fullmatch(r"[a-z][a-z0-9_]*", name):
-        raise Held("families", f"compiler.family {name}: unsafe module name")
+        raise Held(
+            cause_named(
+                "compilers.families.__init__.family_named",
+                f"compiler.family {name}: unsafe module name",
+                owner="compilers.families.__init__",
+                stage="families",
+            )
+        )
     try:
         module = importlib.import_module(f"{__name__}.{name}")
         adapter = module.adapter()
     except (ImportError, AttributeError) as error:
-        raise Held("families", f"compiler.family {name}: missing adapter") from error
+        raise Held(
+            capture(
+                error,
+                cause=cause_named(
+                    "compilers.families.__init__.family_named",
+                    f"compiler.family {name}: missing adapter",
+                    owner="compilers.families.__init__",
+                    stage="families",
+                ),
+            )
+        ) from error
     if not isinstance(adapter, Family):
-        raise Held("families", f"compiler.family {name}: incomplete protocol")
+        raise Held(
+            cause_named(
+                "compilers.families.__init__.family_named",
+                f"compiler.family {name}: incomplete protocol",
+                owner="compilers.families.__init__",
+                stage="families",
+            )
+        )
     return adapter
 
 
@@ -123,7 +157,11 @@ def family_for(compiler: str | CompilerIdentity) -> Family:
 
     ident = compiler if isinstance(compiler, str) else compiler.id
     if not ident:
-        raise Held("families", "compiler.id: missing value")
+        raise Held(
+            cause_named(
+                "compiler.id", "compiler.id: missing value", owner="compilers.families.__init__", stage="families"
+            )
+        )
     return family_named(specification(ident).family)
 
 
@@ -132,7 +170,14 @@ def family_for_kind(kind: str) -> Family:
 
     names = {spec.family for spec in registry().values() if spec.kind == kind}
     if not names:
-        raise Held("compile", f"compile.kind: {kind}: missing family contract")
+        raise Held(
+            cause_named(
+                "compile.kind",
+                f"compile.kind: {kind}: missing family contract",
+                owner="compilers.families.__init__",
+                stage="compile",
+            )
+        )
     adapters = [family_named(name) for name in sorted(names)]
     first = adapters[0]
     if any(
@@ -141,7 +186,14 @@ def family_for_kind(kind: str) -> Family:
         or adapter.uses_host_cpp() != first.uses_host_cpp()
         for adapter in adapters[1:]
     ):
-        raise Held("compile", f"compile.kind: {kind}: families disagree on execution path")
+        raise Held(
+            cause_named(
+                "compile.kind",
+                f"compile.kind: {kind}: families disagree on execution path",
+                owner="compilers.families.__init__",
+                stage="compile",
+            )
+        )
     return first
 
 

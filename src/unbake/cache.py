@@ -30,6 +30,8 @@ from typing import Any, ParamSpec, Protocol, TypeVar, cast
 from unbake import atomic as atomic_files
 from unbake import effort
 from unbake.config import Held
+from unbake.process import capture
+from unbake.process import named as cause_named
 
 T = TypeVar("T")
 
@@ -41,7 +43,9 @@ def key(*parts: str | bytes) -> str:
         if isinstance(part, str):
             part = part.encode("utf-8")
         if not isinstance(part, bytes):
-            raise Held("cache", f"key part {index}: expected str or bytes")
+            raise Held(
+                cause_named("cache.key", f"key part {index}: expected str or bytes", owner="cache", stage="cache")
+            )
         digest.update(len(part).to_bytes(8, "big"))
         digest.update(part)
     return digest.hexdigest()
@@ -81,7 +85,7 @@ def clone(value: T) -> T:
 
 
 def memory_size(value: Any, *, limit: int | None = None) -> int:
-    """Exact retained weight; a bounded oversized walk returns limit+1 without visiting the rest."""
+    """Bound accounting scratch to 4096 identities; uncertifiable graphs are not retained."""
     seen: set[int] = set()
     total = 0
 
@@ -93,7 +97,7 @@ def memory_size(value: Any, *, limit: int | None = None) -> int:
         if id(item) in seen:
             return
         total += sys.getsizeof(item)
-        if limit is not None and total > limit:
+        if (limit is not None and total > limit) or len(seen) >= 4096:
             raise Oversized
         seen.add(id(item))
         if isinstance(item, dict):
@@ -114,9 +118,8 @@ def memory_size(value: Any, *, limit: int | None = None) -> int:
 
     try:
         walk(value)
-    except Oversized:
-        assert limit is not None
-        return limit + 1
+    except (Oversized, MemoryError, RecursionError):
+        return (limit + 1) if limit is not None else sys.maxsize
     return total
 
 
@@ -130,9 +133,13 @@ class Cache:
 
     def path(self, kind: str, content_key: str) -> Path:
         if not isinstance(kind, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", kind):
-            raise Held("cache", f"kind {kind!r}: expected a single cache kind")
+            raise Held(
+                cause_named("cache.path", f"kind {kind!r}: expected a single cache kind", owner="cache", stage="cache")
+            )
         if not isinstance(content_key, str) or not re.fullmatch(r"[0-9a-f]{64}", content_key):
-            raise Held("cache", f"key {content_key!r}: expected SHA-256")
+            raise Held(
+                cause_named("cache.path", f"key {content_key!r}: expected SHA-256", owner="cache", stage="cache")
+            )
         return self.root / kind / content_key[:2] / content_key
 
     def _find(self, kind: str, content_key: str) -> Path | None:
@@ -143,7 +150,7 @@ class Cache:
             return None
         if stat.S_ISREG(mode):
             return path
-        raise Held("cache", f"{path}: expected cached file")
+        raise Held(cause_named(f"{path}", f"{path}: expected cached file", owner="cache", stage="cache"))
 
     def get(self, kind: str, content_key: str) -> Path | None:
         path = self._find(kind, content_key)
@@ -154,12 +161,17 @@ class Cache:
         path = self.path(kind, content_key)
         try:
             if not src.is_file():
-                raise Held("cache", f"src {src}: expected file")
+                raise Held(cause_named("cache.put", f"src {src}: expected file", owner="cache", stage="cache"))
             path.parent.mkdir(parents=True, exist_ok=True)
             atomic_files.copyfile(src, path, durable=False)
             return path
         except OSError as error:
-            raise Held("cache", f"{path} from src {src}: {error}") from error
+            raise Held(
+                capture(
+                    error,
+                    cause=cause_named("cache.put", f"{path} from src {src}: {error}", owner="cache", stage="cache"),
+                )
+            ) from error
 
     def produce(self, kind: str, content_key: str, make: Callable[[Path], None]) -> Path:
         """Return the entry, computing it at most once across threads and processes."""
@@ -204,7 +216,14 @@ class Cache:
             try:
                 return codec.decode(path.read_bytes())
             except (OSError, ValueError, TypeError, pickle.UnpicklingError, EOFError, AttributeError) as error:
-                raise Held("cache", f"cache.corrupt: {path}: {error}") from error
+                raise Held(
+                    capture(
+                        error,
+                        cause=cause_named(
+                            "cache.corrupt", f"cache.corrupt: {path}: {error}", owner="cache", stage="cache"
+                        ),
+                    )
+                ) from error
 
         return memo(
             "decode",
@@ -233,11 +252,20 @@ class Cache:
                 temporary.unlink()
                 make(temporary)
                 if not temporary.is_file():
-                    raise Held("cache", f"make output {temporary}: expected file")
+                    raise Held(
+                        cause_named(
+                            "cache._produce_locked",
+                            f"make output {temporary}: expected file",
+                            owner="cache",
+                            stage="cache",
+                        )
+                    )
                 os.replace(temporary, path)
                 return path, True
             except OSError as error:
-                raise Held("cache", f"{path}: {error}") from error
+                raise Held(
+                    capture(error, cause=cause_named(f"{path}", f"{path}: {error}", owner="cache", stage="cache"))
+                ) from error
             finally:
                 temporary.unlink(missing_ok=True)
 
@@ -259,7 +287,7 @@ def entries(root: Path) -> list[Path]:
 def trim(root: Path, max_bytes: int, trim_to_bytes: int) -> list[Path]:
     """Delete least-recently-used entries once the total passes max_bytes, down to trim_to_bytes."""
     if trim_to_bytes >= max_bytes:
-        raise Held("cache", "trim: trim_to_bytes must be less than max_bytes")
+        raise Held(cause_named("trim", "trim: trim_to_bytes must be less than max_bytes", owner="cache", stage="cache"))
     rows = []
     for path in entries(root):
         info = path.stat()
@@ -295,7 +323,11 @@ _resident = 0
 def configure(*, memory_bytes: int) -> None:
     global _budget
     if type(memory_bytes) is not int or memory_bytes <= 0:
-        raise Held("cache", "cache.memory_bytes: required positive integer")
+        raise Held(
+            cause_named(
+                "cache.memory_bytes", "cache.memory_bytes: required positive integer", owner="cache", stage="cache"
+            )
+        )
     with _memo_lock:
         _budget = memory_bytes
         _evict()
@@ -331,13 +363,21 @@ def remember(
             return value
         value_bytes = memory_size(value, limit=budget - identity_bytes) if size is memory_size else size(value)
         if type(value_bytes) is not int or value_bytes < 0:
-            raise Held("cache", "cache.size: required nonnegative integer bytes")
+            raise Held(
+                cause_named(
+                    "cache.size", "cache.size: required nonnegative integer bytes", owner="cache", stage="cache"
+                )
+            )
         weight = value_bytes + identity_bytes
         old = _memo.pop(identity, None)
         if old is not None:
             _resident -= old[1]
         if _budget is not None and weight <= _budget:
-            _memo[identity] = (copy_out(value), weight)
+            try:
+                retained = copy_out(value)
+            except MemoryError:
+                return value
+            _memo[identity] = (retained, weight)
             _resident += weight
         _evict()
     return value
@@ -450,11 +490,14 @@ class CertificateSet:
         def load() -> frozenset[str]:
             known = set()
             for path in files:
-                value = self.cache.decode(path, JSON)
+                try:
+                    value = self.cache.decode(path, JSON)
+                except (Held, ValueError, OSError):
+                    continue
                 if not isinstance(value, list) or any(
                     not isinstance(k, str) or not re.fullmatch(r"[0-9a-f]{64}", k) for k in value
                 ):
-                    raise Held("cache", f"cache.certificates: corrupt batch {path}")
+                    continue
                 known.update(value)
             return frozenset(known)
 
@@ -465,6 +508,10 @@ class CertificateSet:
         wanted = sorted(set(keys))
         if not wanted:
             return
+        if any(not isinstance(k, str) or not re.fullmatch(r"[0-9a-f]{64}", k) for k in wanted):
+            raise Held(
+                cause_named("cache.certificates.key", "certificate key must be a sha256", owner="cache", stage="cache")
+            )
         content = JSON.encode(wanted)
         self.directory.mkdir(parents=True, exist_ok=True)
         atomic_files.write(self.directory / (key(content) + ".json"), content, durable=False)

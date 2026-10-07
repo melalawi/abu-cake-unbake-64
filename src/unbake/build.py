@@ -10,6 +10,8 @@ from typing import Any
 
 from unbake import process, steps
 from unbake.config import Held, Host, Project
+from unbake.process import capture
+from unbake.process import named as cause_named
 
 
 @dataclass
@@ -88,7 +90,7 @@ def check(project: Project, host: Host, *, files_only: bool = False) -> Outcome:
             False,
             [error.reason],
             seconds=time.monotonic() - started,
-            preflight={**error.data, "key": error.key, "next": error.next_action},
+            preflight={**error.data, "key": error.key, "action": error.fault.cause.action},
         )
     findings = hygiene.tracked_findings(project, host)
     if files_only:
@@ -100,7 +102,14 @@ def check(project: Project, host: Host, *, files_only: bool = False) -> Outcome:
     prepared.assert_current(project)
     python = python_visible(host)
     if python is not None:
-        raise Held("check", f"tools.path: {python} is visible; [tools].path must not contain Python")
+        raise Held(
+            cause_named(
+                "tools.path",
+                f"tools.path: {python} is visible; [tools].path must not contain Python",
+                owner="build",
+                stage="check",
+            )
+        )
     try:
         prepared.assert_current(project)
         process.run_native(
@@ -112,7 +121,17 @@ def check(project: Project, host: Host, *, files_only: bool = False) -> Outcome:
             context={"target": "check", "versions": list(project.versions)},
         )
     except Held as error:
-        native = error.fault or {}
-        output = (native.get("stdout", "") + native.get("stderr", "")).splitlines()
-        return Outcome(False, True, findings, output[-20:], time.monotonic() - started, process.fault(error))
+        output = [
+            line
+            for result in process.native_results(error.fault)
+            for line in (result.stdout + result.stderr).splitlines()
+        ]
+        return Outcome(
+            False,
+            True,
+            findings,
+            output[-20:],
+            time.monotonic() - started,
+            capture(error, cause=cause_named("build.unexpected", str(error), owner="build", stage="build")).document(),
+        )
     return Outcome(not findings, True, findings, [], time.monotonic() - started)

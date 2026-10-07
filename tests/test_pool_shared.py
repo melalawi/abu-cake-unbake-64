@@ -7,6 +7,7 @@ from typing import Any
 from unittest.mock import patch
 
 from tests.kit import TempCase
+from tests.ledger_fixture import fault_evidence
 from unbake import cache, effort, pool
 from unbake.config import Held
 
@@ -72,7 +73,7 @@ class MeasuredTests(unittest.TestCase):
         self.assertIn("test_pool_shared.py", error.reason)
         self.assertGreaterEqual(seconds, 0)
         self.assertGreater(rss, 0)
-        self.assertEqual(error.fault["counts"], counts)
+        self.assertEqual(fault_evidence(error.fault)["counts"], counts)
 
     def test_memory_outcome_names_the_allocation_frame(self) -> None:
         def starve(item):

@@ -19,6 +19,7 @@ from unbake.layout.header_context import context as header_context
 from unbake.layout.split import Edit
 from unbake.layout.structs import Field, Layout, held
 from unbake.layout.structs_types import SCALARS, Aggregate
+from unbake.process import named as cause_named
 
 
 def _leaves(fields: tuple[Field, ...], offset: int = 0, prefix: str = "") -> Iterator[tuple[str, Field, int]]:
@@ -678,7 +679,14 @@ def fold(
                 )
             if prove_headers:
                 if host is None:
-                    raise Held("structs", "structs.header_proof: the host config (unbake.toml) is required")
+                    raise Held(
+                        cause_named(
+                            "structs.header_proof",
+                            "structs.header_proof: the host config (unbake.toml) is required",
+                            owner="layout.structs_fold",
+                            stage="structs",
+                        )
+                    )
                 _prove_includers(project, edits, host, republished)
     return edits
 

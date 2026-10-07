@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import re
 import shutil
+import tempfile
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -21,6 +22,8 @@ from unbake import cache, inputs
 from unbake.config import Held, Host, Project
 from unbake.journal import Journal
 from unbake.layout import apply, index, split
+from unbake.process import capture
+from unbake.process import named as cause_named
 from unbake.project.headers import Graph, HeaderCheck, scan
 
 # Bump when this step's output changes for the same inputs. Keys never digest the tool's code.
@@ -73,7 +76,7 @@ def uses(text: str) -> set[str]:
 
 def _compile(job: tuple[Project, Host, Path, str, str, bool, bool]) -> dict[str, Any] | None:
     """Compile one staged unit for one version, retaining its complete refusal."""
-    from unbake import process, runner
+    from unbake import runner
 
     view, host, file, version, unit, prove_match, non_matching = job
     try:
@@ -81,12 +84,28 @@ def _compile(job: tuple[Project, Host, Path, str, str, bool, bool]) -> dict[str,
             data = runner.build_unit(view, host, unit, version, source=file)
             rows = [row for row in split.functions(view, version) if Path(row.path).name == unit and row.kind == "c"]
             if len(rows) != 1 or data != split.words(view, rows[0]):
-                raise Held("headers", f"headers.nonregression: {unit} VERSION {version}: changed default ROM code")
+                raise Held(
+                    cause_named(
+                        "headers.nonregression",
+                        f"headers.nonregression: {unit} VERSION {version}: changed default ROM code",
+                        owner="layout.header_step",
+                        stage="headers",
+                    )
+                )
         else:
             with runner.compile_unit(view, host, file, version, unit=unit, non_matching=non_matching):
                 pass
     except Held as error:
-        return {"key": error.key, "reason": f"VERSION {version}: {error.reason}", "fault": process.fault(error)}
+        return {
+            "key": error.key,
+            "reason": f"VERSION {version}: {error.reason}",
+            "fault": capture(
+                error,
+                cause=cause_named(
+                    "layout.header_step.unexpected", str(error), owner="layout.header_step", stage="layout"
+                ),
+            ).document(),
+        }
     return None
 
 
@@ -107,8 +126,8 @@ def validate(
     from unbake import pool
     from unbake.work import attempts
 
-    stage = project.work / "_headers"
-    shutil.rmtree(stage, ignore_errors=True)
+    project.work.mkdir(parents=True, exist_ok=True)
+    stage = Path(tempfile.mkdtemp(prefix=".headers-", dir=project.work))
     staged_headers = stage / "include"
     staged_sources = stage / "src"
     headers = {path.resolve() for path in changed if path.suffix == ".h"} | {path.resolve() for path in obsolete}
@@ -117,7 +136,14 @@ def validate(
         if path.suffix == ".h":
             root = next((r for r in project.include if path.is_relative_to(r)), None)
             if root is None:
-                raise Held("headers", f"headers.path: {path} is outside include/")
+                raise Held(
+                    cause_named(
+                        "headers.path",
+                        f"headers.path: {path} is outside include/",
+                        owner="layout.header_step",
+                        stage="headers",
+                    )
+                )
             atomic_files.write(staged_headers / path.relative_to(root), data)
             roots.add(root)
     # A staged header's quoted includes ("../types.h") resolve beside it, so the rest of its tree is linked in.
@@ -136,7 +162,7 @@ def validate(
     compiled = []
     published: dict[Path, tuple[str, ...]] = {}
     jobs: list[tuple[Project, Host, Path, str, str, bool, bool]] = []
-    fuzzy = attempts.fuzzy_sources(project)
+    fuzzy = attempts.ledger(project).fuzzy_sources()
     try:
         for source in sorted(project.src.glob("*.c")):
             if source.stem in preproved:
@@ -166,10 +192,16 @@ def validate(
             reason = failures[0]["reason"]
             keys = ", ".join(sorted({failure["key"].removeprefix("compile.") for failure in failures}))
             raise Held(
-                "compile",
-                f"compile.headers: {len(failures)} unit "
-                f"{'default-build proofs' if prove_all else 'compiles'} fail against the regenerated headers "
-                f"({keys}); first: {reason}",
+                cause_named(
+                    "compile.headers",
+                    (
+                        f"compile.headers: {len(failures)} unit "
+                        f"{('default-build proofs' if prove_all else 'compiles')} fail against "
+                        f"the regenerated headers ({keys}); first: {reason}"
+                    ),
+                    owner="layout.header_step",
+                    stage="compile",
+                ),
                 failures=failures,
             )
         proofs = (
@@ -198,7 +230,14 @@ def validate(
     finally:
         shutil.rmtree(stage, ignore_errors=True)
     if refused:
-        raise Held("headers", "headers.declaration: " + "; ".join(refused))
+        raise Held(
+            cause_named(
+                "layout.header_step.validate",
+                "headers.declaration: " + "; ".join(refused),
+                owner="layout.header_step",
+                stage="headers",
+            )
+        )
     return compiled
 
 
@@ -226,7 +265,7 @@ def run(project: Project, host: Host) -> list[Path]:
         validate(project, host, changed, disagreements, obsolete=frozenset(obsolete))
         # install needs every output: a generated header missing from them is deleted as obsolete.
         changes.save([*changed, *obsolete])
-        apply.install(project, dict(outputs), check=check)
+        publish(project, dict(outputs), changes, check=check)
         return sorted(set(changed) | obsolete)
 
 
@@ -249,3 +288,15 @@ def missing(project: Project) -> list[str]:
 
 def journal_path(project: Project) -> Path:
     return project.build / "headers.journal"
+
+
+def publish(project: Project, outputs: dict[Path, bytes | Path], transaction: Journal, *, check: HeaderCheck) -> int:
+    """The sole generated-header/index installer; caller supplies the owning transaction."""
+    obsolete = index.owned(project) - outputs.keys()
+    changed = {
+        p
+        for p, data in outputs.items()
+        if not p.is_file() or p.read_bytes() != (data.read_bytes() if isinstance(data, Path) else data)
+    }
+    transaction.save([*changed, *obsolete])
+    return apply.install(project, outputs, check=check)

@@ -15,6 +15,7 @@ from unbake.layout import split
 from unbake.layout.rodata_references import Reference, collect, words
 from unbake.objects.elf import Object
 from unbake.objects.rodata import pools, relocated, table_addresses, table_pointer_bias
+from unbake.process import named as cause_named
 
 
 @dataclass(frozen=True)
@@ -121,7 +122,14 @@ def mapped_spans(project: Project, version: str, *, include_data: bool) -> list[
                     )
     spans.sort(key=lambda s: s.address)
     if any(a.stop > b.address for a, b in itertools.pairwise(spans)):
-        raise Held("rodata", "overlapping constant runtime spans")
+        raise Held(
+            cause_named(
+                "layout.rodata_owners.mapped_spans",
+                "overlapping constant runtime spans",
+                owner="layout.rodata_owners",
+                stage="rodata",
+            )
+        )
     return spans
 
 
@@ -235,13 +243,34 @@ def classify(
     table_ends: dict[int, int] = {}
     for _, address, end in compiler_tables:
         if address in table_ends and table_ends[address] != end:
-            raise Held("rodata", f"conflicting compiler table extents at 0x{address:08X}")
+            raise Held(
+                cause_named(
+                    "layout.rodata_owners.classify",
+                    f"conflicting compiler table extents at 0x{address:08X}",
+                    owner="layout.rodata_owners",
+                    stage="rodata",
+                )
+            )
         span = next((s for s in spans if s.address <= address < end <= s.stop), None)
         if span is None or address % 4 or (end - address) % 4:
-            raise Held("rodata", f"compiler table outside aligned resident span at 0x{address:08X}")
+            raise Held(
+                cause_named(
+                    "layout.rodata_owners.classify",
+                    f"compiler table outside aligned resident span at 0x{address:08X}",
+                    owner="layout.rodata_owners",
+                    stage="rodata",
+                )
+            )
         table_ends[address] = end
     if any(table_ends[a] > b for a, b in itertools.pairwise(sorted(table_ends))):
-        raise Held("rodata", "overlapping compiler table extents")
+        raise Held(
+            cause_named(
+                "layout.rodata_owners.classify",
+                "overlapping compiler table extents",
+                owner="layout.rodata_owners",
+                stage="rodata",
+            )
+        )
     text = sorted(functions, key=lambda f: f.address)
     textstarts = [f.address for f in text]
 

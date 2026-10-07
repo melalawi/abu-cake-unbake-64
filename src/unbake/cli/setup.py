@@ -9,6 +9,7 @@ from pathlib import Path
 from unbake.cli.args import Context
 from unbake.cli.output import Result
 from unbake.config import Held
+from unbake.process import named as cause_named
 
 NAME = "setup"
 HELP = "Read the ROMs and make the project ready (compilers, layout, first build)."
@@ -52,10 +53,14 @@ def pairs(values: list[str], flag: str) -> dict[str, str]:
     result = {}
     for value in values:
         if "=" not in value:
-            raise Held("setup", f"{flag}: {value}: expected OLD=NEW")
+            raise Held(cause_named(f"{flag}", f"{flag}: {value}: expected OLD=NEW", owner="cli.setup", stage="setup"))
         key, item = value.split("=", 1)
         if not key or not item or key in result:
-            raise Held("setup", f"{flag}: {value}: empty or duplicate assignment")
+            raise Held(
+                cause_named(
+                    f"{flag}", f"{flag}: {value}: empty or duplicate assignment", owner="cli.setup", stage="setup"
+                )
+            )
         result[key] = item
     return result
 
@@ -80,29 +85,71 @@ def run(context: Context) -> Result:
     host = context.require_host()
     project = context.pending()
     if args.keep_symbol_names and not args.redo_symbol_matching:
-        raise Held("setup", "setup.symbol_layout: --keep-symbol-names requires --redo-symbol-matching")
+        raise Held(
+            cause_named(
+                "setup.symbol_layout",
+                "setup.symbol_layout: --keep-symbol-names requires --redo-symbol-matching",
+                owner="cli.setup",
+                stage="setup",
+            )
+        )
     if args.list_compilers:
         rows = registry.status(host)
         return Result.ok(NAME, {"compilers": dict(rows)}, [f"{ident}: {state}" for ident, state in rows], None)
     if args.redo_symbol_matching:
         if project.state != "ready":
-            raise Held("setup", "setup.symbol_layout: ready project required")
+            raise Held(
+                cause_named(
+                    "setup.symbol_layout",
+                    "setup.symbol_layout: ready project required",
+                    owner="cli.setup",
+                    stage="setup",
+                )
+            )
         if args.redo_compilers or _facts_given(args):
-            raise Held("setup", "setup.symbol_layout: redo symbol matching separately from other setup changes")
+            raise Held(
+                cause_named(
+                    "setup.symbol_layout",
+                    "setup.symbol_layout: redo symbol matching separately from other setup changes",
+                    owner="cli.setup",
+                    stage="setup",
+                )
+            )
         from unbake.layout import symbol_replan
 
         lines = symbol_replan.run(config.load(project.root), host, args.confirm, retain_names=args.keep_symbol_names)
         return Result.ok(NAME, {}, lines, context.cmd("next"))
     if args.redo_compilers:
         if project.state != "ready":
-            raise Held("setup", "setup.compiler_refresh: ready project required")
+            raise Held(
+                cause_named(
+                    "setup.compiler_refresh",
+                    "setup.compiler_refresh: ready project required",
+                    owner="cli.setup",
+                    stage="setup",
+                )
+            )
         if _facts_given(args):
-            raise Held("setup", "setup.compiler_refresh: cannot change game facts or force a compiler")
+            raise Held(
+                cause_named(
+                    "setup.compiler_refresh",
+                    "setup.compiler_refresh: cannot change game facts or force a compiler",
+                    owner="cli.setup",
+                    stage="setup",
+                )
+            )
         lines = refresh.run(project, host, args.confirm)
         return Result.ok(NAME, {}, lines, context.cmd("next"))
     if project.state == "ready":
         if _facts_given(args):
-            raise Held("setup", "setup.rom_set_changed: a ready project keeps its confirmed facts")
+            raise Held(
+                cause_named(
+                    "setup.rom_set_changed",
+                    "setup.rom_set_changed: a ready project keeps its confirmed facts",
+                    owner="cli.setup",
+                    stage="setup",
+                )
+            )
         lines = setup.refresh(project, host, supply=args.compiler_files)
         return Result.ok(NAME, {}, lines, context.cmd("next"))
     census.candidates(project)

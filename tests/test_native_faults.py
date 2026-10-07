@@ -1,11 +1,13 @@
-"""The process owner retains complete native evidence through current Result JSON."""
+"""Complete typed native transport and the first owning cause survive every wrapper."""
 
 import errno
 import subprocess
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from tests.kit import TempCase
 from unbake import process
+from unbake.cli.guidance import after
 from unbake.cli.output import Result
 from unbake.config import Held
 
@@ -23,38 +25,48 @@ class NativeFaultTests(TempCase):
             self.assertRaises(Held) as caught,
         ):
             process.run_tool(argv, self.root, "compile", context=context)
-        try:
-            raise Held("draft", "draft.unit: compiler failed") from caught.exception
-        except Held as wrapped:
-            result = Result.held("draft", wrapped, "stop: correct the captured compiler diagnostic")
-        leaf = result.document()["data"]["fault"]["chain"][-1]["fault"]
-        self.assertEqual(
-            (leaf["args"], leaf["cwd"], leaf["exit"], leaf["signal"]), (tuple(argv), str(self.root), 3, None)
+        original = caught.exception.fault
+        wrapped = Held(
+            process.capture(
+                caught.exception,
+                cause=process.named("draft.unit", "compiler prerequisite failed", owner="work.draft", stage="draft"),
+            )
         )
-        self.assertEqual((leaf["stdout"], leaf["stderr"], leaf["context"]), ("stdout detail", "stderr detail", context))
+        result = Result.held("draft", wrapped, "stop: repair owning prerequisite")
+        self.assertEqual(result.document()["v"], 2)
+        self.assertEqual(wrapped.key, caught.exception.key)
+        leaf = process.native_results(wrapped.fault)[0]
+        self.assertEqual((leaf.args, leaf.cwd, leaf.exit, leaf.signal), (tuple(argv), str(self.root), 3, None))
+        self.assertEqual((leaf.stdout, leaf.stderr, leaf.context), ("stdout detail", "stderr detail", context))
+        reopened = process.Fault.read(wrapped.fault.document())
+        self.assertEqual(reopened.cause.id, original.cause.id)
+        self.assertEqual(process.native_results(reopened), (leaf,))
 
-    def test_permission_is_a_native_os_fault_and_signal_has_no_exit_code(self):
+    def test_permission_is_distinct_from_signal_and_exit(self):
         with (
             patch.object(process.subprocess, "run", side_effect=PermissionError(errno.EACCES, "Permission denied")),
             self.assertRaises(Held) as caught,
         ):
             process.run_tool(["cc"], self.root, "compile")
-        self.assertEqual(
-            (caught.exception.fault["category"], caught.exception.fault["errno"]), ("native-os", errno.EACCES)
-        )
+        leaf = process.native_results(caught.exception.fault)[0]
+        self.assertEqual((leaf.category, leaf.errno, leaf.exit), ("native-os", errno.EACCES, None))
         with (
             patch.object(process.subprocess, "run", return_value=subprocess.CompletedProcess(["cc"], -9, "out", "err")),
             self.assertRaises(Held) as caught,
         ):
             process.run_tool(["cc"], self.root, "compile")
-        self.assertEqual((caught.exception.fault["exit"], caught.exception.fault["signal"]), (None, 9))
+        leaf = process.native_results(caught.exception.fault)[0]
+        self.assertEqual((leaf.exit, leaf.signal, leaf.stderr), (None, 9, "err"))
 
-    def test_guidance_finds_native_context_through_an_owning_wrapper(self):
-        from types import SimpleNamespace
-
-        from unbake.cli.guidance import after
-
-        cause = Held("compile", "compile.cc: denied", fault={"category": "native-os", "errno": errno.EACCES})
-        wrapper = Held("draft", "draft.unit: compiler prerequisite failed")
-        wrapper.__cause__ = cause
-        self.assertIn("stop: correct the native tool failure", after(SimpleNamespace(command="draft"), wrapper))
+    def test_guidance_renders_only_the_owning_action(self):
+        cause = process.named(
+            "compile.missing_provider",
+            "basetypes.h missing",
+            owner="family",
+            stage="preprocess",
+            action=process.Action("command", ("compare", "unit.c")),
+        )
+        wrapper = Held(process.Fault(cause).framed("draft", "draft", "outer diagnostic"))
+        context = SimpleNamespace(cmd=lambda *args: "unbake " + " ".join(args))
+        self.assertEqual(after(context, wrapper), "unbake compare unit.c")
+        self.assertEqual(Result.held("draft", wrapper, after(context, wrapper)).key, "compile.missing_provider")

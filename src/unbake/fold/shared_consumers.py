@@ -18,6 +18,7 @@ from unbake.layout.header_context import Headers
 from unbake.layout.split import Edit
 from unbake.layout.structs import Layout
 from unbake.layout.structs_identity import identity
+from unbake.process import named as cause_named
 
 
 def _names(records: list[Layout]) -> dict[str, Layout]:
@@ -95,9 +96,15 @@ def plan(project: Project, host: Host, function: str, headers: dict[str, str]) -
                     if provider is None:
                         if record.name in _names(promoted):
                             raise Held(
-                                "fold",
-                                f"fold.layout: {function}.c and {source.name}: "
-                                f"conflicting published layout for {record.kind} {record.name}",
+                                cause_named(
+                                    "fold.layout",
+                                    (
+                                        f"fold.layout: {function}.c and {source.name}: conflicting published "
+                                        f"layout for {record.kind} {record.name}"
+                                    ),
+                                    owner="fold.shared_consumers",
+                                    stage="fold",
+                                )
                             )
                         continue
                     selected.add(provider.name)
@@ -132,7 +139,14 @@ def plan(project: Project, host: Host, function: str, headers: dict[str, str]) -
                 )
                 for span, target in planned.items():
                     if span in replacements and replacements[span] != target:
-                        raise Held("fold", f"fold.layout: {function}.c and {source.name}: version-dependent rename")
+                        raise Held(
+                            cause_named(
+                                "fold.layout",
+                                f"fold.layout: {function}.c and {source.name}: version-dependent rename",
+                                owner="fold.shared_consumers",
+                                stage="fold",
+                            )
+                        )
                     replacements[span] = target
         if not selected:
             continue

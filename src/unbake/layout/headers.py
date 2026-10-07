@@ -13,6 +13,7 @@ from unbake.cdecl import declaration_source, declarations
 from unbake.config import Held
 from unbake.decomp.draft_context import ordered_declarations, ordered_headers
 from unbake.layout.map import Group, Map
+from unbake.process import named as cause_named
 from unbake.project.headers import Graph
 from unbake.typemap.header_names import alias_types
 from unbake.typemap.split import guarded, required_providers
@@ -90,7 +91,14 @@ def validate_edges(root: Path, edges: dict[Path, set[Path]], authored: set[Path]
 
     def visit(path: Path) -> None:
         if path in active:
-            raise Held("layout", f"layout.cycle: header include cycle at {path}")
+            raise Held(
+                cause_named(
+                    "layout.cycle",
+                    f"layout.cycle: header include cycle at {path}",
+                    owner="layout.headers",
+                    stage="layout",
+                )
+            )
         if path in done:
             return
         active.add(path)
@@ -106,7 +114,14 @@ def validate_edges(root: Path, edges: dict[Path, set[Path]], authored: set[Path]
             continue
         for dep in deps:
             if not ancestor(dep):
-                raise Held("layout", f"layout.includes: downward include {path} -> {dep}")
+                raise Held(
+                    cause_named(
+                        "layout.includes",
+                        f"layout.includes: downward include {path} -> {dep}",
+                        owner="layout.headers",
+                        stage="layout",
+                    )
+                )
 
 
 def one_home(parsed: dict[Path, Any], homes: dict[Path, Path], root: Path, authored: set[Path]) -> None:
@@ -128,7 +143,14 @@ def one_home(parsed: dict[Path, Any], homes: dict[Path, Path], root: Path, autho
         where = " and ".join(places) if len(places) > 1 else f"{places[0]} twice"
         refused.append(f"{kind} {name} would be defined in {where}")
     if refused:
-        raise Held("headers", "headers.type_home: " + "; ".join(refused))
+        raise Held(
+            cause_named(
+                "layout.headers.one_home",
+                "headers.type_home: " + "; ".join(refused),
+                owner="layout.headers",
+                stage="headers",
+            )
+        )
 
 
 class Layout:
@@ -251,7 +273,14 @@ class Layout:
         for source, text in sources.items():
             owner = owners.get(source.stem)
             if owner is None:
-                raise Held("layout", f"layout.member.{source.stem}: source has no group")
+                raise Held(
+                    cause_named(
+                        f"layout.member.{source.stem}",
+                        f"layout.member.{source.stem}: source has no group",
+                        owner="layout.headers",
+                        stage="layout",
+                    )
+                )
             from unbake.layout import redeclarations
 
             local = set(redeclarations.declared(source, text))
@@ -308,20 +337,28 @@ class Layout:
             live_authored = cluster & authored
             if len(owning) > 1 and not live_authored:
                 raise Held(
-                    "layout",
-                    "layout.declaration_home: one declaration component declares symbols of "
-                    + ", ".join(sorted(owning))
-                    + ": "
-                    + ", ".join(str(p) for p in sorted(cluster)),
+                    cause_named(
+                        "layout.headers.__init__",
+                        "layout.declaration_home: one declaration component declares symbols of "
+                        + ", ".join(sorted(owning))
+                        + ": "
+                        + ", ".join(str(p) for p in sorted(cluster)),
+                        owner="layout.headers",
+                        stage="layout",
+                    )
                 )
             if owning and not live_authored:
                 used = owning
             if live_authored:
                 if len(cluster) != 1:
                     raise Held(
-                        "layout",
-                        "layout.cycle: authored and generated declaration cycle: "
-                        + ", ".join(str(p) for p in sorted(cluster)),
+                        cause_named(
+                            "layout.headers.__init__",
+                            "layout.cycle: authored and generated declaration cycle: "
+                            + ", ".join(str(p) for p in sorted(cluster)),
+                            owner="layout.headers",
+                            stage="layout",
+                        )
                     )
                 destination = next(iter(live_authored))
             elif len(used) == 1:

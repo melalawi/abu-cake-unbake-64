@@ -16,6 +16,8 @@ from unbake import config, inputs, tui
 from unbake.compilers import files as compiler_files
 from unbake.compilers import propose as compiler_proposal
 from unbake.config import Held, Host, PendingProject
+from unbake.process import capture
+from unbake.process import named as cause_named
 from unbake.project import census, setup, setup_config
 from unbake.project.flow import LayoutManifest
 
@@ -26,7 +28,14 @@ def run(pending: PendingProject, policy: Host, confirm: str | None) -> list[str]
     try:
         layout = cast(LayoutManifest, json.loads(layout_path.read_bytes()))
     except (OSError, ValueError) as error:
-        raise Held("setup", f"setup.compiler_layout: {error}") from error
+        raise Held(
+            capture(
+                error,
+                cause=cause_named(
+                    "setup.compiler_layout", f"setup.compiler_layout: {error}", owner="compilers.refresh", stage="setup"
+                ),
+            )
+        ) from error
     measured = census.run(pending, policy, names_from=project.names_from)
     # Keep published C and measured exception units on their proved recipe.
     retained = {source.stem: project.compiler_reference(source) for source in project.src.rglob("*.c")}
@@ -49,7 +58,14 @@ def run(pending: PendingProject, policy: Host, confirm: str | None) -> list[str]
     data = toml.loads(original.decode())
     default = proposal["default_compiler"]
     if default is None:
-        raise Held("setup", "setup.compiler_candidate: explicit default compiler required")
+        raise Held(
+            cause_named(
+                "setup.compiler_candidate",
+                "setup.compiler_candidate: explicit default compiler required",
+                owner="compilers.refresh",
+                stage="setup",
+            )
+        )
     data["project"]["default_compiler"] = default
     data.pop("units", None)
     units = setup_config.exception_units(default, proposal["assignments"])
@@ -76,7 +92,14 @@ def run(pending: PendingProject, policy: Host, confirm: str | None) -> list[str]
         from unbake.typemap.mapping import compiler_inputs
 
         if setup._inputs(project) != fingerprint:
-            raise Held("setup", "setup.proposal_stale: project inputs changed during compiler refresh")
+            raise Held(
+                cause_named(
+                    "setup.proposal_stale",
+                    "setup.proposal_stale: project inputs changed during compiler refresh",
+                    owner="compilers.refresh",
+                    stage="setup",
+                )
+            )
         mapped = compiler_inputs(project, outputs[project.root / "config.toml"])
         if mapped is not None:
             outputs[mapped[0]] = mapped[1]

@@ -16,6 +16,7 @@ from unbake.decomp.commands import prefix
 from unbake.decomp.indexed import table_guidance
 from unbake.decomp.needs import LayoutNeed, Need, SymbolNeed
 from unbake.decomp.symbols import Binding, DataRow, references, required, symbol_line
+from unbake.process import named as cause_named
 
 _C_TYPES = {
     "f32": "f32",
@@ -38,10 +39,24 @@ def extern(need: SymbolNeed) -> str:
     if need.type == "address":
         return f"extern u8 {need.name}[];"
     if need.type not in _C_TYPES:
-        raise Held("guide", f"{need.name}.type: no exact C declaration for {need.type}")
+        raise Held(
+            cause_named(
+                f"{need.name}.type",
+                f"{need.name}.type: no exact C declaration for {need.type}",
+                owner="decomp.guide",
+                stage="guide",
+            )
+        )
     width = _SIZES[need.type]
     if need.size % width:
-        raise Held("guide", f"{need.name}.size: not divisible by {need.type} width")
+        raise Held(
+            cause_named(
+                f"{need.name}.size",
+                f"{need.name}.size: not divisible by {need.type} width",
+                owner="decomp.guide",
+                stage="guide",
+            )
+        )
     extent = "" if need.size == width else f"[{need.size // width}]"
     return f"extern {_C_TYPES[need.type]} {need.name}{extent};"
 
@@ -87,10 +102,24 @@ def from_words(
             continue
         matches = [row for row in intervals if row.start <= ref.address < row.end]
         if len(matches) != 1:
-            raise Held("guide", f"data row at 0x{ref.address:08X} is missing or ambiguous")
+            raise Held(
+                cause_named(
+                    "decomp.guide.from_words",
+                    f"data row at 0x{ref.address:08X} is missing or ambiguous",
+                    owner="decomp.guide",
+                    stage="guide",
+                )
+            )
         row = matches[0]
         if ref.address + ref.size > row.end:
-            raise Held("guide", f"reference 0x{ref.address:08X}: crosses data row {row.name}")
+            raise Held(
+                cause_named(
+                    "decomp.guide.from_words",
+                    f"reference 0x{ref.address:08X}: crosses data row {row.name}",
+                    owner="decomp.guide",
+                    stage="guide",
+                )
+            )
         aliases = [binding for binding in known if binding.address == ref.address]
         name = aliases[0].name if len(aliases) == 1 else f"D_{ref.address:08X}"
         result.append(
@@ -128,9 +157,9 @@ def prologue(target_words: Iterable[int]) -> str:
 def words(data: bytes, byteorder: str) -> tuple[int, ...]:
     """Decode explicit big/little endian instruction words; refuse partial tails."""
     if byteorder not in ("big", "little"):
-        raise Held("symbols", "byteorder: expected big or little")
+        raise Held(cause_named("byteorder", "byteorder: expected big or little", owner="decomp.guide", stage="symbols"))
     if len(data) % 4:
-        raise Held("symbols", "target_words: incomplete word")
+        raise Held(cause_named("target_words", "target_words: incomplete word", owner="decomp.guide", stage="symbols"))
     return tuple(item[0] for item in struct.iter_unpack(">I" if byteorder == "big" else "<I", data))
 
 
@@ -186,7 +215,14 @@ def for_version(project: Project, host: Host, function: str, version: str) -> st
     values = rom.symbol_values(configured.symbols)
     span = rom.function_span(configured, function, values)
     if span is None:
-        raise Held("guide", f"{function}: missing split placement in VERSION {version}")
+        raise Held(
+            cause_named(
+                f"{function}",
+                f"{function}: missing split placement in VERSION {version}",
+                owner="decomp.guide",
+                stage="guide",
+            )
+        )
     rows = data_rows(project, version)
     target = words(rom.target(configured, span), "big")
     from unbake.decomp.guide_layout import resolve

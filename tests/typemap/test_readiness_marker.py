@@ -3,7 +3,7 @@
 from unittest.mock import patch
 
 from tests.project_fixture import ProjectCase
-from unbake import inputs
+from unbake import inputs, steps
 from unbake.typemap import facts, solver
 
 
@@ -24,11 +24,9 @@ class ReadinessMarkerTests(ProjectCase):
             ) as keys,
         ):
             first = solver.readiness(self.project, None)
-            marker = solver.marker(self.project)
-            marker.parent.mkdir(exist_ok=True)
-            marker.write_text(first.key)
+            steps.record(self.project, "types", first.key)
             self.assertEqual(solver.readiness(self.project, None).key, first.key)
-            marker.unlink()
+            steps.forget(self.project, "types")
             self.assertEqual(solver.readiness(self.project, None).key, first.key)
             self.assertEqual(keys.call_count, 1)
             source.write_text("int alpha(void) {return 2;}\n")

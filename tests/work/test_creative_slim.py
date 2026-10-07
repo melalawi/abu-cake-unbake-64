@@ -160,7 +160,7 @@ class CapturedHandlers(TempCase):
                 )
         for version, data in captured.items():
             self.assertEqual(result.data["versions"][version], data["score"])
-        recorded = attempts.read(project, function)
+        recorded = attempts.ledger(project).history(function)
         self.assertEqual(len(recorded), 1)
         self.assertEqual(recorded[0].versions, result.data["versions"])
         self.assertEqual(recorded[0].compiler, result.data["compiler"])

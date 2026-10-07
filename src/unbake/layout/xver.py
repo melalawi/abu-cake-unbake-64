@@ -12,6 +12,8 @@ from typing import Any, cast
 from unbake.config import Held
 from unbake.decomp.needs import PlacementNeed, register_resolver
 from unbake.layout import split, xver_edits
+from unbake.process import capture
+from unbake.process import named as cause_named
 
 
 @dataclass(frozen=True)
@@ -29,7 +31,11 @@ class Span:
 def _reference(project: Any) -> str:
     value = getattr(project, "names_from", None)
     if value is None:
-        raise Held("placement", "project.names_from: required VERSION")
+        raise Held(
+            cause_named(
+                "project.names_from", "project.names_from: required VERSION", owner="layout.xver", stage="placement"
+            )
+        )
     project.version(value)
     return cast(str, value)
 
@@ -39,11 +45,25 @@ def _image(project: Any, version: str) -> bytes:
     try:
         data = Path(path).read_bytes()
     except OSError as error:
-        raise Held("placement", f"VERSION {version} baserom: {error}") from error
+        raise Held(
+            capture(
+                error,
+                cause=cause_named(
+                    "layout.xver._image", f"VERSION {version} baserom: {error}", owner="layout.xver", stage="placement"
+                ),
+            )
+        ) from error
     widths = {bytes.fromhex("80371240"): 1, bytes.fromhex("37804012"): 2, bytes.fromhex("40123780"): 4}
     width = widths.get(data[:4])
     if width is None or len(data) < 64 or len(data) % width:
-        raise Held("placement", f"VERSION {version} baserom: invalid byte order or size")
+        raise Held(
+            cause_named(
+                "layout.xver._image",
+                f"VERSION {version} baserom: invalid byte order or size",
+                owner="layout.xver",
+                stage="placement",
+            )
+        )
     if width != 1:
         data = b"".join(data[offset : offset + width][::-1] for offset in range(0, len(data), width))
     return data
@@ -60,7 +80,14 @@ def _inventory(project: Any, version: str) -> list[Any]:
         if row.kind in split.CODE_KINDS
     ]
     if not rows:
-        raise Held("placement", f"VERSION {version} text rows: required")
+        raise Held(
+            cause_named(
+                "layout.xver._inventory",
+                f"VERSION {version} text rows: required",
+                owner="layout.xver",
+                stage="placement",
+            )
+        )
     return rows
 
 
@@ -82,19 +109,37 @@ def _named(project: Any, version: str, function: str, rows: list[Any]) -> tuple[
     else:
         selected = [(row, row.start) for row in rows if Path(row.path).name == function]
     if len(selected) > 1:
-        raise Held("placement", f"VERSION {version} function {function}: ambiguous named placement")
+        raise Held(
+            cause_named(
+                "layout.xver._named",
+                f"VERSION {version} function {function}: ambiguous named placement",
+                owner="layout.xver",
+                stage="placement",
+            )
+        )
     return selected[0] if selected else None
 
 
 def body(data: bytes, start: int, end: int, function: str) -> list[int]:
     if start < 0 or end > len(data) or start >= end or start % 4 or end % 4:
-        raise Held("placement", f"function {function} start/end: invalid word range")
+        raise Held(
+            cause_named(
+                "layout.xver.body",
+                f"function {function} start/end: invalid word range",
+                owner="layout.xver",
+                stage="placement",
+            )
+        )
     words = list(struct.unpack(f">{(end - start) // 4}I", data[start:end]))
     returns = [index + 2 for index, word in enumerate(words[:-1]) if word == 0x03E00008]
     if returns and not any(words[returns[-1] :]):
         words = words[: returns[-1]]
     if not words:
-        raise Held("placement", f"function {function} words: required")
+        raise Held(
+            cause_named(
+                "layout.xver.body", f"function {function} words: required", owner="layout.xver", stage="placement"
+            )
+        )
     return words
 
 
@@ -181,15 +226,36 @@ def _span(project: Any, version: str, function: str, row: Any, start: int, words
     end = start + len(words) * 4
     limit = split.end(row)
     if end > limit:
-        raise Held("placement", f"VERSION {version} function {function}: crosses row boundary")
+        raise Held(
+            cause_named(
+                "layout.xver._span",
+                f"VERSION {version} function {function}: crosses row boundary",
+                owner="layout.xver",
+                stage="placement",
+            )
+        )
     alignment = None
     if end < limit and not any(data[end:limit]):
         value = row.segment.fields.get("subalign")
         if value is None:
-            raise Held("placement", f"VERSION {version} function {function} subalign: required for padding")
+            raise Held(
+                cause_named(
+                    "layout.xver._span",
+                    f"VERSION {version} function {function} subalign: required for padding",
+                    owner="layout.xver",
+                    stage="placement",
+                )
+            )
         value = split.number(value, "subalign")
         if value == 0 or value & (value - 1):
-            raise Held("placement", f"VERSION {version} function {function} subalign: required power of two")
+            raise Held(
+                cause_named(
+                    "layout.xver._span",
+                    f"VERSION {version} function {function} subalign: required power of two",
+                    owner="layout.xver",
+                    stage="placement",
+                )
+            )
         address = split.address(row, project.version(version).split) + end - row.start
         if (address + value - 1) // value * value == address + limit - end:
             alignment, end = value, limit
@@ -287,14 +353,28 @@ def locate(project: Any, function: str, *, versions: Iterable[str] | None = None
     rows = _inventory(project, reference)
     named = _named(project, reference, function, rows)
     if named is None:
-        raise Held("placement", f"VERSION {reference} function {function}: missing reference placement")
+        raise Held(
+            cause_named(
+                "layout.xver.locate",
+                f"VERSION {reference} function {function}: missing reference placement",
+                owner="layout.xver",
+                stage="placement",
+            )
+        )
     row, start = named
     image = _image(project, reference)
     words = body(image, start, split.end(row), function)
     masks = _masks(words)
     fixed = [(index, word) for index, (word, mask) in enumerate(zip(words, masks, strict=False)) if not mask]
     if not fixed:
-        raise Held("placement", f"function {function} relocation signature: no fixed instruction")
+        raise Held(
+            cause_named(
+                "layout.xver.locate",
+                f"function {function} relocation signature: no fixed instruction",
+                owner="layout.xver",
+                stage="placement",
+            )
+        )
     anchor_index, anchor = fixed[0]
     result: dict[str, Span | None] = {}
     selected = tuple(project.versions) if versions is None else tuple(dict.fromkeys((reference, *versions)))
@@ -326,13 +406,27 @@ def locate(project: Any, function: str, *, versions: Iterable[str] | None = None
             origin = split.address(row, project.version(reference).split) + start - row.start
             candidates = _disambiguate(project, function, reference, origin, words, image, version, data, candidates)
             if not candidates:
-                raise Held("placement", f"VERSION {version} function {function}: relocation/symbol evidence conflicts")
+                raise Held(
+                    cause_named(
+                        "layout.xver.locate",
+                        f"VERSION {version} function {function}: relocation/symbol evidence conflicts",
+                        owner="layout.xver",
+                        stage="placement",
+                    )
+                )
         if len(candidates) > 1:
             choices = ", ".join(f"0x{span.address:08X} (ROM 0x{span.start:X}, row {span.row})" for span in candidates)
             raise Held(
-                "placement",
-                f"VERSION {version} function {function}: ambiguous relocation-masked placement; "
-                f"missing symbol {function} address selecting one of {len(candidates)} twins: {choices}",
+                cause_named(
+                    "layout.xver.locate",
+                    (
+                        f"VERSION {version} function {function}: ambiguous relocation-masked "
+                        f"placement; missing symbol {function} address selecting one of "
+                        f"{len(candidates)} twins: {choices}"
+                    ),
+                    owner="layout.xver",
+                    stage="placement",
+                )
             )
         result[version] = candidates[0] if candidates else None
     return result
@@ -346,11 +440,25 @@ def _placement(project: Any, span: Span) -> list[PlacementNeed]:
     result = []
     if row.start != span.start or split.end(row) != span.end:
         if row.kind != "asm":
-            raise Held("placement", f"VERSION {span.version} function {span.function}: cannot cut c row {row.path}")
+            raise Held(
+                cause_named(
+                    "layout.xver._placement",
+                    f"VERSION {span.version} function {span.function}: cannot cut c row {row.path}",
+                    owner="layout.xver",
+                    stage="placement",
+                )
+            )
         result.append(PlacementNeed(span.version, span.function, span.start, span.end, "cut", span.address, evidence))
     elif Path(row.path).name != span.function:
         if row.kind != "asm":
-            raise Held("placement", f"VERSION {span.version} function {span.function}: cannot rename c row {row.path}")
+            raise Held(
+                cause_named(
+                    "layout.xver._placement",
+                    f"VERSION {span.version} function {span.function}: cannot rename c row {row.path}",
+                    owner="layout.xver",
+                    stage="placement",
+                )
+            )
         result.append(
             PlacementNeed(span.version, span.function, span.start, span.end, "rename", Path(row.path).name, evidence)
         )
@@ -358,7 +466,14 @@ def _placement(project: Any, span: Span) -> list[PlacementNeed]:
     if symbol is None:
         result.append(PlacementNeed(span.version, span.function, span.start, span.end, "place", span.address, evidence))
     elif symbol[0] != span.address:
-        raise Held("placement", f"VERSION {span.version} symbol {span.function}: conflicting address")
+        raise Held(
+            cause_named(
+                "layout.xver._placement",
+                f"VERSION {span.version} symbol {span.function}: conflicting address",
+                owner="layout.xver",
+                stage="placement",
+            )
+        )
     if span.align is not None:
         result.append(PlacementNeed(span.version, span.function, span.start, span.end, "align", span.align, evidence))
     return result

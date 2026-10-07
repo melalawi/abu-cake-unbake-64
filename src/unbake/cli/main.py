@@ -9,7 +9,7 @@ from pathlib import Path
 from types import ModuleType
 from typing import TextIO
 
-from unbake import admission, cache, config, process
+from unbake import admission, cache, config
 from unbake.cli import (
     boundary,
     check,
@@ -19,6 +19,7 @@ from unbake.cli import (
     explain,
     guidance,
     init,
+    migrate_state,
     publish,
     recompute,
     resources,
@@ -30,9 +31,12 @@ from unbake.cli import next as next_verb
 from unbake.cli.args import Context, HelpRequested, Parser
 from unbake.cli.output import Result, emit
 from unbake.config import Held
+from unbake.process import capture
+from unbake.process import named as cause_named
 
 VERBS: tuple[ModuleType, ...] = (
     init,
+    migrate_state,
     setup,
     next_verb,
     draft,
@@ -114,15 +118,29 @@ def _run(argv: list[str] | None, stdout: TextIO) -> Result:
 
         guard = lock.project_lock(context.root, verb.NAME) if writer and context.root else nullcontext()
         # Admission precedes project mutation locks and project preparation.
-        with admission.command(context.host), guard:
+        from unbake.work.attempts import command_ledger
+
+        history = command_ledger(context.project()) if verb.PROJECT == "ready" else nullcontext()
+        with admission.command(context.host), guard, history:
             return verb.run(context)  # type: ignore[no-any-return]
     except Held as error:
         data = {"failures": list(error.failures)} if error.failures else None
-        return Result.held(verb.NAME, error, error.next_action or guidance.after(context, error), data)
+        return Result.held(verb.NAME, error, guidance.after(context, error), data)
     except Exception as error:  # nothing unexpected reaches the terminal raw: it is a refusal with a key and a Next
-        from unbake.process import fault
+        from unbake.process import capture
+        from unbake.process import named as cause_named
 
-        unexpected = Held(verb.NAME, f"{verb.NAME}.unexpected: {_where(error)}", fault=fault(error))
+        unexpected = Held(
+            capture(
+                error,
+                cause=cause_named(
+                    f"{verb.NAME}.unexpected",
+                    f"{verb.NAME}.unexpected: {_where(error)}",
+                    owner="cli.main",
+                    stage=verb.NAME,
+                ),
+            )
+        )
         return Result.held(verb.NAME, unexpected, guidance.after(context, unexpected))
     except KeyboardInterrupt:
         words = argv if argv is not None else sys.argv[1:]
@@ -154,7 +172,16 @@ def main(argv: list[str] | None = None) -> int:
         result = _run(argv, stdout)
     except Exception as error:
         result = Result.held(
-            "unbake", Held("unbake", f"unbake.unexpected: {_where(error)}", fault=process.fault(error)), "unbake next"
+            "unbake",
+            Held(
+                capture(
+                    error,
+                    cause=cause_named(
+                        "unbake.unexpected", f"unbake.unexpected: {_where(error)}", owner="cli.main", stage="unbake"
+                    ),
+                )
+            ),
+            "unbake next",
         )
     finally:
         tui.stop()

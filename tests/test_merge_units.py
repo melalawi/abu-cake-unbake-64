@@ -98,7 +98,7 @@ class SecondRunTests(ProjectCase):
             lines = merge_units.run(project, self.host)
         loaded = layout_map.load(config.load(self.project.root)).groups
         self.assertEqual(loaded[0].members, ("alpha", "gamma"))
-        self.assertEqual(lines[1], "merge g gamma..gamma: refused; recorded as split")
+        self.assertEqual(lines[1], "merge g gamma..gamma: refused; byte mismatch")
         # Proofs run in the pool; the single writer commits the whole pass once.
         commit.assert_called_once()
 

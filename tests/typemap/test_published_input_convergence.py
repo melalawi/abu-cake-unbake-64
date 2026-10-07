@@ -51,7 +51,7 @@ class PublishedInputConvergence(SolveReuseFixture):
                 for name, row in result["functions"].items()
             }
         }
-        staged, _ = types_db.stage(self.database, types_db.encode(result), summary, {})
+        staged, _ = types_db.stage(self.database, types_db.encode(result), summary)
         types_db.install(self.database, staged)
 
     def ensure(self):

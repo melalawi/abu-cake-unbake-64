@@ -11,6 +11,8 @@ from typing import Any, cast
 
 from unbake import cdecl
 from unbake.config import Held
+from unbake.process import capture
+from unbake.process import named as cause_named
 from unbake.search.core import Context, Mutation
 from unbake.search.loops import variants as loop_variants
 from unbake.search.loops import walk
@@ -372,22 +374,38 @@ def _replace(root: Any, wanted: Any, change: Callable[[Any], Any]) -> None:
 def propose(source: str, trial: Compared, ctx: Context) -> Iterator[Mutation]:
     """Yield unique structural alternatives; optional context.focus_lines ranks edits."""
     if not isinstance(source, str) or not source.strip():
-        raise Held("order", "source is required as C text")
+        raise Held(
+            cause_named("search.order.propose", "source is required as C text", owner="search.order", stage="order")
+        )
     function_name = getattr(trial, "function", None)
     if not function_name:
-        raise Held("order", "trial.function is required")
+        raise Held(
+            cause_named("search.order.propose", "trial.function is required", owner="search.order", stage="order")
+        )
     if ctx is None:
-        raise Held("order", "context is required")
+        raise Held(cause_named("search.order.propose", "context is required", owner="search.order", stage="order"))
     deadline = getattr(ctx, "deadline", None)
     if type(deadline) not in (int, float) or not math.isfinite(cast(float, deadline)):
-        raise Held("order", "context.deadline: finite monotonic time required")
+        raise Held(
+            cause_named(
+                "context.deadline",
+                "context.deadline: finite monotonic time required",
+                owner="search.order",
+                stage="order",
+            )
+        )
     deadline = cast(float, deadline)
     if time.monotonic() >= deadline:
         return
     try:
         from pycparser import c_ast, c_generator  # type: ignore[import-untyped]
     except ImportError as error:
-        raise Held("order", "pycparser is required") from error
+        raise Held(
+            capture(
+                error,
+                cause=cause_named("search.order.propose", "pycparser is required", owner="search.order", stage="order"),
+            )
+        ) from error
     # Comments are whitespace; keep string literals byte-for-byte.
     cleaned = re.sub(
         r'/\*.*?\*/|//[^\n]*|"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'',
@@ -396,14 +414,33 @@ def propose(source: str, trial: Compared, ctx: Context) -> Iterator[Mutation]:
         flags=re.S,
     )
     if re.search(r"^\s*#", cleaned, re.M):
-        raise Held("order", "source.preprocessed is required (directives remain)")
+        raise Held(
+            cause_named(
+                "search.order.propose",
+                "source.preprocessed is required (directives remain)",
+                owner="search.order",
+                stage="order",
+            )
+        )
     try:
         tree = cdecl.parse(cleaned)
     except (cdecl.ParseError, AssertionError) as error:
-        raise Held("order", f"source.syntax: {error}") from error
+        raise Held(
+            capture(
+                error,
+                cause=cause_named("source.syntax", f"source.syntax: {error}", owner="search.order", stage="order"),
+            )
+        ) from error
     functions = [node for node in tree.ext if isinstance(node, c_ast.FuncDef) and node.decl.name == function_name]
     if len(functions) != 1:
-        raise Held("order", f"trial.function {function_name}: exactly one definition required")
+        raise Held(
+            cause_named(
+                "search.order.propose",
+                f"trial.function {function_name}: exactly one definition required",
+                owner="search.order",
+                stage="order",
+            )
+        )
     printer = c_generator.CGenerator()
     seen: set[str] = set()
     comments = re.findall(r'/\*.*?\*/|//[^\n]*|"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'', source, re.S)
@@ -412,7 +449,14 @@ def propose(source: str, trial: Compared, ctx: Context) -> Iterator[Mutation]:
     focus = getattr(ctx, "focus_lines", None)
     if focus is not None:
         if not isinstance(focus, (tuple, list)) or any(type(line) is not int or line < 1 for line in focus):
-            raise Held("order", "context.focus_lines: positive source line numbers required")
+            raise Held(
+                cause_named(
+                    "context.focus_lines",
+                    "context.focus_lines: positive source line numbers required",
+                    owner="search.order",
+                    stage="order",
+                )
+            )
         variants.sort(key=lambda row: min((abs(row[0].coord.line - line) for line in focus), default=0))
     for target, description, change in variants:
         if time.monotonic() >= deadline:

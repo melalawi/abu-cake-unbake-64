@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
+from tests.ledger_fixture import fault_evidence
 from unbake import effort, pool
 
 GIB = 1 << 30
@@ -73,8 +74,8 @@ class MemoryFailure(unittest.TestCase):
         self.assertEqual(fresh.call_count, 1)
         self.assertIn("actual.c", raised.exception.reason)
         self.assertNotIn("batch-first", raised.exception.reason)
-        self.assertEqual(raised.exception.fault["configured_cap_bytes"], 512_000_000)
-        self.assertEqual(raised.exception.fault["peak_rss_bytes"], 123456)
+        self.assertEqual(fault_evidence(raised.exception.fault)["configured_cap_bytes"], 512_000_000)
+        self.assertEqual(fault_evidence(raised.exception.fault)["peak_rss_bytes"], 123456)
 
     def test_a_crash_names_the_cap_without_inventing_a_peak(self) -> None:
         from concurrent.futures.process import BrokenProcessPool

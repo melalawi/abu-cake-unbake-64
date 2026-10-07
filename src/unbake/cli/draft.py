@@ -8,6 +8,7 @@ import re
 from unbake.cli.args import Context
 from unbake.cli.output import Result
 from unbake.config import Held
+from unbake.process import named as cause_named
 
 NAME = "draft"
 HELP = "Write a first C draft of FUNC to build/work/FUNC/FUNC.c."
@@ -35,7 +36,14 @@ def run(context: Context) -> Result:
 
     function = context.args.function
     if not re.fullmatch(r"[A-Za-z_]\w*", function):
-        raise Held("draft", f"draft.function: {function}: expected a C identifier")
+        raise Held(
+            cause_named(
+                "draft.function",
+                f"draft.function: {function}: expected a C identifier",
+                owner="cli.draft",
+                stage="draft",
+            )
+        )
     expected_output = draft.check_existing(context.project(), function, replace=context.args.replace)
     project, host = context.ready("extract", "types", "buildfiles")
     made = draft.draft(project, host, function, replace=context.args.replace, expected_output=expected_output)

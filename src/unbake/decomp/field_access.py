@@ -12,6 +12,8 @@ from unbake.cdecl import LayoutParser
 from unbake.config import Held, Project
 from unbake.decomp.draft_macros import calls
 from unbake.layout.structs_types import SCALARS
+from unbake.process import capture
+from unbake.process import named as cause_named
 
 
 def share(
@@ -90,10 +92,24 @@ def share(
 
     def replace(args: list[str]) -> str:
         if len(args) != 3:
-            raise Held("m2c", "unresolved M2C_FIELD(" + ", ".join(args) + ")")
+            raise Held(
+                cause_named(
+                    "decomp.field_access.replace",
+                    "unresolved M2C_FIELD(" + ", ".join(args) + ")",
+                    owner="decomp.field_access",
+                    stage="m2c",
+                )
+            )
         base, pointer, literal = (value.strip() for value in args)
         if not re.fullmatch(r"[+-]?(?:0[xX][\da-fA-F]+|\d+)", literal):
-            raise Held("m2c", "unresolved M2C_FIELD(" + ", ".join(args) + ")")
+            raise Held(
+                cause_named(
+                    "decomp.field_access.replace",
+                    "unresolved M2C_FIELD(" + ", ".join(args) + ")",
+                    owner="decomp.field_access",
+                    stage="m2c",
+                )
+            )
         offset = int(literal, 0)
         declaration = declarator(pointer, "measured") + ";"
         scalar = LayoutParser(declaration)
@@ -101,10 +117,27 @@ def share(
         try:
             member = scalar.declaration()[0]
             if not member.operations or member.operations[0][0] != "pointer":
-                raise Held("m2c", "field type requires an outer pointer")
+                raise Held(
+                    cause_named(
+                        "decomp.field_access.replace",
+                        "field type requires an outer pointer",
+                        owner="decomp.field_access",
+                        stage="m2c",
+                    )
+                )
             type_name = scalar.type_name(member.base, member.operations[1:])
         except Held as error:
-            raise Held("m2c", "unresolved M2C_FIELD(" + ", ".join(args) + ")") from error
+            raise Held(
+                capture(
+                    error,
+                    cause=cause_named(
+                        "decomp.field_access.replace",
+                        "unresolved M2C_FIELD(" + ", ".join(args) + ")",
+                        owner="decomp.field_access",
+                        stage="m2c",
+                    ),
+                )
+            ) from error
         record_type = type_name
         width = 4 if type_name.endswith(" *") else SCALARS.get(type_name, (None, None))[0]
         alignment = 4 if type_name.endswith(" *") else SCALARS.get(type_name, (None, None))[1]
@@ -115,11 +148,28 @@ def share(
             try:
                 value = cdecl.parse(declaration, typedefs=parser.types).ext[0].type
                 if not isinstance(value, c_ast.PtrDecl) or not isinstance(value.type, c_ast.PtrDecl):
-                    raise Held("m2c", "field value is not a pointer")
+                    raise Held(
+                        cause_named(
+                            "decomp.field_access.replace",
+                            "field value is not a pointer",
+                            owner="decomp.field_access",
+                            stage="m2c",
+                        )
+                    )
                 type_name = node_type(value.type)
                 width, alignment = 4, 4
             except (cdecl.ParseError, Held) as error:
-                raise Held("m2c", "unresolved M2C_FIELD(" + ", ".join(args) + ")") from error
+                raise Held(
+                    capture(
+                        error,
+                        cause=cause_named(
+                            "decomp.field_access.replace",
+                            "unresolved M2C_FIELD(" + ", ".join(args) + ")",
+                            owner="decomp.field_access",
+                            stage="m2c",
+                        ),
+                    )
+                ) from error
         layout = observed.get(base)
         if layout is not None:
             fields = [
@@ -150,9 +200,23 @@ def share(
             if len(members) == 1:
                 return f"({base})->{members[0].name}"
         if width is None or width <= 0:
-            raise Held("m2c", f"{function}: field at {literal} has no measured scalar width: {pointer}")
+            raise Held(
+                cause_named(
+                    f"{function}",
+                    f"{function}: field at {literal} has no measured scalar width: {pointer}",
+                    owner="decomp.field_access",
+                    stage="m2c",
+                )
+            )
         if alignment is None or offset % alignment:
-            raise Held("m2c", f"{function}: unaligned field at {literal}: {pointer}")
+            raise Held(
+                cause_named(
+                    f"{function}",
+                    f"{function}: unaligned field at {literal}: {pointer}",
+                    owner="decomp.field_access",
+                    stage="m2c",
+                )
+            )
         key = hashlib.sha256(f"{offset}:{type_name}".encode()).hexdigest()[:12]
         tag = f"Measured_{function}_{key}"
         if offset >= 0:

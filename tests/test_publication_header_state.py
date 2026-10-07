@@ -8,6 +8,7 @@ from tests.project_fixture import ProjectCase
 from unbake import inputs, land, steps
 from unbake.config import Held
 from unbake.project import generated_state
+from unbake.work import attempts
 
 FIXTURE = Path(__file__).parent / "fixtures/publication_headers/rebase"
 
@@ -44,9 +45,9 @@ class PublicationHeaderStateTests(ProjectCase):
         land._refuse_edited_headers(self.project)
         self.assertEqual(steps.altered(self.project, "headers"), [])
         self.assertEqual(steps.recorded(self.project, "headers"), "old-input-key")
-        receipt = (self.project.build / "steps.json").read_bytes()
+        receipt = (self.project.root / attempts.PATH).read_bytes()
         land._refuse_edited_headers(self.project)
-        self.assertEqual((self.project.build / "steps.json").read_bytes(), receipt)
+        self.assertEqual((self.project.root / attempts.PATH).read_bytes(), receipt)
 
     def test_unpublished_edits_are_refused_even_when_staged(self):
         edited = self.headers[0]
@@ -74,11 +75,13 @@ class PublicationHeaderStateTests(ProjectCase):
         self.commit("Remove obsolete generated home")
         land._refuse_edited_headers(self.project)
         self.assertEqual(steps.altered(self.project, "headers"), [])
-        self.assertNotIn(str(target.relative_to(self.project.root)), steps._read(self.project)["headers"]["outputs"])
+        self.assertNotIn(
+            str(target.relative_to(self.project.root)), attempts.ledger(self.project).step("headers")["outputs"]
+        )
 
     def test_missing_untracked_output_is_never_treated_as_committed_deletion(self):
         ghost = self.include / "common/untracked.h"
-        entry = steps._read(self.project)["headers"]
+        entry = attempts.ledger(self.project).step("headers")
         steps.record(
             self.project, "headers", entry["key"], {**entry["outputs"], "include/common/untracked.h": "0" * 64}
         )
@@ -103,7 +106,7 @@ class PublicationHeaderStateTests(ProjectCase):
         self.assertEqual(generated_state.reconcile(self.project, "other"), [])
         self.assertEqual(steps.recorded(self.project, "other"), "other-key")
         self.assertEqual(
-            steps._read(self.project)["other"]["outputs"]["include/output.txt"],
+            attempts.ledger(self.project).step("other")["outputs"]["include/output.txt"],
             inputs.digest(target, algorithm="sha256", reuse=True),
         )
 

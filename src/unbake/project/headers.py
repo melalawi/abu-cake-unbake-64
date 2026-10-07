@@ -13,6 +13,7 @@ from typing import Any
 
 from unbake import cache, inputs
 from unbake.config import Held
+from unbake.process import named as cause_named
 
 RECIPE_MODULES = (
     "project/headers.py",
@@ -53,7 +54,14 @@ class FileBlob:
     def read(self) -> bytes:
         signature = self.signature or inputs.signature(self.path)
         if inputs.signature(self.path) != signature:
-            raise Held("headers", f"headers.changed: {self.path}: immutable input changed")
+            raise Held(
+                cause_named(
+                    "headers.changed",
+                    f"headers.changed: {self.path}: immutable input changed",
+                    owner="project.headers",
+                    stage="headers",
+                )
+            )
 
         if self._data is not None:
             return self._data
@@ -61,7 +69,14 @@ class FileBlob:
         def read() -> bytes:
             data = self.path.read_bytes()
             if inputs.signature(self.path) != signature:
-                raise Held("headers", f"headers.changed: {self.path}: input changed while reading")
+                raise Held(
+                    cause_named(
+                        "headers.changed",
+                        f"headers.changed: {self.path}: input changed while reading",
+                        owner="project.headers",
+                        stage="headers",
+                    )
+                )
             return data
 
         data = cache.memo("tree.bytes", (str(self.path), signature), read, size=len, copy_out=bytes)
@@ -93,7 +108,14 @@ class SearchFiles(Mapping[Path, bytes | FileBlob]):
         if path not in self._observed:
             if (self.allowed is None or path in self.allowed) and path.is_file():
                 if not any(path.resolve().is_relative_to(root.resolve()) for root in self.roots):
-                    raise Held("headers", f"headers.symlink: {path}: forbidden include escape")
+                    raise Held(
+                        cause_named(
+                            "headers.symlink",
+                            f"headers.symlink: {path}: forbidden include escape",
+                            owner="project.headers",
+                            stage="headers",
+                        )
+                    )
                 target = path.resolve()
                 self._observed[path] = (
                     self._observed[target]
@@ -167,7 +189,14 @@ class TreeView:
                 end = payload.index(b"\n", cursor)
                 header = payload[cursor:end].split()
                 if len(header) != 3 or header[1] != b"blob":
-                    raise Held("land", f"land.git_blob: {name}: exact blob required")
+                    raise Held(
+                        cause_named(
+                            "land.git_blob",
+                            f"land.git_blob: {name}: exact blob required",
+                            owner="project.headers",
+                            stage="land",
+                        )
+                    )
                 size = int(header[2])
                 cursor = end + 1
                 files[project.root / name] = payload[cursor : cursor + size]
@@ -225,7 +254,14 @@ class TreeView:
         if physical.is_symlink():
             target = physical.resolve()
             if not target.is_relative_to(self.root) and not any(target.is_relative_to(root) for root in self.roots):
-                raise Held("headers", f"headers.symlink: {physical}: forbidden escape")
+                raise Held(
+                    cause_named(
+                        "headers.symlink",
+                        f"headers.symlink: {physical}: forbidden escape",
+                        owner="project.headers",
+                        stage="headers",
+                    )
+                )
             return inputs.FilePin(
                 path, "symlink", cache.key(os.readlink(physical), self.read(physical)), self.logical(target)
             )
@@ -625,7 +661,14 @@ class Graph:
                 continue
             row = self.projection(path)
             if row.parse_error:
-                raise Held("headers", f"headers.projection: {path}: {row.parse_error}")
+                raise Held(
+                    cause_named(
+                        "headers.projection",
+                        f"headers.projection: {path}: {row.parse_error}",
+                        owner="project.headers",
+                        stage="headers",
+                    )
+                )
             offered = row.tags if complete else row.ordinary | row.typedefs | row.macros.keys()
             for name in wanted & set(offered):
                 result.setdefault(name, set()).add(path)
@@ -690,7 +733,7 @@ class Graph:
         for path in sorted(contents, key=lambda p: p not in view.generated):
             row = graph.projection(path)
             if row.parse_error:
-                raise Held("m2c", f"{path}: {row.parse_error}")
+                raise Held(cause_named(f"{path}", f"{path}: {row.parse_error}", owner="project.headers", stage="m2c"))
             for name in row.ordinary | row.typedefs | row.tags:
                 if path in view.generated or name not in providers:
                     providers.setdefault(name, set()).add(path)
@@ -774,7 +817,14 @@ class ProviderSet:
         for path, text in contents.items():
             projection = graph.projection(path)
             if projection.parse_error:
-                raise Held("headers", f"headers.projection: {path}: {projection.parse_error}")
+                raise Held(
+                    cause_named(
+                        "headers.projection",
+                        f"headers.projection: {path}: {projection.parse_error}",
+                        owner="project.headers",
+                        stage="headers",
+                    )
+                )
             row = projection.declarations
             macros = {name: body for name, body in projection.macros.items() if not name.startswith("UNBAKE_")}
             for name in row.typedefs | row.declared | macros.keys():
@@ -807,3 +857,12 @@ class ProviderSet:
                 self.names[name] = {chosen}
                 if name in self.tags:
                     self.tags[name] = {chosen}
+
+
+def without_includes(source: str) -> str:
+    """Mask known include spans without a second directive parser or changing source coordinates."""
+    for directive in reversed(scan(source)):
+        if not directive.unknown:
+            span = source[directive.start : directive.end]
+            source = source[: directive.start] + re.sub(r"[^\n]", " ", span) + source[directive.end :]
+    return source

@@ -12,6 +12,7 @@ from unbake import cache as retention
 from unbake.cache import memo
 from unbake.cdecl import declaration_source, declarations
 from unbake.config import Held, Host, Project
+from unbake.process import named as cause_named
 from unbake.project.headers import Graph, HeaderCheck, recipe, retention_recipe
 from unbake.project.headers import project as projection
 
@@ -71,12 +72,26 @@ def _source_job(
 def _header(text: str, reader: str) -> tuple[frozenset[str], dict[str, set[str]]]:
     row = projection(text, reader)
     if row.parse_error:
-        raise Held("headers", f"headers.projection: {row.parse_error}")
+        raise Held(
+            cause_named(
+                "headers.projection",
+                f"headers.projection: {row.parse_error}",
+                owner="layout.header_loss",
+                stage="headers",
+            )
+        )
     dependencies: dict[str, set[str]] = {}
     for statement in row.statements:
         part = projection(statement, reader)
         if part.parse_error:
-            raise Held("headers", f"headers.projection: {part.parse_error}")
+            raise Held(
+                cause_named(
+                    "headers.projection",
+                    f"headers.projection: {part.parse_error}",
+                    owner="layout.header_loss",
+                    stage="headers",
+                )
+            )
         for name in part.names:
             dependencies.setdefault(name, set()).update(_words(statement))
     return row.names, dependencies
@@ -157,7 +172,14 @@ def check(
                 if path.suffix == ".h" and path in graph.view.files:
                     row = graph.projection(path)
                     if any(i.unknown or i.conditional for i in row.includes):
-                        raise Held("headers", f"headers.include_unknown: {path}: native dependency proof required")
+                        raise Held(
+                            cause_named(
+                                "headers.include_unknown",
+                                f"headers.include_unknown: {path}: native dependency proof required",
+                                owner="layout.header_loss",
+                                stage="headers",
+                            )
+                        )
         kept = set().union(*(projections[text][0] for text in contents[1].values()))
         lost = {p: set(projections[text][0]) - kept for p, text in contents[0].items() if p in changes}
         dependencies: dict[str, set[str]] = {}
@@ -181,7 +203,14 @@ def check(
             )
         refusals = [reason for batch in checked for reason in batch]
         if refusals:
-            raise Held("headers", "headers.merge_only: " + "; ".join(refusals))
+            raise Held(
+                cause_named(
+                    "layout.header_loss.validate",
+                    "headers.merge_only: " + "; ".join(refusals),
+                    owner="layout.header_loss",
+                    stage="headers",
+                )
+            )
         return HeaderCheck(len(texts), 0, len(rows), 0, affected, dependency_set, outputs_digest=inputs_key)
 
     result = store.value("header-check", content, cache.PICKLE, validate)

@@ -13,7 +13,7 @@ from unbake import atomic, buildfiles, runner
 from unbake.config import Held
 from unbake.objects import rodata
 from unbake.objects.elf import Object
-from unbake.work.score import compare_words
+from unbake.work.score import measure_words
 
 
 class UnresolvedSectionsTests(unittest.TestCase):
@@ -119,7 +119,7 @@ class TrialLinkTests(ProjectCase):
             patch.object(runner.process, "run_tool", side_effect=self.native),
         ):
             data, problems = runner.link_function(self.project, self.host, obj, "us", self.row, self.source)
-        measured = compare_words("us", self.code, data)
+        measured = measure_words("us", self.code, data)
         self.assertTrue(measured.exact)
         self.assertEqual(problems, [".rdata: no proved resident address"])
         measured.typed["relocation"] += len(problems)

@@ -15,6 +15,8 @@ from unbake import atomic as atomic_files
 from unbake import cache as retention
 from unbake import inputs, sqlite
 from unbake.config import Held
+from unbake.process import capture
+from unbake.process import named as cause_named
 
 # Names per `WHERE name IN (...)` read (SQLite's variable limit is far above this).
 READ_BATCH = 500
@@ -37,10 +39,16 @@ def validate_inventory(path: Path, inventory: Mapping[str, Any]) -> None:
                 extra = sorted(set(actual) - set(expected))
                 example = (missing or extra)[:3]
                 raise Held(
-                    "map",
-                    f"map.shards.inventory: expected {len(expected)} rows, found {len(actual)}; "
-                    f"missing {len(missing)}, extra {len(extra)}; examples {example}; "
-                    "run unbake recompute rom-facts --rom-facts-only",
+                    cause_named(
+                        "map.shards.inventory",
+                        (
+                            f"map.shards.inventory: expected {len(expected)} rows, found "
+                            f"{len(actual)}; missing {len(missing)}, extra {len(extra)}; "
+                            f"examples {example}; run unbake recompute rom-facts --rom-facts-only"
+                        ),
+                        owner="typemap.shards",
+                        stage="map",
+                    ),
                     data={
                         "expected_rows": len(expected),
                         "actual_rows": len(actual),
@@ -50,7 +58,17 @@ def validate_inventory(path: Path, inventory: Mapping[str, Any]) -> None:
                     },
                 )
         except (OSError, sqlite3.Error) as error:
-            raise Held("map", f"map.shards.inventory: {path}: {error}; run unbake recompute rom-facts") from error
+            raise Held(
+                capture(
+                    error,
+                    cause=cause_named(
+                        "map.shards.inventory",
+                        f"map.shards.inventory: {path}: {error}; run unbake recompute rom-facts",
+                        owner="typemap.shards",
+                        stage="map",
+                    ),
+                )
+            ) from error
 
     retention.parsed("shard-inventory", path, verify, extra=expected)
 
@@ -89,9 +107,23 @@ class Functions(Mapping[str, dict[str, Any]]):
                 rows = connection.execute("SELECT version, body FROM functions WHERE name=? ORDER BY version", (name,))
                 versions = {version: json.loads(zlib.decompress(body)) for version, body in rows}
         except (OSError, ValueError, zlib.error, sqlite3.Error) as error:
-            raise Held("solve", f"map.shards: {self.path}: {error}") from error
+            raise Held(
+                capture(
+                    error,
+                    cause=cause_named(
+                        "map.shards", f"map.shards: {self.path}: {error}", owner="typemap.shards", stage="solve"
+                    ),
+                )
+            ) from error
         if set(versions) != set(item["versions"]):
-            raise Held("solve", f"map.shards: missing containing version for {name}")
+            raise Held(
+                cause_named(
+                    "map.shards",
+                    f"map.shards: missing containing version for {name}",
+                    owner="typemap.shards",
+                    stage="solve",
+                )
+            )
         for version, body in versions.items():
             body.update(item["versions"][version])
         return {"aliases": item["aliases"], "versions": versions}
@@ -115,12 +147,26 @@ class Functions(Mapping[str, dict[str, Any]]):
                     for name, version, body in rows:
                         bodies[name][version] = json.loads(zlib.decompress(body))
         except (OSError, ValueError, zlib.error, sqlite3.Error) as error:
-            raise Held("solve", f"map.shards: {self.path}: {error}") from error
+            raise Held(
+                capture(
+                    error,
+                    cause=cause_named(
+                        "map.shards", f"map.shards: {self.path}: {error}", owner="typemap.shards", stage="solve"
+                    ),
+                )
+            ) from error
         items = {}
         for name in names:
             item, versions = self.inventory[name], bodies[name]
             if set(versions) != set(item["versions"]):
-                raise Held("solve", f"map.shards: missing containing version for {name}")
+                raise Held(
+                    cause_named(
+                        "map.shards",
+                        f"map.shards: missing containing version for {name}",
+                        owner="typemap.shards",
+                        stage="solve",
+                    )
+                )
             for version, body in versions.items():
                 body.update(item["versions"][version])
             items[name] = {"aliases": item["aliases"], "versions": versions}
@@ -135,10 +181,24 @@ class Functions(Mapping[str, dict[str, Any]]):
                 .fetchone()
             )
             if row is None:
-                raise Held("solve", f"map.shards: missing containing version for {name}: {version}")
+                raise Held(
+                    cause_named(
+                        "map.shards",
+                        f"map.shards: missing containing version for {name}: {version}",
+                        owner="typemap.shards",
+                        stage="solve",
+                    )
+                )
             body: dict[str, Any] = json.loads(zlib.decompress(row[0]))
         except (OSError, ValueError, zlib.error, sqlite3.Error) as error:
-            raise Held("solve", f"map.shards: {self.path}: {error}") from error
+            raise Held(
+                capture(
+                    error,
+                    cause=cause_named(
+                        "map.shards", f"map.shards: {self.path}: {error}", owner="typemap.shards", stage="solve"
+                    ),
+                )
+            ) from error
         body.update(self.inventory[name]["versions"][version])
         return body
 
@@ -196,9 +256,15 @@ class Writer:
         actual = tuple(self.connection.execute("SELECT name,version FROM functions ORDER BY name,version"))
         if actual != owners:
             raise Held(
-                "map",
-                f"map.shards.inventory: producer expected {len(owners)} rows, wrote {len(actual)}; "
-                "incomplete facts were not published",
+                cause_named(
+                    "map.shards.inventory",
+                    (
+                        f"map.shards.inventory: producer expected {len(owners)} rows, wrote "
+                        f"{len(actual)}; incomplete facts were not published"
+                    ),
+                    owner="typemap.shards",
+                    stage="map",
+                )
             )
         self.connection.commit()
         self.connection.close()

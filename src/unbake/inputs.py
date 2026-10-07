@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 from collections.abc import Iterable, Mapping
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -11,6 +12,7 @@ from typing import Any, Literal
 
 from unbake import cache
 from unbake.config import Held
+from unbake.process import named as cause_named
 
 Signature = tuple[int, int, int, int, int]
 
@@ -22,14 +24,18 @@ def signature(path: Path) -> Signature:
 
 def bytes_digest(data: bytes, *, algorithm: Literal["sha256", "sha1"]) -> str:
     if algorithm not in ("sha256", "sha1"):
-        raise Held("inputs", "inputs.algorithm: expected sha256 or sha1")
+        raise Held(
+            cause_named("inputs.algorithm", "inputs.algorithm: expected sha256 or sha1", owner="inputs", stage="inputs")
+        )
     return hashlib.new(algorithm, data).hexdigest()
 
 
 def digest(path: Path, *, algorithm: Literal["sha256", "sha1"], reuse: bool) -> str:
     """Full stat identity is only a local read optimization; the persisted identity is content."""
     if algorithm not in ("sha256", "sha1"):
-        raise Held("inputs", "inputs.algorithm: expected sha256 or sha1")
+        raise Held(
+            cause_named("inputs.algorithm", "inputs.algorithm: expected sha256 or sha1", owner="inputs", stage="inputs")
+        )
     path = Path(path)
 
     def read() -> str:
@@ -37,13 +43,24 @@ def digest(path: Path, *, algorithm: Literal["sha256", "sha1"], reuse: bool) -> 
         with path.open("rb") as stream:
             result = hashlib.file_digest(stream, algorithm).hexdigest()
         if signature(path) != before:
-            raise Held("inputs", f"inputs.changed: {path}: changed while reading")
+            raise Held(
+                cause_named(
+                    "inputs.changed", f"inputs.changed: {path}: changed while reading", owner="inputs", stage="inputs"
+                )
+            )
         return result
 
     if not reuse:
         return read()
     if not cache.configured():
-        raise Held("inputs", "cache.memory_bytes: configure before requesting digest reuse")
+        raise Held(
+            cause_named(
+                "cache.memory_bytes",
+                "cache.memory_bytes: configure before requesting digest reuse",
+                owner="inputs",
+                stage="inputs",
+            )
+        )
     return cache.memo(
         "inputs.digest", (str(path.absolute()), signature(path), algorithm), read, size=cache.memory_size, copy_out=str
     )
@@ -56,7 +73,14 @@ class LogicalPath:
 
     def __post_init__(self) -> None:
         if not self.root or any(part in ("", ".", "..") or "/" in part or "\\" in part for part in self.parts):
-            raise Held("inputs", "inputs.path: named root and safe relative components required")
+            raise Held(
+                cause_named(
+                    "inputs.path",
+                    "inputs.path: named root and safe relative components required",
+                    owner="inputs",
+                    stage="inputs",
+                )
+            )
 
     @property
     def name(self) -> str:
@@ -70,12 +94,44 @@ class FilePin:
     sha256: str | None
     link_target: LogicalPath | None = None
 
+    def __post_init__(self) -> None:
+        if (
+            self.state not in ("file", "missing", "symlink")
+            or (self.state == "missing" and self.sha256 is not None)
+            or (
+                self.state != "missing"
+                and (not isinstance(self.sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", self.sha256))
+            )
+        ):
+            raise Held(cause_named("inputs.pin", "invalid file state or sha256", owner="inputs", stage="inputs"))
+
 
 @dataclass(frozen=True)
 class DependencySet:
     files: tuple[FilePin, ...]
     values: Mapping[str, Any]
     recipes: Mapping[str, str]
+
+    def __post_init__(self) -> None:
+        if (
+            not isinstance(self.files, tuple)
+            or not isinstance(self.values, Mapping)
+            or not isinstance(self.recipes, Mapping)
+            or any(
+                not isinstance(k, str) or not isinstance(v, str) or not re.fullmatch(r"[0-9a-f]{64}", v)
+                for k, v in self.recipes.items()
+            )
+        ):
+            raise Held(
+                cause_named(
+                    "inputs.dependencies",
+                    "explicit dependency files, values and sha256 recipes required",
+                    owner="inputs",
+                    stage="inputs",
+                )
+            )
+        if len({p.path for p in self.files}) != len(self.files):
+            raise Held(cause_named("inputs.dependencies", "duplicate logical file pin", owner="inputs", stage="inputs"))
 
     @property
     def digest(self) -> str:
@@ -92,7 +148,7 @@ class DependencySet:
 def file_pin(path: Path, *, root: Path, root_id: str, reuse: bool) -> FilePin:
     path, root = Path(path).absolute(), Path(root).absolute()
     if not path.is_relative_to(root):
-        raise Held("inputs", "inputs.path: outside named root")
+        raise Held(cause_named("inputs.path", "inputs.path: outside named root", owner="inputs", stage="inputs"))
     logical = LogicalPath(root_id, path.relative_to(root).parts)
     target = None
     if path.is_symlink():
@@ -100,7 +156,14 @@ def file_pin(path: Path, *, root: Path, root_id: str, reuse: bool) -> FilePin:
         candidate = (path.parent / spelling).absolute()
         resolved = candidate.resolve()
         if not resolved.is_relative_to(root.resolve()):
-            raise Held("inputs", f"inputs.symlink: {logical.name}: forbidden escape")
+            raise Held(
+                cause_named(
+                    "inputs.symlink",
+                    f"inputs.symlink: {logical.name}: forbidden escape",
+                    owner="inputs",
+                    stage="inputs",
+                )
+            )
         # Keep spelling, including permitted relative traversal, in the pin's digest.
         target = LogicalPath(root_id, resolved.relative_to(root.resolve()).parts)
         sha = (
@@ -110,7 +173,14 @@ def file_pin(path: Path, *, root: Path, root_id: str, reuse: bool) -> FilePin:
         )
         return FilePin(logical, "symlink", sha, target)
     if not path.resolve().is_relative_to(root.resolve()):
-        raise Held("inputs", f"inputs.symlink: {logical.name}: forbidden parent escape")
+        raise Held(
+            cause_named(
+                "inputs.symlink",
+                f"inputs.symlink: {logical.name}: forbidden parent escape",
+                owner="inputs",
+                stage="inputs",
+            )
+        )
     if not path.is_file():
         return FilePin(logical, "missing", None)
     return FilePin(logical, "file", digest(path, algorithm="sha256", reuse=reuse))

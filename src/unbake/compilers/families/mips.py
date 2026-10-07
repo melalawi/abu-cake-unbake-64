@@ -7,6 +7,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 
 from unbake.config import Held
+from unbake.process import named as cause_named
 
 
 @dataclass(frozen=True)
@@ -25,18 +26,39 @@ def relocation_pairs(relocations: Iterable[Relocation]) -> list[tuple[Relocation
     pairs: list[tuple[Relocation | None, Relocation]] = []
     for relocation in relocations:
         if not relocation.name:
-            raise Held("families", "relocation.name: missing value")
+            raise Held(
+                cause_named(
+                    "relocation.name",
+                    "relocation.name: missing value",
+                    owner="compilers.families.mips",
+                    stage="families",
+                )
+            )
         if relocation.kind == 5:
             pending.setdefault(relocation.name, []).append(relocation)
         elif relocation.kind == 6:
             highs = pending.pop(relocation.name, [])
             if not highs:
-                raise Held("families", f"{relocation.name}: LO16 has no HI16 pair")
+                raise Held(
+                    cause_named(
+                        f"{relocation.name}",
+                        f"{relocation.name}: LO16 has no HI16 pair",
+                        owner="compilers.families.mips",
+                        stage="families",
+                    )
+                )
             pairs.extend((high, relocation) for high in highs)
         else:
             pairs.append((None, relocation))
     if pending:
-        raise Held("families", f"{', '.join(sorted(pending))}: HI16 has no LO16 pair")
+        raise Held(
+            cause_named(
+                f"{', '.join(sorted(pending))}",
+                f"{', '.join(sorted(pending))}: HI16 has no LO16 pair",
+                owner="compilers.families.mips",
+                stage="families",
+            )
+        )
     return pairs
 
 
@@ -67,7 +89,14 @@ def isa_level(compiler: str, cflags: tuple[str, ...]) -> int:
     """The MIPS ISA level the compiler's flags name (the last -mipsN); refused when they name none."""
     levels = [int(flag[5:]) for flag in cflags if re.fullmatch(r"-mips[1-4]", flag)]
     if not levels:
-        raise Held("families", f"compilers.{compiler}.cflags: required -mipsN")
+        raise Held(
+            cause_named(
+                f"compilers.{compiler}.cflags",
+                f"compilers.{compiler}.cflags: required -mipsN",
+                owner="compilers.families.mips",
+                stage="families",
+            )
+        )
     return levels[-1]
 
 
@@ -82,7 +111,14 @@ def emitters(shapes: Iterable[Shape]) -> Shape:
     and only the rules every one of them switches on. Entry state, alignment and fragment size are not used."""
     shapes = list(shapes)
     if not shapes:
-        raise Held("families", "compilers: required at least one configured compiler")
+        raise Held(
+            cause_named(
+                "compilers",
+                "compilers: required at least one configured compiler",
+                owner="compilers.families.mips",
+                stage="families",
+            )
+        )
     first = shapes[0]
     rules = frozenset.intersection(*(item.rules for item in shapes)) & ORIGINAL_RULES
     return Shape(max(item.isa_level for item in shapes), first.entry_gprs, first.entry_fprs, 0, 0, rules)
@@ -99,7 +135,14 @@ def o32_shape(
     ):
         supplied = [flag for flag in cflags if flag.startswith(prefix)]
         if any(flag not in permitted for flag in supplied):
-            raise Held("families", f"compilers.{compiler}.cflags: unsupported {prefix} values {supplied}")
+            raise Held(
+                cause_named(
+                    f"compilers.{compiler}.cflags",
+                    f"compilers.{compiler}.cflags: unsupported {prefix} values {supplied}",
+                    owner="compilers.families.mips",
+                    stage="families",
+                )
+            )
     rules = RULES | OPTIMIZING_RULES if optimizing(cflags) else RULES
     if likely_copies:
         rules |= {"likely_copy"}

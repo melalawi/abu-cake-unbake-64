@@ -10,6 +10,7 @@ from typing import Any, NoReturn, Protocol, TextIO
 
 from unbake import config, tui
 from unbake.config import Held, Host, PendingProject, Project
+from unbake.process import named as cause_named
 
 
 class HelpRequested(Exception):
@@ -27,7 +28,7 @@ class Parser(argparse.ArgumentParser):
         super().__init__(*args, **kwargs)
 
     def error(self, message: str) -> NoReturn:
-        raise Held("usage", f"usage: {self.prog}: {message}")
+        raise Held(cause_named("usage", f"usage: {self.prog}: {message}", owner="cli.args", stage="usage"))
 
     def print_help(self, file: Any = None) -> None:
         tui.write(self.format_help())
@@ -70,19 +71,34 @@ class Context:
 
     def project(self) -> Project:
         if self.root is None:
-            raise Held("config", "project.root: no project; supply --project DIR")
+            raise Held(
+                cause_named(
+                    "project.root", "project.root: no project; supply --project DIR", owner="cli.args", stage="config"
+                )
+            )
         if self._project is None:
             self._project = config.load(self.root)
         return self._project
 
     def pending(self) -> PendingProject:
         if self.root is None:
-            raise Held("config", "project.root: no project; supply --project DIR")
+            raise Held(
+                cause_named(
+                    "project.root", "project.root: no project; supply --project DIR", owner="cli.args", stage="config"
+                )
+            )
         return config.load_pending(self.root)
 
     def require_host(self) -> Host:
         if self.host is None:
-            raise Held("config", f"unbake.toml: {self.command} needs host configuration")
+            raise Held(
+                cause_named(
+                    "unbake.toml",
+                    f"unbake.toml: {self.command} needs host configuration",
+                    owner="cli.args",
+                    stage="config",
+                )
+            )
         return self.host
 
     def ready(self, *names: str) -> tuple[Project, Host]:

@@ -11,6 +11,7 @@ from unbake.cli import publish
 from unbake.cli.args import Context
 from unbake.config import Held
 from unbake.fold.apply import Folded
+from unbake.process import named
 
 
 class PublishEventTests(ProjectCase):
@@ -34,7 +35,14 @@ class PublishEventTests(ProjectCase):
             if function == "beta":
                 self.assertTrue(stream.getvalue(), "successful sibling receipt was buffered")
                 observed.append("beta")
-                raise Held("fold", "fold.refused: beta lacks a canonical declaration")
+                raise Held(
+                    named(
+                        "fold.refused",
+                        "fold.refused: beta lacks a canonical declaration",
+                        owner="fixture",
+                        stage="fold",
+                    )
+                )
             return Folded(function, text, {}, ())
 
         def merge(*args, **kwargs):
@@ -44,7 +52,11 @@ class PublishEventTests(ProjectCase):
             )
             observed.append("merge")
             if merge_refusal:
-                raise Held("merge", "merge.proof: a subsequent merge does not prove")
+                raise Held(
+                    named(
+                        "merge.proof", "merge.proof: a subsequent merge does not prove", owner="fixture", stage="merge"
+                    )
+                )
 
         with (
             patch.object(

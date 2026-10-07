@@ -10,6 +10,7 @@ from typing import Any, NoReturn, cast
 from unbake.config import Held
 from unbake.decomp.needs import LayoutNeed, Need, register_resolver
 from unbake.layout.split import Edit
+from unbake.process import named as cause_named
 
 
 @dataclass(frozen=True)
@@ -43,7 +44,7 @@ class Layout:
 
 
 def held(name: str, reason: str) -> NoReturn:
-    raise Held("structs", f"{name}: {reason}")
+    raise Held(cause_named(f"{name}", f"{name}: {reason}", owner="layout.structs", stage="structs"))
 
 
 def preprocess(source: Path, project: Any, policy: Any, version: str) -> str:

@@ -202,3 +202,27 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+def append_record(path: Path, content: bytes, *, durable: bool) -> None:
+    """Append one complete immutable record; the caller holds its stable ledger lock."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    existed = path.exists()
+    descriptor = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
+    try:
+        view = memoryview(content)
+        while view:
+            written = os.write(descriptor, view)
+            if written <= 0:
+                raise OSError("incomplete record append")
+            view = view[written:]
+        if durable:
+            os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+    if durable and not existed:
+        directory = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)

@@ -20,6 +20,7 @@ from unittest.mock import patch
 from tests.kit import TempCase, host_values
 from unbake import admission, pool
 from unbake.config import Held, Host
+from unbake.process import named
 
 
 class Groups:
@@ -352,7 +353,7 @@ class StandaloneAdmissionTests(TempCase):
 
     def test_standalone_preserves_command_failure_and_next_admission_clears_receipt(self):
         with self.assertRaisesRegex(Held, "compare failed"), admission.command(self.host):
-            raise Held("compare", "compare failed")
+            raise Held(named("fixture.refusal", "compare failed", owner="fixture", stage="compare"))
         with admission.command(None):
             self.assertEqual(admission.receipt, {})
 

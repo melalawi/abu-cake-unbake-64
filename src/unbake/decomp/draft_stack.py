@@ -4,6 +4,7 @@ import re
 
 from unbake.config import Held
 from unbake.layout.structs import Layout
+from unbake.process import named as cause_named
 
 
 def overlay(output: str, template: Layout, prefix_size: int, function: str, assembly: str) -> str | None:
@@ -12,15 +13,36 @@ def overlay(output: str, template: Layout, prefix_size: int, function: str, asse
     rows = list(re.finditer(r"/\*\s*(0x[\dA-Fa-f]+)\s*\*/\s*([^;\n]+);", text))
     entry = re.search(rf"\b{re.escape(function)}\s*\([^;{{}}]*\)\s*{{", output[end:])
     if entry is None:
-        raise Held("m2c", f"{function}: missing body for inferred stack declarations")
+        raise Held(
+            cause_named(
+                f"{function}",
+                f"{function}: missing body for inferred stack declarations",
+                owner="decomp.draft_stack",
+                stage="m2c",
+            )
+        )
     entry_end = end + entry.end()
     body = output[entry_end:]
     if not (re.search(r"\b(?:sp|unksp[\dA-Fa-f]+)\b", body) or re.search(r"\[\s*\]", text)):
         return None
     if not rows:
-        raise Held("m2c", f"{function}: raw stack access has no measured stack offsets")
+        raise Held(
+            cause_named(
+                f"{function}",
+                f"{function}: raw stack access has no measured stack offsets",
+                owner="decomp.draft_stack",
+                stage="m2c",
+            )
+        )
     if len(rows) != len(template.fields):
-        raise Held("m2c", f"{function}: stack offset annotations do not correspond to inferred declarations")
+        raise Held(
+            cause_named(
+                f"{function}",
+                f"{function}: stack offset annotations do not correspond to inferred declarations",
+                owner="decomp.draft_stack",
+                stage="m2c",
+            )
+        )
     offsets = [int(row[1], 16) for row in rows]
     members = {member.name: member for member in template.fields}
     size_match = re.match(r"\s*;\s*/\*\s*size\s*=?\s*(0x[\dA-Fa-f]+)", output[end:])
@@ -34,7 +56,14 @@ def overlay(output: str, template: Layout, prefix_size: int, function: str, asse
         declaration = row[2].strip() + ";"
         name_match = re.search(r"\b([A-Za-z_]\w*)\s*(?:\[[^\]]*\]\s*)*;", declaration)
         if name_match is None:
-            raise Held("m2c", f"{function}: unsupported stack declaration {declaration}")
+            raise Held(
+                cause_named(
+                    f"{function}",
+                    f"{function}: unsupported stack declaration {declaration}",
+                    owner="decomp.draft_stack",
+                    stage="m2c",
+                )
+            )
         name = name_match[1]
         member = members[name]
         if name.startswith("pad"):
@@ -45,10 +74,24 @@ def overlay(output: str, template: Layout, prefix_size: int, function: str, asse
             from unbake.layout.structs_types import SCALARS
 
             if scalar not in SCALARS:
-                raise Held("m2c", f"{function}.{name}: missing array element layout {scalar}")
+                raise Held(
+                    cause_named(
+                        f"{function}.{name}",
+                        f"{function}.{name}: missing array element layout {scalar}",
+                        owner="decomp.draft_stack",
+                        stage="m2c",
+                    )
+                )
             width = SCALARS[scalar][0]
             if following <= offset or (following - offset) % width:
-                raise Held("m2c", f"{function}.{name}: cannot prove stack array extent")
+                raise Held(
+                    cause_named(
+                        f"{function}.{name}",
+                        f"{function}.{name}: cannot prove stack array extent",
+                        owner="decomp.draft_stack",
+                        stage="m2c",
+                    )
+                )
             declaration = re.sub(r"\[\s*\]", f"[{(following - offset) // width}]", declaration, count=1)
         views[name] = (offset, declaration)
     for name in set(re.findall(r"\bunksp([\dA-Fa-f]+)\b", body)):
@@ -56,12 +99,25 @@ def overlay(output: str, template: Layout, prefix_size: int, function: str, asse
         # These are omitted GP stack reads, not invented untyped locals.
         load = re.search(rf"\blw\s+\$\w+,\s*0x0*{name}\(\$sp\)", assembly, re.I)
         if load is None:
-            raise Held("m2c", f"{function}.unksp{name}: no word-load stack evidence")
+            raise Held(
+                cause_named(
+                    f"{function}.unksp{name}",
+                    f"{function}.unksp{name}: no word-load stack evidence",
+                    owner="decomp.draft_stack",
+                    stage="m2c",
+                )
+            )
         if offset + 4 > frame_size:
             raise Held(
-                "m2c",
-                f"{function}.unksp{name}: word read lies outside measured local frame 0x{frame_size:X}; "
-                "incoming stack argument layout is unresolved",
+                cause_named(
+                    f"{function}.unksp{name}",
+                    (
+                        f"{function}.unksp{name}: word read lies outside measured local frame "
+                        f"0x{frame_size:X}; incoming stack argument layout is unresolved"
+                    ),
+                    owner="decomp.draft_stack",
+                    stage="m2c",
+                )
             )
         views["unksp" + name] = (offset, f"s32 unksp{name};")
     locals_end = body.find("\n\n")

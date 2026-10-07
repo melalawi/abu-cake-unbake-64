@@ -18,6 +18,7 @@ from unbake.cdecl import NAME_TOKEN, declaration_source, declarations
 from unbake.config import Held, Host, Project
 from unbake.layout import redeclarations
 from unbake.layout.split import Edit
+from unbake.process import named as cause_named
 from unbake.project.headers import Graph
 
 
@@ -77,8 +78,13 @@ def _refuse(project: Project, contents: dict[Path, str], name: str, paths: list[
         line = text.count("\n", 0, offset) + 1
         labels.append(f"{label}:{line}")
     raise Held(
-        "structs",
-        f"headers.declaration.duplicate-shared-provider: {name}: {detail}; providers: " + ", ".join(map(str, labels)),
+        cause_named(
+            "fold.provider_reuse._refuse",
+            f"headers.declaration.duplicate-shared-provider: {name}: {detail}; providers: "
+            + ", ".join(map(str, labels)),
+            owner="fold.provider_reuse",
+            stage="structs",
+        )
     )
 
 

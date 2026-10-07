@@ -12,6 +12,7 @@ from tests.kit import with_value
 from unbake.config import Held, Host
 from unbake.decomp import gbi
 from unbake.decomp.gbi_expr import Ambiguous
+from unbake.process import named
 
 
 class GbiTests(unittest.TestCase):
@@ -223,7 +224,10 @@ void f(void) {
             code = project.src / "alpha.c"
             original = "typedef struct {unsigned w0,w1;} Gfx; void alpha(Gfx *p) {p->w0=0xE7000000;p->w1=0;}"
             code.write_text(original)
-            with patch("unbake.decomp.gbi_proof.preserve", side_effect=Held("gbi", "alpha: rewrite changes codegen")):
+            with patch(
+                "unbake.decomp.gbi_proof.preserve",
+                side_effect=Held(named("alpha", "alpha: rewrite changes codegen", owner="fixture", stage="gbi")),
+            ):
                 result = gbi.rewrite(project, cast(Host, policy), [code])
             self.assertEqual(code.read_text(), original)
             self.assertEqual(result["files_rewritten"], 0)
@@ -301,7 +305,10 @@ void f(void) {
                 "typedef struct {unsigned w0,w1;} Gfx; extern Gfx *dl;\n"
                 "void alpha(void) { Gfx *p; p=dl++; p->w0=0xE7000000; p->w1=0; }\n"
             )
-            with patch("unbake.decomp.gbi_proof.preserve", side_effect=[Held("gbi", "alpha: changed codegen"), None]):
+            with patch(
+                "unbake.decomp.gbi_proof.preserve",
+                side_effect=[Held(named("alpha", "alpha: changed codegen", owner="fixture", stage="gbi")), None],
+            ):
                 result = gbi.rewrite(project, cast(Host, policy), [code])
             self.assertEqual(result["files_rewritten"], 1)
             self.assertIn("p=dl++;", code.read_text())

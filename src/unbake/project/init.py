@@ -8,7 +8,8 @@ from uuid import uuid4
 
 from unbake import atomic as atomic_files
 from unbake.config import SCHEMA_VERSION, Held
-from unbake.process import temporary_environment
+from unbake.process import capture, temporary_environment
+from unbake.process import named as cause_named
 from unbake.project import hygiene
 
 
@@ -24,19 +25,32 @@ def run(target: Path, *, layout_cap: int) -> list[str]:
     positive(layout_cap, "project.layout_cap")
     target = Path(target).expanduser().absolute()
     if target.is_symlink() or any(parent.is_symlink() for parent in target.parents):
-        raise Held("init", f"init.target: {target}: symlink")
+        raise Held(cause_named("init.target", f"init.target: {target}: symlink", owner="project.init", stage="init"))
     if target.exists() and (not target.is_dir() or any(target.iterdir())):
-        raise Held("init", f"init.target: {target}: expected empty directory")
+        raise Held(
+            cause_named(
+                "init.target", f"init.target: {target}: expected empty directory", owner="project.init", stage="init"
+            )
+        )
     if target.name in ("", ".", "..") or any(ord(character) < 32 for character in target.name):
-        raise Held("init", f"init.target: {target}: invalid filesystem name")
+        raise Held(
+            cause_named(
+                "init.target", f"init.target: {target}: invalid filesystem name", owner="project.init", stage="init"
+            )
+        )
     git = shutil.which("git")
     if git is None:
-        raise Held("init", "git: missing executable")
+        raise Held(cause_named("git", "git: missing executable", owner="project.init", stage="init"))
     template = Path(__file__).parents[1] / "templates" / "CONTRIBUTING.pending.md"
     try:
         contributing = template.read_text()
     except OSError as error:
-        raise Held("init", f"init.docs: {template}: {error}") from error
+        raise Held(
+            capture(
+                error,
+                cause=cause_named("init.docs", f"init.docs: {template}: {error}", owner="project.init", stage="init"),
+            )
+        ) from error
     existed = target.exists()
     target.mkdir(parents=True, exist_ok=True)
     try:
@@ -48,7 +62,7 @@ def run(target: Path, *, layout_cap: int) -> list[str]:
             text=True,
         )
         if result.returncode:
-            raise Held("init", f"git: {result.stderr.strip()}")
+            raise Held(cause_named("git", f"git: {result.stderr.strip()}", owner="project.init", stage="init"))
         quote = json.dumps
         atomic_files.text(
             target / "config.toml",

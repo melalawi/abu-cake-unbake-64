@@ -2,14 +2,315 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import subprocess
+import traceback
 from collections.abc import Mapping
-from dataclasses import asdict, dataclass
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any, Literal
+
+if TYPE_CHECKING:
+    from unbake.inputs import DependencySet
 
 from unbake.config import Held
+
+
+@dataclass(frozen=True)
+class SourceLocation:
+    path: str
+    line: int | None = None
+    column: int | None = None
+
+
+@dataclass(frozen=True)
+class Action:
+    kind: Literal["command", "edit", "stop"]
+    argv: tuple[str, ...] = ()
+    paths: tuple[str, ...] = ()
+    reason: str = ""
+
+    def render(self, context: Any) -> str:
+        if self.kind == "command":
+            words = tuple(
+                str(context.root / word.removeprefix("project:")) if word.startswith("project:") else word
+                for word in self.argv
+            )
+            return str(context.cmd(*words))
+        reason = self.reason.removeprefix("stop: ")
+        return "stop: " + reason
+
+
+@dataclass(frozen=True)
+class RetryRule:
+    kind: Literal["dependencies", "worker-generation", "never"]
+    watch: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class Cause:
+    key: str
+    owner: str
+    stage: str
+    subject: str
+    reason: str
+    location: SourceLocation | None
+    dependency_set: DependencySet
+    retry: RetryRule
+    action: Action
+    evidence: Mapping[str, Any] = field(default_factory=dict)
+
+    @property
+    def id(self) -> str:
+        stable = {
+            "owner": self.owner,
+            "key": self.key,
+            "stage": self.stage,
+            "subject": self.subject,
+            "location": asdict(self.location) if self.location else None,
+            "signature": self.evidence.get("signature"),
+        }
+        return hashlib.sha256(
+            json.dumps(stable, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
+        ).hexdigest()
+
+    @property
+    def blocked_key(self) -> str:
+        from unbake.cache import key
+
+        return key(self.id, self.dependency_set.digest)
+
+    @property
+    def retryability(self) -> str:
+        return "unknown" if self.dependency_set.values.get("dependencies_unknown") else self.retry.kind
+
+    def document(self) -> dict[str, Any]:
+        return {
+            "key": self.key,
+            "owner": self.owner,
+            "stage": self.stage,
+            "subject": self.subject,
+            "reason": self.reason,
+            "location": asdict(self.location) if self.location else None,
+            "dependency_set": self.dependency_set.document(),
+            "retry": asdict(self.retry),
+            "action": asdict(self.action),
+            "evidence": dict(self.evidence),
+            "cause_id": self.id,
+            "blocked_key": self.blocked_key,
+            "retryability": self.retryability,
+        }
+
+    @classmethod
+    def read(cls, value: Mapping[str, Any]) -> Cause:
+        from unbake.inputs import DependencySet, FilePin, LogicalPath
+
+        required = {
+            "key",
+            "owner",
+            "stage",
+            "subject",
+            "reason",
+            "location",
+            "dependency_set",
+            "retry",
+            "action",
+            "evidence",
+        }
+        if required - value.keys():
+            raise ValueError("fault.cause: incomplete explicit cause")
+        for name in ("key", "owner", "stage", "subject", "reason"):
+            if not isinstance(value[name], str) or not value[name]:
+                raise ValueError("fault.cause: explicit nonempty " + name + " required")
+        if (
+            value["retry"]["kind"] not in ("dependencies", "worker-generation", "never")
+            or not isinstance(value["retry"]["watch"], (tuple, list))
+            or any(not isinstance(k, str) for k in value["retry"]["watch"])
+        ):
+            raise ValueError("fault.retry: explicit rule required")
+        if value["action"]["kind"] not in ("command", "edit", "stop") or not isinstance(value["evidence"], Mapping):
+            raise ValueError("fault.action: typed action and evidence required")
+        dependencies = value["dependency_set"]
+        pins = tuple(
+            FilePin(
+                LogicalPath(row["path"]["root"], tuple(row["path"]["parts"])),
+                row["state"],
+                row["sha256"],
+                LogicalPath(row["link_target"]["root"], tuple(row["link_target"]["parts"]))
+                if row["link_target"]
+                else None,
+            )
+            for row in dependencies["files"]
+        )
+        return cls(
+            value["key"],
+            value["owner"],
+            value["stage"],
+            value["subject"],
+            value["reason"],
+            SourceLocation(**value["location"]) if value["location"] else None,
+            DependencySet(pins, dependencies["values"], dependencies["recipes"]),
+            RetryRule(value["retry"]["kind"], tuple(value["retry"]["watch"])),
+            Action(
+                value["action"]["kind"],
+                tuple(value["action"]["argv"]),
+                tuple(value["action"]["paths"]),
+                value["action"]["reason"],
+            ),
+            value["evidence"],
+        )
+
+
+@dataclass(frozen=True)
+class Frame:
+    kind: Literal["context", "python", "native"]
+    owner: str
+    stage: str
+    reason: str
+    evidence: Mapping[str, Any] = field(default_factory=dict)
+
+    def document(self) -> dict[str, Any]:
+        return {
+            "kind": self.kind,
+            "owner": self.owner,
+            "stage": self.stage,
+            "reason": self.reason,
+            "evidence": dict(self.evidence),
+        }
+
+
+@dataclass(frozen=True)
+class Fault:
+    cause: Cause
+    chain: tuple[Frame | NativeResult | Cause, ...] = ()
+
+    def document(self) -> dict[str, Any]:
+        frames = []
+        for item in self.chain:
+            if isinstance(item, NativeResult):
+                frames.append({"kind": "native", "result": asdict(item)})
+            elif isinstance(item, Cause):
+                frames.append({"kind": "cause", "cause": item.document()})
+            else:
+                frames.append(item.document())
+        return {"schema": 2, "cause": self.cause.document(), "chain": frames}
+
+    def framed(self, owner: str, stage: str, reason: str, evidence: Mapping[str, Any] | None = None) -> Fault:
+        return replace(self, chain=(*self.chain, Frame("context", owner, stage, reason, evidence or {})))
+
+    @classmethod
+    def read(cls, value: Mapping[str, Any]) -> Fault:
+        if (
+            set(value) != {"schema", "cause", "chain"}
+            or type(value.get("schema")) is not int
+            or value.get("schema") != 2
+        ):
+            raise ValueError("fault.schema: schema=2 required; use offline state migration")
+        frames: list[Frame | NativeResult | Cause] = []
+        for row in value["chain"]:
+            if row["kind"] == "native":
+                data = dict(row["result"])
+                data["args"] = tuple(data["args"])
+                frames.append(NativeResult(**data))
+            elif row["kind"] == "cause":
+                frames.append(Cause.read(row["cause"]))
+            else:
+                frames.append(Frame(row["kind"], row["owner"], row["stage"], row["reason"], row["evidence"]))
+        return cls(Cause.read(value["cause"]), tuple(frames))
+
+
+@dataclass(frozen=True)
+class CauseScope:
+    subject: str
+    dependencies: DependencySet
+    complete: bool
+
+
+_scope: ContextVar[CauseScope | None] = ContextVar("unbake_cause_scope", default=None)
+
+
+@contextmanager
+def cause_scope(subject: str, dependencies: DependencySet, *, complete: bool = True) -> Any:
+    token = _scope.set(CauseScope(subject, dependencies, complete))
+    try:
+        yield
+    finally:
+        _scope.reset(token)
+
+
+def named(
+    key: str,
+    reason: str,
+    *,
+    owner: str,
+    stage: str,
+    subject: str | None = None,
+    dependencies: DependencySet | None = None,
+    action: Action | None = None,
+    retry: RetryRule | None = None,
+    evidence: Mapping[str, Any] | None = None,
+    location: SourceLocation | None = None,
+) -> Cause:
+    """Owner supplies the explicit key; request scope supplies only proven dependency context."""
+    from unbake.inputs import DependencySet
+
+    scope = _scope.get()
+    deps = dependencies or (
+        scope.dependencies if scope and scope.complete else DependencySet((), {"dependencies_unknown": True}, {})
+    )
+    return Cause(
+        key,
+        owner,
+        stage,
+        subject or (scope.subject if scope else owner),
+        reason,
+        location,
+        deps,
+        retry
+        or RetryRule(
+            "dependencies",
+            (
+                *tuple(p.path.name for p in deps.files),
+                *tuple("value:" + k for k in deps.values),
+                *tuple("recipe:" + k for k in deps.recipes),
+            ),
+        ),
+        action or Action("stop", reason=reason),
+        evidence or {},
+    )
+
+
+def capture(error: BaseException, *, cause: Cause) -> Fault:
+    """Preserve the first owning cause and add typed context, never search nested dicts for a cause."""
+    if isinstance(error, Held):
+        return (
+            error.fault
+            if error.fault.cause.id == cause.id
+            else error.fault.framed(cause.owner, cause.stage, cause.reason)
+        )
+    frames = tuple(
+        {"file": Path(f.filename).name, "line": f.lineno, "function": f.name}
+        for f in traceback.extract_tb(error.__traceback__)
+    )
+    evidence = {"type": type(error).__name__, "frames": frames, "reason": str(error)}
+    if isinstance(error.__cause__, Held):
+        return error.__cause__.fault.framed(cause.owner, cause.stage, cause.reason, evidence)
+    return Fault(cause, (Frame("python", cause.owner, cause.stage, str(error), evidence),))
+
+
+def attached(cause: Cause, fault: Fault | Mapping[str, Any] | None) -> Fault:
+    if fault is None:
+        return Fault(cause)
+    current = Fault.read(fault) if isinstance(fault, Mapping) else fault
+    return current.framed(cause.owner, cause.stage, cause.reason)
+
+
+def native_results(fault: Fault) -> tuple[NativeResult, ...]:
+    return tuple(frame for frame in fault.chain if isinstance(frame, NativeResult))
 
 
 def temporary_environment(work: Path, env: Mapping[str, str] | None = None) -> dict[str, str]:
@@ -51,6 +352,9 @@ def run_native(
     stdin: str | None = None,
 ) -> NativeResult:
     """The one native result/fault boundary, retaining both streams and exact invocation."""
+    from unbake import effort
+
+    effort.count("native.calls", 1, 1)
     environment = dict(temporary_environment(work if temporary_root is None else temporary_root, env), LC_ALL="C")
     key = f"{phase}.{Path(argv[0]).name}"
     native_input: dict[str, Any] = {"input": stdin} if stdin is not None else {}
@@ -79,7 +383,12 @@ def run_native(
             "surrogateescape",
             context or {},
         )
-        raise Held(phase, f"{key}: {Path(argv[0]).name}: {error.strerror}", fault=asdict(result)) from error
+        raise Held(
+            Fault(
+                named(f"{key}", f"{key}: {Path(argv[0]).name}: {error.strerror}", owner="process", stage=phase),
+                (result,),
+            )
+        ) from error
     status = completed.returncode
     result = NativeResult(
         tuple(argv),
@@ -97,7 +406,14 @@ def run_native(
     if status:
         detail = next(iter((completed.stderr or completed.stdout).strip().splitlines()), "no diagnostic")
         cause = f"signal {-status}" if status < 0 else f"exit {status}"
-        raise Held(phase, f"{key}: {Path(argv[0]).name} failed ({cause}): {detail}", fault=asdict(result))
+        raise Held(
+            Fault(
+                named(
+                    f"{key}", f"{key}: {Path(argv[0]).name} failed ({cause}): {detail}", owner="process", stage=phase
+                ),
+                (result,),
+            )
+        )
     return result
 
 
@@ -112,39 +428,8 @@ def run_tool(
     return run_native(argv, work, phase, context=context, temporary_root=temporary_root).stdout
 
 
-def fault(error: BaseException) -> dict[str, Any]:
-    """An owning cause chain, including native results captured at the action boundary."""
-    import traceback
-
-    chain = []
-    seen: set[int] = set()
-    current: BaseException | None = error
-    while current is not None and id(current) not in seen:
-        seen.add(id(current))
-        if isinstance(current, Held):
-            row: dict[str, Any] = {"phase": current.phase, "key": current.key, "reason": current.reason}
-            if current.failures:
-                row["failures"] = list(current.failures)
-            if current.fault is not None:
-                row["fault"] = current.fault
-        else:
-            frames = traceback.extract_tb(current.__traceback__)
-            row = {
-                "category": "python",
-                "type": type(current).__name__,
-                "reason": str(current),
-                "frames": [
-                    {"file": Path(frame.filename).name, "line": frame.lineno, "function": frame.name}
-                    for frame in frames
-                ],
-            }
-        chain.append(row)
-        current = current.__cause__ or (None if current.__suppress_context__ else current.__context__)
-    return {"chain": chain}
-
-
 def read_text(path: Path, phase: str) -> str:
     try:
         return Path(path).read_text(encoding="utf-8")
     except (OSError, UnicodeError) as error:
-        raise Held(phase, f"{path}: {error}") from error
+        raise Held(named(f"{path}", f"{path}: {error}", owner="process", stage=phase)) from error

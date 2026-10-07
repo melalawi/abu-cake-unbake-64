@@ -16,6 +16,8 @@ from unbake.compilers import files as compiler_files
 from unbake.config import Held, Host, PendingProject
 from unbake.layout import split_analysis
 from unbake.layout.split import Function
+from unbake.process import capture
+from unbake.process import named as cause_named
 from unbake.project import rom
 
 
@@ -36,7 +38,14 @@ class Census:
 def ingest_manifest(project: PendingProject) -> dict[str, Any] | None:
     manifest = project.build / "setup/roms.json"
     if manifest.is_symlink() or any(parent.is_symlink() for parent in manifest.parents):
-        raise Held("setup", f"setup.roms.manifest: {manifest}: symlink")
+        raise Held(
+            cause_named(
+                "setup.roms.manifest",
+                f"setup.roms.manifest: {manifest}: symlink",
+                owner="project.census",
+                stage="setup",
+            )
+        )
     if not manifest.is_file():
         return None
     try:
@@ -59,13 +68,27 @@ def ingest_manifest(project: PendingProject) -> dict[str, Any] | None:
             raise ValueError("invalid version order")
         return previous
     except (ValueError, KeyError, TypeError) as error:
-        raise Held("setup", f"setup.roms.manifest: {manifest}: {error}") from error
+        raise Held(
+            capture(
+                error,
+                cause=cause_named(
+                    "setup.roms.manifest",
+                    f"setup.roms.manifest: {manifest}: {error}",
+                    owner="project.census",
+                    stage="setup",
+                ),
+            )
+        ) from error
 
 
 def candidates(project: PendingProject) -> list[Path]:
     """Ignore only unchanged generated copies recorded by the prior census."""
     if not project.roms.is_dir() or project.roms.is_symlink():
-        raise Held("setup", f"setup.roms: supply ROMs in {project.roms}")
+        raise Held(
+            cause_named(
+                "setup.roms", f"setup.roms: supply ROMs in {project.roms}", owner="project.census", stage="setup"
+            )
+        )
     previous = ingest_manifest(project)
     generated: dict[Path, str] = {}
     if previous is not None:
@@ -82,18 +105,34 @@ def candidates(project: PendingProject) -> list[Path]:
                 if source != target and source.is_file() and not source.is_symlink():
                     generated[target] = row["sha1"]
         except (ValueError, KeyError, TypeError) as error:
-            raise Held("setup", f"setup.roms.manifest: {project.build / 'setup/roms.json'}: {error}") from error
+            raise Held(
+                capture(
+                    error,
+                    cause=cause_named(
+                        "setup.roms.manifest",
+                        f"setup.roms.manifest: {project.build / 'setup/roms.json'}: {error}",
+                        owner="project.census",
+                        stage="setup",
+                    ),
+                )
+            ) from error
     paths = []
     for path in sorted(project.roms.iterdir()):
         if path.is_symlink():
-            raise Held("setup", f"setup.roms: {path}: symlink input")
+            raise Held(
+                cause_named("setup.roms", f"setup.roms: {path}: symlink input", owner="project.census", stage="setup")
+            )
         if not path.is_file():
             continue
         if path in generated and hashlib.sha1(path.read_bytes()).hexdigest() == generated[path]:
             continue
         paths.append(path)
     if not paths:
-        raise Held("setup", f"setup.roms: supply ROMs in {project.roms}")
+        raise Held(
+            cause_named(
+                "setup.roms", f"setup.roms: supply ROMs in {project.roms}", owner="project.census", stage="setup"
+            )
+        )
     return paths
 
 
@@ -104,12 +143,26 @@ def measured_code(cartridge: rom.Rom) -> tuple[Function, ...]:
     if not spans:
         bounds = split_analysis.loaded_bounds(data)
         if bounds is None:
-            raise Held("setup", f"setup.same_game.code_ranges: {cartridge.path}: loaded mapping missing")
+            raise Held(
+                cause_named(
+                    "setup.same_game.code_ranges",
+                    f"setup.same_game.code_ranges: {cartridge.path}: loaded mapping missing",
+                    owner="project.census",
+                    stage="setup",
+                )
+            )
         bias = cartridge.header.entry - 0x1000
         limit = bounds[0] - bias
         end = split_analysis.executable_end(data, 0x1000, limit, bias, measured_end=limit)
         if not 0x1000 < end <= limit:
-            raise Held("setup", f"setup.same_game.code_ranges: {cartridge.path}: invalid executable extent")
+            raise Held(
+                cause_named(
+                    "setup.same_game.code_ranges",
+                    f"setup.same_game.code_ranges: {cartridge.path}: invalid executable extent",
+                    owner="project.census",
+                    stage="setup",
+                )
+            )
         spans = [(0x1000, end, bias)]
     return tuple(
         Function("census", f"text_{start:X}", start, end, start + bias, "census", "asm", ())
@@ -120,16 +173,32 @@ def measured_code(cartridge: rom.Rom) -> tuple[Function, ...]:
 def naming_version(versions: tuple[str, ...], selected: str | None) -> str:
     """Require an explicit choice, including a single-version project."""
     if not versions:
-        raise Held("setup", "project.versions: no versions")
+        raise Held(
+            cause_named("project.versions", "project.versions: no versions", owner="project.census", stage="setup")
+        )
     if selected is None and sys.stdin.isatty():
         try:
             selected = input(f"Which version names functions? ({', '.join(versions)}): ").strip()
         except EOFError:
             selected = None
     if not selected:
-        raise Held("setup", f"project.names_from: supply --names-from VERSION; valid values: {', '.join(versions)}")
+        raise Held(
+            cause_named(
+                "project.names_from",
+                f"project.names_from: supply --names-from VERSION; valid values: {', '.join(versions)}",
+                owner="project.census",
+                stage="setup",
+            )
+        )
     if selected not in versions:
-        raise Held("setup", f"project.names_from: unknown VERSION {selected}; valid values: {', '.join(versions)}")
+        raise Held(
+            cause_named(
+                "project.names_from",
+                f"project.names_from: unknown VERSION {selected}; valid values: {', '.join(versions)}",
+                owner="project.census",
+                stage="setup",
+            )
+        )
     return selected
 
 
@@ -146,9 +215,15 @@ def run(
     for cartridge in cartridges:
         if cartridge.sha1 in seen:
             raise Held(
-                "setup",
-                f"setup.roms.duplicate_sha1: {cartridge.path}: duplicate sha1 "
-                f"{cartridge.sha1} ({seen[cartridge.sha1]})",
+                cause_named(
+                    "setup.roms.duplicate_sha1",
+                    (
+                        f"setup.roms.duplicate_sha1: {cartridge.path}: duplicate sha1 "
+                        f"{cartridge.sha1} ({seen[cartridge.sha1]})"
+                    ),
+                    owner="project.census",
+                    stage="setup",
+                )
             )
         seen[cartridge.sha1] = cartridge.path
     if project.state == "ready":
@@ -156,12 +231,26 @@ def run(
             pinned = tomllib.load(source)
         expected_digests = {pinned["version"][name]["baserom_sha1"] for name in pinned["project"]["versions"]}
         if set(seen) != expected_digests or len(cartridges) != len(expected_digests):
-            raise Held("setup", "setup.rom_set_changed: ROM set differs from the ready project")
+            raise Held(
+                cause_named(
+                    "setup.rom_set_changed",
+                    "setup.rom_set_changed: ROM set differs from the ready project",
+                    owner="project.census",
+                    stage="setup",
+                )
+            )
     # Identity has precedence over label collisions between unrelated games.
     codes = {(cartridge.header.category, cartridge.header.game_code) for cartridge in cartridges}
     if len(codes) != 1:
         facts = ", ".join(f"{item.path.name}={item.header.category + item.header.game_code}" for item in cartridges)
-        raise Held("setup", f"setup.same_game.game_code: mixed games: {facts}")
+        raise Held(
+            cause_named(
+                "setup.same_game.game_code",
+                f"setup.same_game.game_code: mixed games: {facts}",
+                owner="project.census",
+                stage="setup",
+            )
+        )
     previous = ingest_manifest(project)
     if renames is None:
         renames = previous["renames"] if previous is not None else {}
@@ -173,7 +262,14 @@ def run(
     versions = tuple(sorted(names.values()))
     if order is not None:
         if len(order) != len(set(order)) or set(order) != set(versions):
-            raise Held("setup", "project.versions: --version-order must list every VERSION once")
+            raise Held(
+                cause_named(
+                    "project.versions",
+                    "project.versions: --version-order must list every VERSION once",
+                    owner="project.census",
+                    stage="setup",
+                )
+            )
         versions = order
     by_version = {names[item.path]: item for item in cartridges}
     cartridges = [by_version[version] for version in versions]
@@ -245,15 +341,36 @@ def run(
         }
         actual = {names[item.path]: item.sha1 for item in cartridges}
         if actual != expected:
-            raise Held("setup", "setup.rom_set_changed: ROM set differs from the ready project")
+            raise Held(
+                cause_named(
+                    "setup.rom_set_changed",
+                    "setup.rom_set_changed: ROM set differs from the ready project",
+                    owner="project.census",
+                    stage="setup",
+                )
+            )
     # Validate every destination before writing any normalized input.
     for item in cartridges:
         target = project.roms / f"baserom.{names[item.path]}.z64"
         image = item.image()
         if target == item.path and target.read_bytes() != image:
-            raise Held("setup", f"setup.roms.destination: {target}: normalization would overwrite original input")
+            raise Held(
+                cause_named(
+                    "setup.roms.destination",
+                    f"setup.roms.destination: {target}: normalization would overwrite original input",
+                    owner="project.census",
+                    stage="setup",
+                )
+            )
         if target.is_symlink() or (target.exists() and target.read_bytes() != image):
-            raise Held("setup", f"setup.roms.destination: {target}: existing input differs")
+            raise Held(
+                cause_named(
+                    "setup.roms.destination",
+                    f"setup.roms.destination: {target}: existing input differs",
+                    owner="project.census",
+                    stage="setup",
+                )
+            )
     del image
     created = []
     try:

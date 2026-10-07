@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import re
 
+from unbake.process import named as cause_named
+
 _TYPEDEF = re.compile(r"^[ \t]*typedef[ \t]+(\w+)[ \t]+(M2C_UNK\w*)[ \t]*;[ \t]*\n", re.M)
 _USE = re.compile(r"\bM2C_UNK\w*\b")
 
@@ -56,7 +58,14 @@ def fields(text: str) -> str:
             if len(args) != 3:
                 from unbake.config import Held
 
-                raise Held("draft", f"unresolved {name}(" + ", ".join(args) + ")")
+                raise Held(
+                    cause_named(
+                        "decomp.prelude.canonical",
+                        f"unresolved {name}(" + ", ".join(args) + ")",
+                        owner="decomp.prelude",
+                        stage="draft",
+                    )
+                )
             type_name = args[type_] if pointer else args[type_] + " *"
             return f"M2C_FIELD({args[base]}, {type_name}, {args[offset]})"
 

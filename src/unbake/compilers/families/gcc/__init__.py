@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from unbake.compilers.families.types import Schedule
 from unbake.objects.elf import Object
@@ -25,6 +25,9 @@ if TYPE_CHECKING:
 
 
 class Gcc:
+    def diagnose(self, result: Any, context: Any) -> Any | None:
+        return None
+
     def source_intrinsics(self) -> tuple[str, ...]:
         return ("__builtin_next_arg",)
 

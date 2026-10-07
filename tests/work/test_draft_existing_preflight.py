@@ -10,6 +10,7 @@ from unbake.cli import draft as verb
 from unbake.cli.args import Context
 from unbake.config import Held
 from unbake.layout import split
+from unbake.process import named
 from unbake.work import draft
 
 
@@ -53,7 +54,11 @@ class ExistingDraftPreflight(ProjectCase):
         self.file().write_text("int alpha(void) { return 1; }\n")
         with (
             patch.object(steps, "ensure", return_value=[]) as prerequisites,
-            patch.object(draft, "draft", side_effect=Held("draft", "test.native_boundary")) as backend,
+            patch.object(
+                draft,
+                "draft",
+                side_effect=Held(named("fixture.refusal", "test.native_boundary", owner="fixture", stage="draft")),
+            ) as backend,
             self.assertRaisesRegex(Held, "test.native_boundary"),
         ):
             verb.run(self.context(replace=True))

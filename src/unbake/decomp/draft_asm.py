@@ -3,6 +3,7 @@
 import re
 
 from unbake.config import Held
+from unbake.process import named as cause_named
 
 _TRANSFER = re.compile(r"(?:b|bal|beq|bne|beqz|bnez|bgez|bgtz|blez|bltz|bc[012][ft])(?:l|al|all)?$|j(?:al|r|alr)?$")
 
@@ -67,7 +68,12 @@ def delay_slots(assembly: str, function: str) -> str:
             instructions.append((index, clean))
     if instructions and _TRANSFER.fullmatch(instructions[-1][1].split()[0]):
         raise Held(
-            "m2c", f"{function}: split assembly ends with a transfer missing its delay slot: {instructions[-1][1]}"
+            cause_named(
+                f"{function}",
+                f"{function}: split assembly ends with a transfer missing its delay slot: {instructions[-1][1]}",
+                owner="decomp.draft_asm",
+                stage="m2c",
+            )
         )
     for ordinal in range(len(instructions) - 1, 0, -1):
         previous, branch = instructions[ordinal - 1]
@@ -75,7 +81,14 @@ def delay_slots(assembly: str, function: str) -> str:
         if not _TRANSFER.fullmatch(branch.split()[0]):
             continue
         if _TRANSFER.fullmatch(slot.split()[0]):
-            raise Held("m2c", f"{function}: control transfer in a delay slot: {slot}")
+            raise Held(
+                cause_named(
+                    f"{function}",
+                    f"{function}: control transfer in a delay slot: {slot}",
+                    owner="decomp.draft_asm",
+                    stage="m2c",
+                )
+            )
         between = lines[previous + 1 : index]
         if not any(re.fullmatch(r"\s*(?:[\w.$]+:|(?:glabel|alabel)\s+[\w.$]+)\s*", line) for line in between):
             continue

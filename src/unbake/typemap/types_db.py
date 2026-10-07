@@ -24,8 +24,10 @@ from typing import Any, cast
 from unbake import cache as retention
 from unbake import effort, sqlite
 from unbake.config import Held, Project
+from unbake.process import capture
+from unbake.process import named as cause_named
 
-DB_SCHEMA = 1
+DB_SCHEMA = 2
 REUSE_META = ("revision", "inference_key", "inference_receipts", "inference_publication")
 _MISSING = object()
 
@@ -35,7 +37,6 @@ SCHEMA = (
     "CREATE TABLE entries (kind TEXT NOT NULL, name TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY (kind, name))",
     "CREATE TABLE summary (kind TEXT NOT NULL, name TEXT NOT NULL, semantic_sha256 TEXT NOT NULL,"
     " users TEXT NOT NULL, PRIMARY KEY (kind, name))",
-    "CREATE TABLE redraft (function TEXT PRIMARY KEY, value TEXT NOT NULL)",
 )
 
 
@@ -93,7 +94,14 @@ def _connect(file: Path) -> sqlite3.Connection:
     try:
         return sqlite.connect(f"file:{file}?mode=ro", uri=True)
     except sqlite3.Error as error:
-        raise Held("types", f"types.sqlite: {file}: {error}") from error
+        raise Held(
+            capture(
+                error,
+                cause=cause_named(
+                    "types.sqlite", f"types.sqlite: {file}: {error}", owner="typemap.types_db", stage="types"
+                ),
+            )
+        ) from error
 
 
 @contextmanager
@@ -102,7 +110,17 @@ def _connection(file: Path) -> Iterator[sqlite3.Connection]:
     try:
         yield connection
     except (sqlite3.Error, ValueError, KeyError, TypeError) as error:
-        raise Held("types", f"types.sqlite: {file}: corrupt database: {error}") from error
+        raise Held(
+            capture(
+                error,
+                cause=cause_named(
+                    "types.sqlite",
+                    f"types.sqlite: {file}: corrupt database: {error}",
+                    owner="typemap.types_db",
+                    stage="types",
+                ),
+            )
+        ) from error
     finally:
         connection.close()
 
@@ -119,7 +137,14 @@ def compatible(file: Path) -> bool:
         version = connection.execute("PRAGMA user_version").fetchone()[0]
         tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
         if not {"meta", "entries"} <= tables:
-            raise Held("types", f"types.sqlite: {file}: corrupt database: missing meta/entries tables")
+            raise Held(
+                cause_named(
+                    "types.sqlite",
+                    f"types.sqlite: {file}: corrupt database: missing meta/entries tables",
+                    owner="typemap.types_db",
+                    stage="types",
+                )
+            )
         keys = (*REUSE_META, "schema")
         placeholders = ",".join("?" for _ in keys)
         metadata = {
@@ -127,15 +152,36 @@ def compatible(file: Path) -> bool:
             for key, value in connection.execute(f"SELECT key, value FROM meta WHERE key IN ({placeholders})", keys)
         }
         if "schema" in metadata and type(metadata["schema"]) is not int:
-            raise Held("types", f"types.sqlite: {file}: corrupt database: invalid meta schema")
+            raise Held(
+                cause_named(
+                    "types.sqlite",
+                    f"types.sqlite: {file}: corrupt database: invalid meta schema",
+                    owner="typemap.types_db",
+                    stage="types",
+                )
+            )
         if version != DB_SCHEMA or metadata.get("schema", 1) != 1:
             return False
-        for table in ("summary", "redraft"):
+        for table in ("summary",):
             if table not in tables:
-                raise Held("types", f"types.sqlite: {file}: corrupt database: missing {table} table")
+                raise Held(
+                    cause_named(
+                        "types.sqlite",
+                        f"types.sqlite: {file}: corrupt database: missing {table} table",
+                        owner="typemap.types_db",
+                        stage="types",
+                    )
+                )
         for key in REUSE_META:
             if key not in metadata:
-                raise Held("types", f"types.sqlite: {file}: corrupt database: missing meta {key}")
+                raise Held(
+                    cause_named(
+                        "types.sqlite",
+                        f"types.sqlite: {file}: corrupt database: missing meta {key}",
+                        owner="typemap.types_db",
+                        stage="types",
+                    )
+                )
         return True
 
 
@@ -168,7 +214,6 @@ def stage(
     destination: Path,
     encoded: Encoded,
     summary: dict[str, dict[str, dict[str, Any]]],
-    marks: dict[str, Any],
 ) -> tuple[Path, str]:
     """Write a complete encoded solution next to DESTINATION; return (staged file, content digest)."""
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -193,13 +238,27 @@ def stage(
             meta["content_sha256"] = _encode(digest)
             meta["solution_sha256"] = _encode(solution_digest(encoded))
             if any(not isinstance(item, str) for item in meta.values()):
-                raise Held("types", "types.sqlite: expected encoded metadata strings")
+                raise Held(
+                    cause_named(
+                        "types.sqlite",
+                        "types.sqlite: expected encoded metadata strings",
+                        owner="typemap.types_db",
+                        stage="types",
+                    )
+                )
             _sync(connection, "meta", ("key", "value"), 1, {(key,): (cast(str, item),) for key, item in meta.items()})
             entries: dict[tuple[str, ...], tuple[str, ...]] = {}
             for kind in KINDS:
                 rows = encoded.get(kind, {})
                 if not isinstance(rows, dict):
-                    raise Held("types", f"types.sqlite: {kind}: expected rows by name")
+                    raise Held(
+                        cause_named(
+                            "types.sqlite",
+                            f"types.sqlite: {kind}: expected rows by name",
+                            owner="typemap.types_db",
+                            stage="types",
+                        )
+                    )
                 entries.update({(kind, name): (value,) for name, value in rows.items()})
             _sync(connection, "entries", ("kind", "name", "value"), 2, entries)
             _sync(
@@ -212,13 +271,6 @@ def stage(
                     for kind, rows in summary.items()
                     for name, row in rows.items()
                 },
-            )
-            _sync(
-                connection,
-                "redraft",
-                ("function", "value"),
-                1,
-                {(name,): (_encode(value),) for name, value in marks.items()},
             )
     except BaseException:
         staged.unlink(missing_ok=True)
@@ -239,7 +291,14 @@ def meta(file: Path, key: str, *, default: Any = _MISSING) -> Any:
         if row is None:
             if default is not _MISSING:
                 return default
-            raise Held("types", f"types.sqlite: {file}: corrupt database: missing meta {key}")
+            raise Held(
+                cause_named(
+                    "types.sqlite",
+                    f"types.sqlite: {file}: corrupt database: missing meta {key}",
+                    owner="typemap.types_db",
+                    stage="types",
+                )
+            )
         return json.loads(row[0])
 
 
@@ -291,26 +350,3 @@ def summary(file: Path) -> dict[str, Any]:
         for kind, name, semantic, users in connection.execute("SELECT kind, name, semantic_sha256, users FROM summary"):
             result.setdefault(kind, {})[name] = {"semantic_sha256": semantic, "users": json.loads(users)}
         return result
-
-
-def redrafts(file: Path) -> dict[str, Any]:
-    with _connection(file) as connection:
-        if not connection.execute(
-            "SELECT 1 FROM sqlite_master WHERE name = ?", ("redraft",)
-        ).fetchone() and not compatible(file):
-            return {}
-        return {
-            function: json.loads(value) for function, value in connection.execute("SELECT function, value FROM redraft")
-        }
-
-
-def set_redrafts(file: Path, marks: dict[str, Any]) -> None:
-    connection = sqlite.connect(file)
-    try:
-        with connection:
-            connection.execute("DELETE FROM redraft")
-            connection.executemany(
-                "INSERT INTO redraft VALUES (?, ?)", ((k, _encode(v)) for k, v in sorted(marks.items()))
-            )
-    finally:
-        connection.close()

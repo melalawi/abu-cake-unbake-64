@@ -9,6 +9,8 @@ from typing import cast
 
 from unbake import cdecl
 from unbake.config import Held
+from unbake.process import capture
+from unbake.process import named as cause_named
 from unbake.search.core import Context, Mutation
 from unbake.work.compare import Compared
 
@@ -64,34 +66,76 @@ def _singles(spelling: str) -> list[str]:
 def propose(source: str, trial: Compared, ctx: Context) -> Iterator[Mutation]:
     """Yield unique integer type alternatives for the drafted function, cheapest first."""
     if not isinstance(source, str) or not source.strip():
-        raise Held("types", "source is required as C text")
+        raise Held(
+            cause_named("search.types.propose", "source is required as C text", owner="search.types", stage="types")
+        )
     function_name = getattr(trial, "function", None)
     if not function_name:
-        raise Held("types", "trial.function is required")
+        raise Held(
+            cause_named("search.types.propose", "trial.function is required", owner="search.types", stage="types")
+        )
     if ctx is None:
-        raise Held("types", "context is required")
+        raise Held(cause_named("search.types.propose", "context is required", owner="search.types", stage="types"))
     deadline = getattr(ctx, "deadline", None)
     if type(deadline) not in (int, float) or not math.isfinite(cast(float, deadline)):
-        raise Held("types", "context.deadline: finite monotonic time required")
+        raise Held(
+            cause_named(
+                "context.deadline",
+                "context.deadline: finite monotonic time required",
+                owner="search.types",
+                stage="types",
+            )
+        )
     deadline = cast(float, deadline)
     if time.monotonic() >= deadline:
         return
     try:
         from pycparser import c_ast  # type: ignore[import-untyped]
     except ImportError as error:
-        raise Held("types", "pycparser is required") from error
+        raise Held(
+            capture(
+                error,
+                cause=cause_named("search.types.propose", "pycparser is required", owner="search.types", stage="types"),
+            )
+        ) from error
     masked = _MASK.sub(_blank, source)
     if re.search(r"^\s*#", masked, re.M):
-        raise Held("types", "source.preprocessed is required (directives remain)")
+        raise Held(
+            cause_named(
+                "search.types.propose",
+                "source.preprocessed is required (directives remain)",
+                owner="search.types",
+                stage="types",
+            )
+        )
     try:
         tree = cdecl.parse(masked)
     except (cdecl.ParseError, AssertionError) as error:
-        raise Held("types", f"source.syntax: {error}") from error
+        raise Held(
+            capture(
+                error,
+                cause=cause_named("source.syntax", f"source.syntax: {error}", owner="search.types", stage="types"),
+            )
+        ) from error
     if len([node for node in tree.ext if isinstance(node, c_ast.FuncDef) and node.decl.name == function_name]) != 1:
-        raise Held("types", f"trial.function {function_name}: exactly one definition required")
+        raise Held(
+            cause_named(
+                "search.types.propose",
+                f"trial.function {function_name}: exactly one definition required",
+                owner="search.types",
+                stage="types",
+            )
+        )
     span = _function_span(masked, function_name)
     if span is None:
-        raise Held("types", f"trial.function {function_name}: definition text not found")
+        raise Held(
+            cause_named(
+                "search.types.propose",
+                f"trial.function {function_name}: definition text not found",
+                owner="search.types",
+                stage="types",
+            )
+        )
     start, end = span
     edits = [
         (found.start(), found.end(), found[0], _singles(re.sub(r"\s+", " ", found[0])))

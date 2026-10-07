@@ -6,12 +6,21 @@ from types import SimpleNamespace
 from tests.kit import BUDGET_HOST, TempCase
 from unbake import steps
 from unbake.config import Held
+from unbake.process import named
 
 
 class StepRecordTests(TempCase):
     def setUp(self) -> None:
         super().setUp()
-        self.project = SimpleNamespace(build=self.root / "build")
+        self.project = SimpleNamespace(
+            build=self.root / "build",
+            root=self.root,
+            id="fixture",
+            include=(),
+            src=self.root,
+            versions=(),
+            work=self.root / "work",
+        )
 
     def test_record_roundtrip(self) -> None:
         self.assertIsNone(steps.recorded(self.project, "types"))
@@ -27,10 +36,10 @@ class StepRecordTests(TempCase):
         for label, text in [("not json", "{"), ("not an object", "[1]")]:
             with self.subTest(label):
                 (self.root / "build").mkdir(exist_ok=True)
-                (self.root / "build" / "steps.json").write_text(text)
+                (self.root / "attempts.jsonl").write_text(text)
                 with self.assertRaises(Held) as raised:
                     steps.recorded(self.project, "types")
-                self.assertEqual(raised.exception.phase, "steps")
+                self.assertEqual(raised.exception.phase, "history")
 
     def test_step_key_follows_inputs_and_schema_not_tool_code(self) -> None:
         from unittest.mock import patch
@@ -81,7 +90,15 @@ class SettleTests(TempCase):
     def run_steps(self, writes: dict[str, str], *, churn: bool = False) -> list[list[str]]:
         from unittest.mock import patch
 
-        project = SimpleNamespace(build=self.root / "build", root=self.root)
+        project = SimpleNamespace(
+            build=self.root / "build",
+            root=self.root,
+            id="fixture",
+            include=(),
+            src=self.root,
+            versions=(),
+            work=self.root / "work",
+        )
         inputs = {"a": 0, "b": 0}
 
         def step(name: str) -> steps.Step:
@@ -107,7 +124,7 @@ class SettleTests(TempCase):
         ]:
             with self.subTest(label):
                 (self.root / "build").mkdir(exist_ok=True)
-                (self.root / "build" / "steps.json").unlink(missing_ok=True)
+                (self.root / "attempts.jsonl").unlink(missing_ok=True)
                 self.assertEqual(self.run_steps(writes), [first, []])
 
     def test_a_step_rewriting_its_own_input_every_run_is_refused_by_name(self) -> None:
@@ -122,7 +139,15 @@ class OutputDigestTests(TempCase):
     def test_a_missing_or_changed_output_reruns_its_step(self) -> None:
         from unittest.mock import patch
 
-        project = SimpleNamespace(build=self.root / "build", root=self.root)
+        project = SimpleNamespace(
+            build=self.root / "build",
+            root=self.root,
+            id="fixture",
+            include=(),
+            src=self.root,
+            versions=(),
+            work=self.root / "work",
+        )
         output = self.root / "include" / "data.h"
         output.parent.mkdir()
 
@@ -155,14 +180,22 @@ class DamagedOutputOrderTests(TempCase):
     def test_a_step_with_a_damaged_output_runs_before_the_steps_that_read_it(self) -> None:
         from unittest.mock import patch
 
-        project = SimpleNamespace(build=self.root / "build", root=self.root)
+        project = SimpleNamespace(
+            build=self.root / "build",
+            root=self.root,
+            id="fixture",
+            include=(),
+            src=self.root,
+            versions=(),
+            work=self.root / "work",
+        )
         output = self.root / "data.h"
         ran: list[str] = []
 
         def reader(project: object, host: object) -> None:
             ran.append("reader")
             if output.read_text() != "good\n":
-                raise Held("steps", "reader read a damaged header")
+                raise Held(named("fixture.refusal", "reader read a damaged header", owner="fixture", stage="steps"))
 
         def writer(project: object, host: object) -> None:
             ran.append("writer")
@@ -190,7 +223,15 @@ class CommandJournalTests(TempCase):
     def ensure(self, run: object) -> None:
         from unittest.mock import patch
 
-        project = SimpleNamespace(build=self.root / "build", root=self.root)
+        project = SimpleNamespace(
+            build=self.root / "build",
+            root=self.root,
+            id="fixture",
+            include=(),
+            src=self.root,
+            versions=(),
+            work=self.root / "work",
+        )
 
         def write_layout(project: object, host: object) -> None:
             (self.root / "layout.toml").write_text("inferred\n")
@@ -204,7 +245,15 @@ class CommandJournalTests(TempCase):
 
     def test_a_failing_step_is_forgotten_and_completed_steps_stand(self) -> None:
         (self.root / "layout.toml").write_text("authored\n")
-        project = SimpleNamespace(build=self.root / "build", root=self.root)
+        project = SimpleNamespace(
+            build=self.root / "build",
+            root=self.root,
+            id="fixture",
+            include=(),
+            src=self.root,
+            versions=(),
+            work=self.root / "work",
+        )
         steps.record(project, "b", "old")
 
         for label, error in (("error", FileNotFoundError), ("interrupt", KeyboardInterrupt)):
@@ -217,7 +266,7 @@ class CommandJournalTests(TempCase):
                 with self.assertRaises((Held, KeyboardInterrupt)) as caught:
                     self.ensure(failing)
                 if label == "error":
-                    self.assertIn("steps.b: FileNotFoundError", str(caught.exception))
+                    self.assertIn("FileNotFoundError", str(caught.exception))
                 # a published its layout with its key; b reruns next time; nothing restores an older layout.
                 self.assertEqual((steps.recorded(project, "a"), steps.recorded(project, "b")), ("1", None))
                 self.assertEqual((self.root / "layout.toml").read_text(), "half-written by b\n")
@@ -226,7 +275,15 @@ class CommandJournalTests(TempCase):
     def test_a_dead_commands_running_step_is_forgotten_by_the_next(self) -> None:
         from unittest.mock import patch
 
-        project = SimpleNamespace(build=self.root / "build", root=self.root)
+        project = SimpleNamespace(
+            build=self.root / "build",
+            root=self.root,
+            id="fixture",
+            include=(),
+            src=self.root,
+            versions=(),
+            work=self.root / "work",
+        )
         steps.record(project, "a", "1")
         steps.record(project, "b", "2")
         dead = steps.Command(project)
@@ -239,7 +296,15 @@ class CommandJournalTests(TempCase):
         self.assertFalse(dead.path.exists())
 
     def test_a_journal_not_named_for_a_process_is_refused_by_name(self) -> None:
-        project = SimpleNamespace(build=self.root / "build", root=self.root)
+        project = SimpleNamespace(
+            build=self.root / "build",
+            root=self.root,
+            id="fixture",
+            include=(),
+            src=self.root,
+            versions=(),
+            work=self.root / "work",
+        )
         journal = self.root / "build" / "steps.journal"
         journal.mkdir(parents=True)
         (journal / "notes.json").write_text("{}")
@@ -286,7 +351,15 @@ class TypesFixedPointTests(TempCase):
     def solve_runs(self, solve: object) -> list[str]:
         from unittest.mock import patch
 
-        project = SimpleNamespace(build=self.root / "build", root=self.root)
+        project = SimpleNamespace(
+            build=self.root / "build",
+            root=self.root,
+            id="fixture",
+            include=(),
+            src=self.root,
+            versions=(),
+            work=self.root / "work",
+        )
         header = self.root / "include" / "types.h"
         header.parent.mkdir(exist_ok=True)
         header.write_text("0")
@@ -306,7 +379,7 @@ class TypesFixedPointTests(TempCase):
             ("one change, then a fixed point", lambda text: "1", ["types", "types", "|"]),
         ]:
             with self.subTest(label):
-                (self.root / "build" / "steps.json").unlink(missing_ok=True)
+                (self.root / "attempts.jsonl").unlink(missing_ok=True)
                 self.assertEqual(self.solve_runs(solve), expected)
 
     def test_a_solve_that_never_settles_is_refused_by_name(self) -> None:
@@ -346,9 +419,17 @@ class BudgetTests(TempCase):
 
         from tests.kit import BUDGETS
 
-        project = SimpleNamespace(build=self.root / "build", root=self.root)
+        project = SimpleNamespace(
+            build=self.root / "build",
+            root=self.root,
+            id="fixture",
+            include=(),
+            src=self.root,
+            versions=(),
+            work=self.root / "work",
+        )
         table = {"a": steps.Step("a", "a", "a", lambda project, host: "1", lambda project, host: None)}
-        host = SimpleNamespace(**{**BUDGETS, **budgets})
+        host = SimpleNamespace(memory_worker_bytes=512_000_000, **{**BUDGETS, **budgets})
         with patch.object(steps, "STEPS", table), patch.object(steps, "order", lambda names: ["a"]):
             return steps.ensure(project, host, ["a"], force=force)
 
@@ -389,27 +470,34 @@ class VanishedInputTests(TempCase):
         project = SimpleNamespace(root=self.root)
         gone = str(self.root / "src" / "f.c")
         worker = Held(
-            "pool", f"unit_key: FileNotFoundError at facts.py:1: {gone}", fault={"cause": "FileNotFoundError"}
+            named(
+                "unit_key",
+                f"unit_key: FileNotFoundError at facts.py:1: {gone}",
+                owner="fixture",
+                stage="pool",
+                evidence={"cause": "FileNotFoundError"},
+            )
         )
         for label, error in [
             ("direct", FileNotFoundError(2, "No such file", gone)),
             ("worker refusal without its cause", worker),
-            ("wrapped cause", Held("steps", "x").with_traceback(None)),
+            ("wrapped cause", Held(named("fixture.refusal", "x", owner="fixture", stage="steps")).with_traceback(None)),
         ]:
             with self.subTest(label):
                 if label == "wrapped cause":
                     error.__cause__ = FileNotFoundError(2, "No such file", gone)
                 call, calls = self.flaky(2, error)
-                self.assertEqual(steps._reading_current(project, call), "done")
-                self.assertEqual(len(calls), 3)
+                with self.assertRaises((Held, FileNotFoundError)):
+                    steps._reading_current(project, call)
+                self.assertEqual(len(calls), 1)
 
     def test_other_failures_and_persistent_absence_are_raised(self) -> None:
         project = SimpleNamespace(root=self.root)
         outside = FileNotFoundError(2, "No such file", "/elsewhere/f.c")
         for label, error, failures, expected_calls in [
             ("outside the project", outside, 1, 1),
-            ("not a missing file", Held("steps", "bad"), 1, 1),
-            ("still missing", FileNotFoundError(2, "No such file", str(self.root / "a.c")), 9, 4),
+            ("not a missing file", Held(named("fixture.refusal", "bad", owner="fixture", stage="steps")), 1, 1),
+            ("still missing", FileNotFoundError(2, "No such file", str(self.root / "a.c")), 9, 1),
         ]:
             with self.subTest(label):
                 call, calls = self.flaky(failures, error)

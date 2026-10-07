@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 from unbake import atomic as atomic_files
 from unbake.config import Held
 from unbake.layout import split
+from unbake.process import named as cause_named
 
 if TYPE_CHECKING:
     from unbake.build import Outcome
@@ -20,14 +21,16 @@ def coalesce(edits: Iterable[split.Edit]) -> list[split.Edit]:
     result: dict[Path, split.Edit] = {}
     for edit in edits:
         if not isinstance(edit, split.Edit):
-            raise Held("split", "edits: required Edit records")
+            raise Held(cause_named("edits", "edits: required Edit records", owner="layout.split_apply", stage="split"))
         path = Path(edit.path)
         if not edit.versions:
-            raise Held("split", f"{path}: affected versions")
+            raise Held(cause_named(f"{path}", f"{path}: affected versions", owner="layout.split_apply", stage="split"))
         if path in result:
             previous = result[path]
             if edit.before != previous.after:
-                raise Held("split", f"{path}: conflicting edits")
+                raise Held(
+                    cause_named(f"{path}", f"{path}: conflicting edits", owner="layout.split_apply", stage="split")
+                )
             result[path] = split.Edit(
                 path, previous.before, edit.after, tuple(dict.fromkeys((*previous.versions, *edit.versions)))
             )
@@ -70,16 +73,27 @@ def _validated(project: Project, edits: Iterable[split.Edit]) -> tuple[list[spli
         source = path.resolve().is_relative_to(Path(project.src).resolve())
         if path.resolve() not in allowed and not shared:
             if not hasattr(project, "include"):
-                raise Held("split", "project.include: missing value")
+                raise Held(
+                    cause_named(
+                        "project.include", "project.include: missing value", owner="layout.split_apply", stage="split"
+                    )
+                )
             shared = any(path.resolve().is_relative_to(Path(directory).resolve()) for directory in project.include)
         if (path.resolve() not in allowed and not shared and not source) or not path.resolve().is_relative_to(
             project.root.resolve()
         ):
             raise Held(
-                "split", f"{path}: edit must target layout.toml or a configured split, symbols, src or include file"
+                cause_named(
+                    f"{path}",
+                    f"{path}: edit must target layout.toml or a configured split, symbols, src or include file",
+                    owner="layout.split_apply",
+                    stage="split",
+                )
             )
         if (split.read(path) if path.exists() else "") != edit.before:
-            raise Held("split", f"{path}: changed since dry run")
+            raise Held(
+                cause_named(f"{path}", f"{path}: changed since dry run", owner="layout.split_apply", stage="split")
+            )
         for v in edit.versions:
             project.version(v)
             affected.add(v)

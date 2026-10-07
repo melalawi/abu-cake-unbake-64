@@ -23,6 +23,7 @@ from unbake import cache as retention
 from unbake.config import Held
 from unbake.layout.structs import Field, Layout, held
 from unbake.layout.structs_types import QUALIFIERS, SCALARS, Aggregate, Declaration, Member, Operation
+from unbake.process import named as cause_named
 
 ParseError = c_parser.ParseError
 NAME_TOKEN = re.compile(r'"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'|[A-Za-z_]\w*|\.\.\.|\S')
@@ -107,7 +108,14 @@ def attribute_source(source: str) -> str:
         if token[0] not in ("__attribute__", "__attribute"):
             continue
         if index >= len(tokens) or tokens[index][0] != "(":
-            raise Held("m2c", "header declaration: expected ( after attribute")
+            raise Held(
+                cause_named(
+                    "cdecl.attribute_source",
+                    "header declaration: expected ( after attribute",
+                    owner="cdecl",
+                    stage="m2c",
+                )
+            )
         depth = 0
         while index < len(tokens):
             closing = tokens[index]
@@ -117,7 +125,11 @@ def attribute_source(source: str) -> str:
                 edits.append((token.start(), closing.end()))
                 break
         else:
-            raise Held("m2c", "header declaration: unclosed attribute")
+            raise Held(
+                cause_named(
+                    "cdecl.attribute_source", "header declaration: unclosed attribute", owner="cdecl", stage="m2c"
+                )
+            )
     for start, end in reversed(edits):
         source = source[:start] + re.sub(r"[^\n]", " ", source[start:end]) + source[end:]
     return source
@@ -161,7 +173,14 @@ class NameParser:
     def take(self, expected: str | None = None) -> str:
         token = self.peek()
         if not token or (expected is not None and token != expected):
-            raise Held("m2c", f"header declaration: expected {expected or 'token'}, found {token!r}")
+            raise Held(
+                cause_named(
+                    "cdecl.take",
+                    f"header declaration: expected {expected or 'token'}, found {token!r}",
+                    owner="cdecl",
+                    stage="m2c",
+                )
+            )
         self.index += 1
         return token
 
@@ -200,7 +219,14 @@ class NameParser:
         else:
             name = self.take()
             if not _IDENTIFIER.fullmatch(name):
-                raise Held("m2c", f"header declaration: expected type, found {name!r}")
+                raise Held(
+                    cause_named(
+                        "cdecl.specifiers",
+                        f"header declaration: expected type, found {name!r}",
+                        owner="cdecl",
+                        stage="m2c",
+                    )
+                )
             self.result.uses.add(name)
             referenced_alias = name
         while self.peek() in _QUALIFIERS | self.decorations:
@@ -225,7 +251,14 @@ class NameParser:
         elif _IDENTIFIER.fullmatch(self.peek()):
             name = self.take()
         elif not abstract:
-            raise Held("m2c", f"header declaration: expected declarator, found {self.peek()!r}")
+            raise Held(
+                cause_named(
+                    "cdecl.declarator",
+                    f"header declaration: expected declarator, found {self.peek()!r}",
+                    owner="cdecl",
+                    stage="m2c",
+                )
+            )
         while self.peek() in ("[", "("):
             if self.peek() == "[":
                 self.take("[")

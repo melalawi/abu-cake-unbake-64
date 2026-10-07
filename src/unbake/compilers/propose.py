@@ -19,6 +19,8 @@ from unbake.compilers import probe as compiler_probes
 from unbake.compilers import profiles as compiler_profiles
 from unbake.compilers import registry as toolchain
 from unbake.config import Held, Host, PendingProject
+from unbake.process import capture
+from unbake.process import named as cause_named
 
 if TYPE_CHECKING:
     from unbake.project.census import Census
@@ -37,7 +39,14 @@ def encoded(value: object) -> bytes:
 def proposal_path(project: PendingProject) -> Path:
     path = project.build / "setup/proposal.json"
     if any(parent.is_symlink() for parent in (path, *path.parents)):
-        raise Held("setup", "setup.compiler_proposal: proposal path contains a symlink")
+        raise Held(
+            cause_named(
+                "setup.compiler_proposal",
+                "setup.compiler_proposal: proposal path contains a symlink",
+                owner="compilers.propose",
+                stage="setup",
+            )
+        )
     return path
 
 
@@ -53,7 +62,17 @@ def _inputs(
         registry = toolchain.REGISTRY_PATH.read_bytes()
         config = (project.root / "config.toml").read_bytes()
     except OSError as error:
-        raise Held("setup", f"setup.compiler_proposal: {error}") from error
+        raise Held(
+            capture(
+                error,
+                cause=cause_named(
+                    "setup.compiler_proposal",
+                    f"setup.compiler_proposal: {error}",
+                    owner="compilers.propose",
+                    stage="setup",
+                ),
+            )
+        ) from error
     inputs = {
         "policy": input_pins.bytes_digest(encoded(asdict(policy)), algorithm="sha256"),
         "registry": hashlib.sha256(registry).hexdigest(),
@@ -86,7 +105,14 @@ def _inputs(
 def _verify_identity(project: PendingProject, census: Census, layout: LayoutManifest) -> dict[str, str]:
     for key in ("schema", "project_id", "rom_sha1", "versions", "names_from", "inputs_sha256"):
         if key not in layout:
-            raise Held("setup", f"setup.compiler_proposal: layout.{key}: missing input")
+            raise Held(
+                cause_named(
+                    "setup.compiler_proposal",
+                    f"setup.compiler_proposal: layout.{key}: missing input",
+                    owner="compilers.propose",
+                    stage="setup",
+                )
+            )
     hashes = {census.names[rom.path]: rom.sha1 for rom in census.cartridges}
     if (
         layout["schema"] != 1
@@ -95,9 +121,20 @@ def _verify_identity(project: PendingProject, census: Census, layout: LayoutMani
         or set(layout["versions"]) != set(hashes)
         or layout["names_from"] != census.names_from
     ):
-        raise Held("setup", "setup.proposal_stale: layout identity, ROM set or naming version differs")
+        raise Held(
+            cause_named(
+                "setup.proposal_stale",
+                "setup.proposal_stale: layout identity, ROM set or naming version differs",
+                owner="compilers.propose",
+                stage="setup",
+            )
+        )
     if not hashes:
-        raise Held("setup", "setup.compiler_proposal: no ROMs")
+        raise Held(
+            cause_named(
+                "setup.compiler_proposal", "setup.compiler_proposal: no ROMs", owner="compilers.propose", stage="setup"
+            )
+        )
     return hashes
 
 
@@ -118,7 +155,17 @@ def _choices(project: PendingProject, choices: dict[str, str] | None) -> dict[st
             raise ValueError("invalid compiler choices")
         return saved
     except (OSError, ValueError, KeyError, TypeError) as error:
-        raise Held("setup", f"setup.compiler_proposal: persisted proposal: {error}") from error
+        raise Held(
+            capture(
+                error,
+                cause=cause_named(
+                    "setup.compiler_proposal",
+                    f"setup.compiler_proposal: persisted proposal: {error}",
+                    owner="compilers.propose",
+                    stage="setup",
+                ),
+            )
+        ) from error
 
 
 def propose_compilers(
@@ -139,9 +186,23 @@ def propose_compilers(
     selected = _choices(project, choices)
     for region, ident in selected.items():
         if ident not in specs:
-            raise Held("setup", f"setup.compiler_candidate: {region}={ident}: unknown registry ID")
+            raise Held(
+                cause_named(
+                    "setup.compiler_candidate",
+                    f"setup.compiler_candidate: {region}={ident}: unknown registry ID",
+                    owner="compilers.propose",
+                    stage="setup",
+                )
+            )
         if ident not in profiles:
-            raise Held("setup", f"setup.compiler_candidate: {region}={ident}: unsupported fingerprint profile/ABI")
+            raise Held(
+                cause_named(
+                    "setup.compiler_candidate",
+                    f"setup.compiler_candidate: {region}={ident}: unsupported fingerprint profile/ABI",
+                    owner="compilers.propose",
+                    stage="setup",
+                )
+            )
     # Regions collect measured family evidence across a loaded version. Unit
     # measurements retain every ROM span; no unknown function inherits a family.
     regions: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -151,21 +212,56 @@ def propose_compilers(
     for rom in census.cartridges:
         version = census.names[rom.path]
         if "functions" not in layout["versions"][version]:
-            raise Held("setup", f"setup.compiler_proposal: layout.versions.{version}.functions: missing input")
+            raise Held(
+                cause_named(
+                    "setup.compiler_proposal",
+                    f"setup.compiler_proposal: layout.versions.{version}.functions: missing input",
+                    owner="compilers.propose",
+                    stage="setup",
+                )
+            )
         functions = layout["versions"][version]["functions"]
         if not isinstance(functions, list):
-            raise Held("setup", f"setup.compiler_proposal: layout.versions.{version}.functions: expected array")
+            raise Held(
+                cause_named(
+                    "setup.compiler_proposal",
+                    f"setup.compiler_proposal: layout.versions.{version}.functions: expected array",
+                    owner="compilers.propose",
+                    stage="setup",
+                )
+            )
         if not functions:
-            raise Held("setup", f"setup.compiler_proposal: {version}: layout functions missing")
+            raise Held(
+                cause_named(
+                    "setup.compiler_proposal",
+                    f"setup.compiler_proposal: {version}: layout functions missing",
+                    owner="compilers.propose",
+                    stage="setup",
+                )
+            )
         for index, function in enumerate(functions):
             for key in ("start", "end", "address", "name"):
                 if key not in function:
                     raise Held(
-                        "setup",
-                        f"setup.compiler_proposal: layout.versions.{version}.functions.{index}.{key}: missing input",
+                        cause_named(
+                            "setup.compiler_proposal",
+                            (
+                                f"setup.compiler_proposal: layout.versions.{version}.functions.{index}."
+                                f"{key}: missing input"
+                            ),
+                            owner="compilers.propose",
+                            stage="setup",
+                        )
                     )
             if type(function["start"]) is not int:
-                raise Held("setup", f"setup.compiler_proposal: {version}: functions.{index}.start: expected integer")
+                raise Held(
+                    cause_named(
+                        "setup.compiler_proposal",
+                        f"setup.compiler_proposal: {version}: functions.{index}.start: expected integer",
+                        owner="compilers.propose",
+                        stage="setup",
+                    )
+                )
         image = rom.image()
         clues[version] = evidence(rom)
         previous_end = -1
@@ -184,7 +280,14 @@ def propose_compilers(
                 or not name
                 or name in names
             ):
-                raise Held("setup", f"setup.compiler_proposal: {version}:{name}: invalid/overlapping function span")
+                raise Held(
+                    cause_named(
+                        "setup.compiler_proposal",
+                        f"setup.compiler_proposal: {version}:{name}: invalid/overlapping function span",
+                        owner="compilers.propose",
+                        stage="setup",
+                    )
+                )
             names.add(name)
             previous_end = end
             body = image[start:end]
@@ -233,7 +336,14 @@ def propose_compilers(
     unknown = set(selected) - (set(regions) | set(unit_regions) | {"default"})
     if unknown:
         key = "setup.proposal_stale" if choices is None else "setup.compiler_candidate"
-        raise Held("setup", f"{key}: unknown region/unit: {', '.join(sorted(unknown))}")
+        raise Held(
+            cause_named(
+                f"{key}",
+                f"{key}: unknown region/unit: {', '.join(sorted(unknown))}",
+                owner="compilers.propose",
+                stage="setup",
+            )
+        )
     available = {}
     availability = {}
     for ident, spec in specs.items():
@@ -418,7 +528,17 @@ def confirm_proposal(
     try:
         content = path.read_bytes()
     except OSError as error:
-        raise Held("setup", f"setup.proposal_stale: persisted proposal missing: {error}") from error
+        raise Held(
+            capture(
+                error,
+                cause=cause_named(
+                    "setup.proposal_stale",
+                    f"setup.proposal_stale: persisted proposal missing: {error}",
+                    owner="compilers.propose",
+                    stage="setup",
+                ),
+            )
+        ) from error
     token = hashlib.sha256(content).hexdigest()
     choices = proposal.get("choices", {})
     current = _inputs(project, layout, policy, choices)
@@ -429,7 +549,12 @@ def confirm_proposal(
         or proposal["layout_sha256"] != input_pins.bytes_digest(encoded(layout), algorithm="sha256")
     ):
         raise Held(
-            "setup", "setup.proposal_stale: proposal bytes or ROM/policy/registry/profile/layout/choices changed"
+            cause_named(
+                "setup.proposal_stale",
+                "setup.proposal_stale: proposal bytes or ROM/policy/registry/profile/layout/choices changed",
+                owner="compilers.propose",
+                stage="setup",
+            )
         )
     for rom in census.cartridges:
         version = census.names[rom.path]
@@ -437,7 +562,17 @@ def confirm_proposal(
             try:
                 actual = hashlib.sha1(source.read_bytes()).hexdigest()
             except OSError as error:
-                raise Held("setup", f"setup.proposal_stale: {version}: {error}") from error
+                raise Held(
+                    capture(
+                        error,
+                        cause=cause_named(
+                            "setup.proposal_stale",
+                            f"setup.proposal_stale: {version}: {error}",
+                            owner="compilers.propose",
+                            stage="setup",
+                        ),
+                    )
+                ) from error
             # Originals may use v64/n64 byte order; census.data is normalized.
             if source == rom.path and actual != rom.sha1:
                 from unbake.project.rom import normalise
@@ -445,26 +580,88 @@ def confirm_proposal(
                 try:
                     actual = hashlib.sha1(normalise(source.read_bytes())).hexdigest()
                 except Held as error:
-                    raise Held("setup", f"setup.proposal_stale: ROM {version}: {error.reason}") from error
+                    raise Held(
+                        capture(
+                            error,
+                            cause=cause_named(
+                                "setup.proposal_stale",
+                                f"setup.proposal_stale: ROM {version}: {error.reason}",
+                                owner="compilers.propose",
+                                stage="setup",
+                            ),
+                        )
+                    ) from error
             if actual != proposal["rom_sha1"][version]:
-                raise Held("setup", f"setup.proposal_stale: ROM {version}: sha1 changed")
+                raise Held(
+                    cause_named(
+                        "setup.proposal_stale",
+                        f"setup.proposal_stale: ROM {version}: sha1 changed",
+                        owner="compilers.propose",
+                        stage="setup",
+                    )
+                )
     if confirm is not None and confirm != token:
-        raise Held("setup", f"setup.proposal_stale: confirmation digest differs; review setup --confirm {token}")
+        raise Held(
+            cause_named(
+                "setup.proposal_stale",
+                f"setup.proposal_stale: confirmation digest differs; review setup --confirm {token}",
+                owner="compilers.propose",
+                stage="setup",
+            )
+        )
     if proposal["unresolved"]:
         mixed = any("mixed" in value for value in proposal["unresolved"])
         key = "setup.compiler_mixed" if mixed else "setup.compiler_candidate"
-        raise Held("setup", f"{key}: unresolved/tied choices: {', '.join(proposal['unresolved'])}")
+        raise Held(
+            cause_named(
+                f"{key}",
+                f"{key}: unresolved/tied choices: {', '.join(proposal['unresolved'])}",
+                owner="compilers.propose",
+                stage="setup",
+            )
+        )
     if not proposal["default_compiler"] or not proposal["assignments"]:
-        raise Held("setup", "setup.compiler_candidate: missing default compiler or unit assignments")
+        raise Held(
+            cause_named(
+                "setup.compiler_candidate",
+                "setup.compiler_candidate: missing default compiler or unit assignments",
+                owner="compilers.propose",
+                stage="setup",
+            )
+        )
     if confirm is None:
         if not sys.stdin.isatty():
-            raise Held("setup", f"setup.compiler_confirmation: review and run setup --confirm {token}")
+            raise Held(
+                cause_named(
+                    "setup.compiler_confirmation",
+                    f"setup.compiler_confirmation: review and run setup --confirm {token}",
+                    owner="compilers.propose",
+                    stage="setup",
+                )
+            )
         try:
             answer = input(f"Accept displayed compiler assignments and flags ({token})? [yes/no]: ").strip()
         except (EOFError, KeyboardInterrupt) as error:
-            raise Held("setup", "setup.compiler_confirmation: EOF or interrupted acceptance") from error
+            raise Held(
+                capture(
+                    error,
+                    cause=cause_named(
+                        "setup.compiler_confirmation",
+                        "setup.compiler_confirmation: EOF or interrupted acceptance",
+                        owner="compilers.propose",
+                        stage="setup",
+                    ),
+                )
+            ) from error
         if answer.lower() != "yes":
-            raise Held("setup", "setup.compiler_confirmation: rejected; explicit yes required")
+            raise Held(
+                cause_named(
+                    "setup.compiler_confirmation",
+                    "setup.compiler_confirmation: rejected; explicit yes required",
+                    owner="compilers.propose",
+                    stage="setup",
+                )
+            )
         # A file edited while the TTY prompt is open invalidates acceptance.
         confirm_proposal(project, census, layout, proposal, policy, confirm=token)
 
@@ -481,8 +678,25 @@ def confirmation_guard(project: PendingProject, proposal: CompilerProposal, poli
             current = _inputs(project, cast("LayoutManifest", {}), policy, choices, layout_sha256=layout_sha256)
             actual = input_pins.digest(proposal_path(project), algorithm="sha256", reuse=retention.configured())
         except OSError as error:
-            raise Held("setup", f"setup.proposal_stale: confirmed input unavailable: {error}") from error
+            raise Held(
+                capture(
+                    error,
+                    cause=cause_named(
+                        "setup.proposal_stale",
+                        f"setup.proposal_stale: confirmed input unavailable: {error}",
+                        owner="compilers.propose",
+                        stage="setup",
+                    ),
+                )
+            ) from error
         if actual != token or current != expected:
-            raise Held("setup", "setup.proposal_stale: confirmed proposal or input pins changed during proof")
+            raise Held(
+                cause_named(
+                    "setup.proposal_stale",
+                    "setup.proposal_stale: confirmed proposal or input pins changed during proof",
+                    owner="compilers.propose",
+                    stage="setup",
+                )
+            )
 
     return verify

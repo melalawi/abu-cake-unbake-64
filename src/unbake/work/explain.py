@@ -11,6 +11,7 @@ from typing import Any
 from unbake import extract
 from unbake.config import Held, Host, Project
 from unbake.layout import split
+from unbake.process import named as cause_named
 from unbake.work import attempts, compare, plan
 
 
@@ -48,7 +49,7 @@ def subject_of(project: Project, subject: str) -> tuple[str, Path | None]:
 def _status(project: Project, function: str, file: Path | None) -> dict[str, Any]:
     versions = split.holding_versions(project, function)
     rows = {version: compare.row_of(project, function, version) for version in versions}
-    summary = attempts.summaries(project).get(function)
+    summary = attempts.ledger(project).summaries().get(function)
     return {
         "versions": ", ".join(versions),
         "bytes": {version: row.end - row.start for version, row in rows.items()},
@@ -61,9 +62,9 @@ def _status(project: Project, function: str, file: Path | None) -> dict[str, Any
 
 
 def _types(project: Project, function: str) -> str:
-    from unbake.decomp import type_context
+    from unbake.typemap import database
 
-    return type_context.snapshot(project, function)[1]
+    return database.context(project, function=function)
 
 
 def _rodata(project: Project, function: str) -> list[dict[str, object]]:
@@ -83,7 +84,14 @@ def _order(project: Project, host: Host, function: str, file: Path | None) -> An
     from unbake.decomp import explain as allocation_explain
 
     if file is None:
-        raise Held("explain", f"explain.order: {function}: needs a draft file")
+        raise Held(
+            cause_named(
+                "explain.order",
+                f"explain.order: {function}: needs a draft file",
+                owner="work.explain",
+                stage="explain",
+            )
+        )
     versions = split.holding_versions(project, function)
     version = project.names_from if project.names_from in versions else versions[0]
     schedule = allocation_explain.order(project, host, file, version)
@@ -124,7 +132,14 @@ def explain(project: Project, host: Host, subject: str, sections: tuple[str, ...
         elif name == "similar":
             report.sections[name] = _similar(project, host, function)
         else:
-            raise Held("explain", f"explain.section: {name}: unknown section")
+            raise Held(
+                cause_named(
+                    "explain.section",
+                    f"explain.section: {name}: unknown section",
+                    owner="work.explain",
+                    stage="explain",
+                )
+            )
     eligible = False
     if "status" in report.sections:
         eligible = any(

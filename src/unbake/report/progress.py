@@ -13,6 +13,8 @@ from typing import Any, cast
 from unbake import strict_json
 from unbake.config import Held, Host, Project
 from unbake.layout import split
+from unbake.process import capture
+from unbake.process import named as cause_named
 from unbake.report import files, readme_layout
 
 # Bump when this step's output changes for the same inputs. Keys never digest the tool's code.
@@ -25,15 +27,30 @@ def _json(path: Path) -> dict[str, Any]:
     try:
         return cast(dict[str, Any], strict_json.read(path))
     except (OSError, ValueError) as error:
-        raise Held("report", f"objdiff report {path}: {error}") from error
+        raise Held(
+            capture(
+                error,
+                cause=cause_named(
+                    "report.progress", f"objdiff report {path}: {error}", owner="report.progress", stage="report"
+                ),
+            )
+        ) from error
 
 
 def _measures(document: Any, name: str | Path) -> dict[str, Any]:
     if not isinstance(document, dict) or document.get("version") != 2:
-        raise Held("report", f"objdiff report {name}.version must be 2")
+        raise Held(
+            cause_named(
+                "report.progress", f"objdiff report {name}.version must be 2", owner="report.progress", stage="report"
+            )
+        )
     measures = document.get("measures")
     if not isinstance(measures, dict):
-        raise Held("report", f"objdiff report {name}.measures is missing")
+        raise Held(
+            cause_named(
+                "report.progress", f"objdiff report {name}.measures is missing", owner="report.progress", stage="report"
+            )
+        )
     return measures
 
 
@@ -45,7 +62,14 @@ def _native_counts(document: Any, name: str | Path) -> None:
         if isinstance(value, str) and re.fullmatch("[0-9]+", value):
             value = int(value)
         if type(value) is not int or value < 0:
-            raise Held("report", f"{name}.measures.{field}: invalid native counter")
+            raise Held(
+                cause_named(
+                    "report.progress",
+                    f"{name}.measures.{field}: invalid native counter",
+                    owner="report.progress",
+                    stage="report",
+                )
+            )
         measures[field] = value
 
 
@@ -54,14 +78,28 @@ def _counter(measures: dict[str, Any], field: str, name: str) -> int:
     if isinstance(value, str) and re.fullmatch("[0-9]+", value):
         value = int(value)
     if type(value) is not int or value < 0:
-        raise Held("report", f"{name}.measures.{field}: invalid native counter")
+        raise Held(
+            cause_named(
+                "report.progress",
+                f"{name}.measures.{field}: invalid native counter",
+                owner="report.progress",
+                stage="report",
+            )
+        )
     return value
 
 
 def _percentage(measures: dict[str, Any], field: str, name: str) -> float:
     value = measures.get(field, 0)
     if type(value) not in (int, float) or not math.isfinite(value) or not 0 <= value <= 100:
-        raise Held("report", f"{name}.measures.{field}: invalid percentage")
+        raise Held(
+            cause_named(
+                "report.progress",
+                f"{name}.measures.{field}: invalid percentage",
+                owner="report.progress",
+                stage="report",
+            )
+        )
     return float(value)
 
 
@@ -71,7 +109,14 @@ def _figures(document: dict[str, Any], name: str, functions: bool = False) -> tu
     complete = _counter(measures, "matched_functions" if functions else "complete_code", name)
     total = _counter(measures, "total_" + kind, name)
     if complete > total:
-        raise Held("report", f"{name}.measures: complete_{kind} exceeds total_{kind}")
+        raise Held(
+            cause_named(
+                "report.progress",
+                f"{name}.measures: complete_{kind} exceeds total_{kind}",
+                owner="report.progress",
+                stage="report",
+            )
+        )
     percent = 100 * complete / total if total else 0.0
     fuzzy = percent if functions else _percentage(measures, "fuzzy_match_percent", name)
     return complete, total, percent, fuzzy
@@ -92,14 +137,28 @@ def _line(label: str, document: dict[str, Any], version: str, functions: bool = 
 def progress(reports: dict[str, dict[str, Any]], descriptions: dict[str, str]) -> str:
     """Create the established bytes/functions table layout for a new README."""
     if not reports:
-        raise Held("report", "reports: missing VERSION values")
+        raise Held(cause_named("reports", "reports: missing VERSION values", owner="report.progress", stage="report"))
     blocks = []
     for version, document in reports.items():
         description = descriptions.get(version)
         if not isinstance(description, str) or not description.strip():
-            raise Held("report", f"readme.descriptions.{version}: missing value")
+            raise Held(
+                cause_named(
+                    "report.progress",
+                    f"readme.descriptions.{version}: missing value",
+                    owner="report.progress",
+                    stage="report",
+                )
+            )
         if "\n" in description or "|" in description:
-            raise Held("report", f"readme.descriptions.{version}: invalid table description")
+            raise Held(
+                cause_named(
+                    "report.progress",
+                    f"readme.descriptions.{version}: invalid table description",
+                    owner="report.progress",
+                    stage="report",
+                )
+            )
         byte_line = _line("bytes    ", document, version)
         function_line = _line("functions", document, version, functions=True)
         draft: dict[str, Any] = next(
@@ -176,7 +235,14 @@ def _replace_figures(content: str, document: dict[str, Any], version: str, table
     def replace(match: re.Match[str]) -> str:
         label = match["label"]
         if label not in expected:
-            raise Held("report", f"readme.Progress.{version}: unexpected label {label}")
+            raise Held(
+                cause_named(
+                    "report.progress",
+                    f"readme.Progress.{version}: unexpected label {label}",
+                    owner="report.progress",
+                    stage="report",
+                )
+            )
         seen.append(label)
         functions = label == "functions"
         matched, total, percent, fuzzy = _figures(document, version, functions)
@@ -191,7 +257,14 @@ def _replace_figures(content: str, document: dict[str, Any], version: str, table
 
     updated = _FIGURE.sub(replace, content)
     if set(seen) != expected or len(seen) != len(expected):
-        raise Held("report", f"readme.Progress.{version}: bytes/functions progress block missing or duplicated")
+        raise Held(
+            cause_named(
+                "report.progress",
+                f"readme.Progress.{version}: bytes/functions progress block missing or duplicated",
+                owner="report.progress",
+                stage="report",
+            )
+        )
     return updated
 
 
@@ -210,10 +283,17 @@ def render(template: str, reports: dict[str, dict[str, Any]], *, descriptions: d
     """Update the Progress body and retain every other owner byte."""
     before, block, after = readme_layout.section(template)
     if not reports:
-        raise Held("report", "reports: missing VERSION values")
+        raise Held(cause_named("reports", "reports: missing VERSION values", owner="report.progress", stage="report"))
     if descriptions is not None:
         if set(descriptions) != set(reports):
-            raise Held("report", "readme.descriptions: expected every report VERSION exactly once")
+            raise Held(
+                cause_named(
+                    "readme.descriptions",
+                    "readme.descriptions: expected every report VERSION exactly once",
+                    owner="report.progress",
+                    stage="report",
+                )
+            )
         reports = {version: reports[version] for version in descriptions}
         newline = "\r\n" if before.endswith("\r\n") else "\n"
         generated_body = _retain_spacing(block, progress(reports, descriptions))
@@ -231,7 +311,14 @@ def render(template: str, reports: dict[str, dict[str, Any]], *, descriptions: d
     for version in reports:
         match = re.search(r"^\| (" + re.escape(version) + r" \([^\n|]+) \|(?=\r?$)", block, re.MULTILINE)
         if match is None:
-            raise Held("report", f"readme.descriptions.{version}: missing value")
+            raise Held(
+                cause_named(
+                    "report.progress",
+                    f"readme.descriptions.{version}: missing value",
+                    owner="report.progress",
+                    stage="report",
+                )
+            )
         descriptions[version] = match[1]
         matches.append((version, match))
     if "<pre>" not in block:
@@ -257,13 +344,27 @@ def render(template: str, reports: dict[str, dict[str, Any]], *, descriptions: d
         limit = match.end() + following.start() if following else len(block)
         figures = re.search(r"<pre>(.*?)</pre>", block[match.end() : limit], re.DOTALL)
         if figures is None:
-            raise Held("report", f"readme.Progress.{version}: progress block missing")
+            raise Held(
+                cause_named(
+                    "report.progress",
+                    f"readme.Progress.{version}: progress block missing",
+                    owner="report.progress",
+                    stage="report",
+                )
+            )
         start = match.end() + figures.start(1)
         stop = match.end() + figures.end(1)
         replacement = _replace_figures(figures[1], reports[version], version, table=True)
         replacements.append((start, stop, replacement))
     if not readme_layout.complete(block):
-        raise Held("report", "readme.Progress: complete bytes/functions tables and summary required")
+        raise Held(
+            cause_named(
+                "readme.Progress",
+                "readme.Progress: complete bytes/functions tables and summary required",
+                owner="report.progress",
+                stage="report",
+            )
+        )
     # Summary labels and their order belong to the template, including its all line.
     first_table = min(match.start() for _, match in matches)
     summary = block[:first_table]
@@ -271,7 +372,14 @@ def render(template: str, reports: dict[str, dict[str, Any]], *, descriptions: d
     for code in re.finditer(r"<code>(.*?)</code>", summary, re.DOTALL):
         figure = _FIGURE.fullmatch(code[1])
         if figure is None or figure["label"] not in summary_reports:
-            raise Held("report", "readme.Progress: invalid summary label or figures")
+            raise Held(
+                cause_named(
+                    "readme.Progress",
+                    "readme.Progress: invalid summary label or figures",
+                    owner="report.progress",
+                    stage="report",
+                )
+            )
         version = figure["label"]
         replacements.append(
             (code.start(1), code.end(1), _replace_figures(code[1], summary_reports[version], version, table=False))
@@ -410,7 +518,14 @@ def measure(project: Project, policy: Host | None, version: str, *, current: Any
                 continue
             stop = segment.rows[index + 1].start if index + 1 < len(segment.rows) else segment.end
             if stop is None:
-                raise Held("report", f"data.boundary: VERSION {version} {row.path}: missing end")
+                raise Held(
+                    cause_named(
+                        "data.boundary",
+                        f"data.boundary: VERSION {version} {row.path}: missing end",
+                        owner="report.progress",
+                        stage="report",
+                    )
+                )
             units.append(
                 {
                     "name": f"{row.kind}:{row.path}@{row.start:X}",
@@ -473,14 +588,35 @@ def readme_descriptions(project: Project) -> dict[str, str]:
         for field in ("cartridge_id", "region", "description"):
             value = getattr(version, field)
             if not isinstance(value, str) or not value.strip():
-                raise Held("report", f"version.{name}.{field}: missing value")
+                raise Held(
+                    cause_named(
+                        "report.progress",
+                        f"version.{name}.{field}: missing value",
+                        owner="report.progress",
+                        stage="report",
+                    )
+                )
             if any(char in value for char in "\r\n|"):
-                raise Held("report", f"version.{name}.{field}: invalid table text")
+                raise Held(
+                    cause_named(
+                        "report.progress",
+                        f"version.{name}.{field}: invalid table text",
+                        owner="report.progress",
+                        stage="report",
+                    )
+                )
         try:
             with version.baserom.open("rb") as source:
                 digest = hashlib.file_digest(source, "sha256").hexdigest()
         except OSError as error:
-            raise Held("report", f"version.{name}.baserom: {error}") from error
+            raise Held(
+                capture(
+                    error,
+                    cause=cause_named(
+                        "report.progress", f"version.{name}.baserom: {error}", owner="report.progress", stage="report"
+                    ),
+                )
+            ) from error
         descriptions[name] = (
             f"{name} ({version.cartridge_id}, {version.region}). {version.description} SHA256 `{digest}`"
         )
@@ -506,11 +642,25 @@ def owner_descriptions(project: Project, template: str) -> dict[str, str]:
     for match in re.finditer(r"^\| (([\w-]+) \([^\n|]+) \|\r?$", block, re.M):
         version = match[2]
         if version not in project.versions or version in descriptions:
-            raise Held("report", f"readme.descriptions.{version}: unexpected or duplicated owner label")
+            raise Held(
+                cause_named(
+                    "report.progress",
+                    f"readme.descriptions.{version}: unexpected or duplicated owner label",
+                    owner="report.progress",
+                    stage="report",
+                )
+            )
         descriptions[version] = match[1]
     for version in project.versions:
         if version not in descriptions:
-            raise Held("report", f"readme.descriptions.{version}: owner label required for source-only regeneration")
+            raise Held(
+                cause_named(
+                    "report.progress",
+                    f"readme.descriptions.{version}: owner label required for source-only regeneration",
+                    owner="report.progress",
+                    stage="report",
+                )
+            )
     return descriptions
 
 
@@ -519,6 +669,7 @@ def write(
     policy: Host | None,
     *,
     reports: dict[str, dict[str, Any]] | None = None,
+    receipts: dict[str, dict[str, Any]] | None = None,
     source_only: bool = False,
 ) -> list[Path]:
     """versions/*/report.json, the README progress block and attempts.json, the history they are measured from."""
@@ -526,7 +677,9 @@ def write(
     from unbake.work import attempts
 
     if not project.versions:
-        raise Held("report", "project.versions is missing")
+        raise Held(
+            cause_named("report.progress", "project.versions is missing", owner="report.progress", stage="report")
+        )
     if source_only:
         # ROM identity text belongs to the existing owner README; this operation makes no ROM certification.
         template = (project.root / "README.md").read_text()
@@ -535,18 +688,32 @@ def write(
         descriptions = readme_descriptions(project)
     from unbake.report import state, verify
 
-    current = state.inventory(project)
-    candidate_history = attempts.summaries(project)
+    current = state.inventory(project, receipts=receipts)
+    candidate_history = attempts.ledger(project).summaries()
     expected = {v: measure(project, policy, v, current=current) for v in project.versions}
     if reports is None:
         reports = expected
     readme = project.root / "README.md"
     if set(reports) != set(project.versions):
-        raise Held("report", "reports: expected every configured VERSION exactly once")
+        raise Held(
+            cause_named(
+                "reports",
+                "reports: expected every configured VERSION exactly once",
+                owner="report.progress",
+                stage="report",
+            )
+        )
     reports = {name: reports[name] for name in descriptions}
     for version, document in reports.items():
         if document != expected[version]:
-            raise Held("report", f"VERSION {version}: report inventory or measures changed; regenerate report")
+            raise Held(
+                cause_named(
+                    "report.progress",
+                    f"VERSION {version}: report inventory or measures changed; regenerate report",
+                    owner="report.progress",
+                    stage="report",
+                )
+            )
     # Strictly read every existing metadata file before the first write.
     rows = {
         alias
@@ -557,7 +724,14 @@ def write(
     }
     omitted = [name for name, summary in candidate_history.items() if summary.fuzzy is not None and name not in rows]
     if omitted:
-        raise Held("report", f"source.transition: {omitted[0]}: report rewrite would erase a retained receipt")
+        raise Held(
+            cause_named(
+                "source.transition",
+                f"source.transition: {omitted[0]}: report rewrite would erase a retained receipt",
+                owner="report.progress",
+                stage="report",
+            )
+        )
     prior_manifest = project.root / verify.MANIFEST
     if prior_manifest.is_file():
         _json(prior_manifest)
@@ -583,10 +757,17 @@ def write(
             written.append(destination)
         files.write(readme, rendered.encode("utf-8", errors="surrogateescape"))
         written.append(readme)
-        written.append(attempts.write_summary(project, rows))
+        state.assert_current(project, current)
         manifest = project.root / verify.MANIFEST
         files.write(manifest, (json.dumps(verify.document(project, current, reports), indent=2) + "\n").encode())
         written.append(manifest)
     except OSError as error:
-        raise Held("report", f"report file/tool: {error}") from error
+        raise Held(
+            capture(
+                error,
+                cause=cause_named(
+                    "report.progress", f"report file/tool: {error}", owner="report.progress", stage="report"
+                ),
+            )
+        ) from error
     return written

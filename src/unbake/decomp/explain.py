@@ -10,10 +10,11 @@ from typing import cast
 from unbake.compilers.families import family_named
 from unbake.compilers.families.types import Allocation, Pseudo, RegisterDifference, Schedule
 from unbake.config import Held, Host, Project
-from unbake.work.score import Compare
+from unbake.process import named as cause_named
+from unbake.work.score import Measurement
 
 
-def align(allocation: Allocation, comparison: Compare) -> Allocation:
+def align(allocation: Allocation, comparison: Measurement) -> Allocation:
     """Attach the trial's aligned register words to possible pseudos and winners."""
     differences = []
     for target_offset, draft_offset, before, after in comparison.register_changes:
@@ -84,7 +85,9 @@ def allocation(project: Project, policy: Host, source: Path, version: str) -> Al
 
     source = Path(source).resolve()
     if not source.is_file():
-        raise Held("explain", f"source.{source}: missing file")
+        raise Held(
+            cause_named(f"source.{source}", f"source.{source}: missing file", owner="decomp.explain", stage="explain")
+        )
     project.version(version)
     compiler = project.compiler_for(source)
     family = family_for(compiler)
@@ -102,7 +105,14 @@ def _absolute_includes(project: Project, flags: list[str] | tuple[str, ...]) -> 
     for index, flag in enumerate(values):
         if flag in ("-I", "-include", "-isystem", "-imacros", "-iquote"):
             if index + 1 >= len(values):
-                raise Held("explain", f"compiler.cflags.{flag}: missing value")
+                raise Held(
+                    cause_named(
+                        f"compiler.cflags.{flag}",
+                        f"compiler.cflags.{flag}: missing value",
+                        owner="decomp.explain",
+                        stage="explain",
+                    )
+                )
             path = Path(values[index + 1])
             if not path.is_absolute():
                 values[index + 1] = str(project.root / path)
@@ -118,7 +128,9 @@ def order(project: Project, policy: Host, source: Path, version: str) -> Schedul
 
     source = Path(source).resolve()
     if not source.is_file():
-        raise Held("explain", f"source.{source}: missing file")
+        raise Held(
+            cause_named(f"source.{source}", f"source.{source}: missing file", owner="decomp.explain", stage="explain")
+        )
     project.version(version)
     compiler = project.compiler_for(source)
     family = family_for(compiler)

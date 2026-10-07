@@ -15,6 +15,8 @@ from unbake.config import Held, Host, Project
 from unbake.decomp.indexed import indexed_references
 from unbake.extract import discovered_symbols, read_symbol_table
 from unbake.layout import split
+from unbake.process import capture
+from unbake.process import named as cause_named
 from unbake.typemap import shards, storage
 from unbake.typemap.mips import Analysis, control
 from unbake.work import inventory as plan
@@ -121,13 +123,37 @@ def _map(project: Project, host: Host, previous: dict[str, Any] | None = None) -
         try:
             image = cartridge.baserom.read_bytes()
         except OSError as error:
-            raise Held("map", f"map.rom_sha1.{version}: {error}") from error
+            raise Held(
+                capture(
+                    error,
+                    cause=cause_named(
+                        f"map.rom_sha1.{version}",
+                        f"map.rom_sha1.{version}: {error}",
+                        owner="typemap.mapping",
+                        stage="map",
+                    ),
+                )
+            ) from error
         if hashlib.sha1(image).hexdigest() != cartridge.baserom_sha1:
-            raise Held("map", f"map.rom_sha1.{version}: ROM differs from confirmed digest")
+            raise Held(
+                cause_named(
+                    f"map.rom_sha1.{version}",
+                    f"map.rom_sha1.{version}: ROM differs from confirmed digest",
+                    owner="typemap.mapping",
+                    stage="map",
+                )
+            )
         images[version] = image
         rows = split.members(project, version)
         if not rows:
-            raise Held("map", f"map.functions.{version}: no declared function intervals")
+            raise Held(
+                cause_named(
+                    f"map.functions.{version}",
+                    f"map.functions.{version}: no declared function intervals",
+                    owner="typemap.mapping",
+                    stage="map",
+                )
+            )
         inventory.extend(rows)
         _, native = split.symbols(cartridge.symbols)
         named = {name: address for name, (address, _, _) in native.items()}
@@ -143,7 +169,17 @@ def _map(project: Project, host: Host, previous: dict[str, Any] | None = None) -
                         raise ValueError(f"conflicting generated symbol {name}")
                     named[name] = address
         except (OSError, ValueError, KeyError) as error:
-            raise Held("map", f"map.symbols.{version}: {error}") from error
+            raise Held(
+                capture(
+                    error,
+                    cause=cause_named(
+                        f"map.symbols.{version}",
+                        f"map.symbols.{version}: {error}",
+                        owner="typemap.mapping",
+                        stage="map",
+                    ),
+                )
+            ) from error
         by_address: dict[int, list[str]] = defaultdict(list)
         for name, address in named.items():
             by_address[address].append(name)
@@ -153,7 +189,14 @@ def _map(project: Project, host: Host, previous: dict[str, Any] | None = None) -
         image = images[row.version]
         body = image[row.start : row.end]
         if row.start < 0 or row.end > len(image) or not body or len(body) % 4:
-            raise Held("map", f"map.functions.{row.version}: {row.name}: invalid ROM word interval")
+            raise Held(
+                cause_named(
+                    f"map.functions.{row.version}",
+                    f"map.functions.{row.version}: {row.name}: invalid ROM word interval",
+                    owner="typemap.mapping",
+                    stage="map",
+                )
+            )
         bodies[row.version, row.name] = body
     groups = plan.groups(inventory, bodies)
     names: dict[tuple[str, str], str] = {}
@@ -164,7 +207,14 @@ def _map(project: Project, host: Host, previous: dict[str, Any] | None = None) -
         for row in group:
             names[row.version, row.name] = canonical
             if row.address in targets[row.version]:
-                raise Held("map", f"map.functions.{row.version}: duplicate runtime address 0x{row.address:X}")
+                raise Held(
+                    cause_named(
+                        f"map.functions.{row.version}",
+                        f"map.functions.{row.version}: duplicate runtime address 0x{row.address:X}",
+                        owner="typemap.mapping",
+                        stage="map",
+                    )
+                )
             targets[row.version][row.address] = canonical
     old_functions: Mapping[str, dict[str, Any]] | None = None
     analyzer = inputs.digest(Path(__file__).with_name("mips.py"), algorithm="sha256", reuse=retention.configured())
@@ -329,7 +379,11 @@ def _map(project: Project, host: Host, previous: dict[str, Any] | None = None) -
             "abi_upgrade": previous.get("abi_analysis_sha256") != analyzer,
         }
     if pinned != storage.map_inputs(project):
-        raise Held("map", "map.inputs_stale: inputs changed during map")
+        raise Held(
+            cause_named(
+                "map.inputs_stale", "map.inputs_stale: inputs changed during map", owner="typemap.mapping", stage="map"
+            )
+        )
     storage.write(project.build / "map/facts.json", storage.encoded(result))
     result["functions"] = shards.Functions(shard_path, functions)
     return result
@@ -338,22 +392,50 @@ def _map(project: Project, host: Host, previous: dict[str, Any] | None = None) -
 def _read_map(project: Project) -> dict[str, Any]:
     path = project.build / "map/facts.json"
     if not path.is_file() or path.stat().st_size > 64 * 1024 * 1024:
-        raise Held("solve", "map.facts: compact sharded map required; run unbake recompute rom-facts")
+        raise Held(
+            cause_named(
+                "map.facts",
+                "map.facts: compact sharded map required; run unbake recompute rom-facts",
+                owner="typemap.mapping",
+                stage="solve",
+            )
+        )
     result = storage.read(path, "map.facts")
     if result.get("format") != "sqlite-zlib-v1":
-        raise Held("solve", "map.facts: compact sharded map required; run unbake recompute rom-facts")
+        raise Held(
+            cause_named(
+                "map.facts",
+                "map.facts: compact sharded map required; run unbake recompute rom-facts",
+                owner="typemap.mapping",
+                stage="solve",
+            )
+        )
     shard = result.get("shard", "")
     if not isinstance(shard, str) or Path(shard).name != shard:
-        raise Held("solve", "map.shards: invalid shard name")
+        raise Held(cause_named("map.shards", "map.shards: invalid shard name", owner="typemap.mapping", stage="solve"))
     shard_path = path.parent / shard
     if not shard_path.is_file() or inputs.digest(
         shard_path, algorithm="sha256", reuse=retention.configured()
     ) != result.get("shard_sha256"):
-        raise Held("solve", "map.shards: missing or changed facts; run unbake recompute rom-facts")
+        raise Held(
+            cause_named(
+                "map.shards",
+                "map.shards: missing or changed facts; run unbake recompute rom-facts",
+                owner="typemap.mapping",
+                stage="solve",
+            )
+        )
     storage.validate_identity(project, result, "map.facts")
     shards.validate_inventory(shard_path, result["functions"])
     if result.get("map_schema") != SCHEMA:
-        raise Held("map", f"map.schema: expected {SCHEMA}; run unbake recompute rom-facts")
+        raise Held(
+            cause_named(
+                "map.schema",
+                f"map.schema: expected {SCHEMA}; run unbake recompute rom-facts",
+                owner="typemap.mapping",
+                stage="map",
+            )
+        )
     return result
 
 
@@ -361,7 +443,14 @@ def load_map(project: Project, *, allow_stale: bool = False) -> dict[str, Any]:
     """Read verified shards; snapshot consumers must separately pin selected targets."""
     result = _read_map(project)
     if not allow_stale and result.get("inputs_sha256") != storage.map_inputs(project):
-        raise Held("solve", "map.inputs_stale: run unbake recompute rom-facts")
+        raise Held(
+            cause_named(
+                "map.inputs_stale",
+                "map.inputs_stale: run unbake recompute rom-facts",
+                owner="typemap.mapping",
+                stage="solve",
+            )
+        )
     result["functions"] = shards.Functions(project.build / "map" / result["shard"], result["functions"])
     return result
 
@@ -379,14 +468,28 @@ def refresh_map(project: Project, host: Host | None) -> dict[str, Any]:
     for version in project.versions:
         relative = str(project.version(version).baserom.relative_to(project.root))
         if pinned.get(relative) != old_inputs.get(relative):
-            raise Held("solve", f"map.rom_sha1.{version}: ROM changed; bootstrap map required")
+            raise Held(
+                cause_named(
+                    f"map.rom_sha1.{version}",
+                    f"map.rom_sha1.{version}: ROM changed; bootstrap map required",
+                    owner="typemap.mapping",
+                    stage="solve",
+                )
+            )
     # A map an older schema wrote is rebuilt; its unchanged instruction facts are reused by interval.
     analyzer = inputs.digest(Path(__file__).with_name("mips.py"), algorithm="sha256", reuse=retention.configured())
     if pinned == old_inputs and result.get("abi_analysis_sha256") == analyzer:
         result["functions"] = shards.Functions(project.build / "map" / result["shard"], result["functions"])
         return result
     if host is None:
-        raise Held("map", "map.host: the map is stale and rebuilding it needs the host's worker pool")
+        raise Held(
+            cause_named(
+                "map.host",
+                "map.host: the map is stale and rebuilding it needs the host's worker pool",
+                owner="typemap.mapping",
+                stage="map",
+            )
+        )
     with pool.session(host), tui.task("Indexing ROM intervals and symbols"):
         return _map(project, host, result)
 
@@ -402,7 +505,14 @@ def compiler_inputs(project: Project, config_content: bytes) -> tuple[Path, byte
     previous_inputs = result.get("inputs_sha256", {})
     changed = {key for key in set(previous_inputs) | set(pinned) if previous_inputs.get(key) != pinned.get(key)}
     if changed - {"config.toml"}:
-        raise Held("setup", "map.inputs_stale: compiler update requires unchanged ROM, layout and symbol inputs")
+        raise Held(
+            cause_named(
+                "map.inputs_stale",
+                "map.inputs_stale: compiler update requires unchanged ROM, layout and symbol inputs",
+                owner="typemap.mapping",
+                stage="setup",
+            )
+        )
     pinned["config.toml"] = inputs.bytes_digest(config_content, algorithm="sha256")
     result["inputs_sha256"] = pinned
     result["compiler_update"] = {"config_sha256": pinned["config.toml"], "instruction_shard_retained": True}

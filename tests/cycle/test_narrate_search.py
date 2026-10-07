@@ -5,6 +5,7 @@ import unittest
 from contextlib import redirect_stderr
 
 from unbake.cycle import engine
+from unbake.work.score import measure_words
 
 
 class NarrateSearchTests(unittest.TestCase):
@@ -16,9 +17,16 @@ class NarrateSearchTests(unittest.TestCase):
             "ok": True,
             "seconds": 60.0,
             "mutations": 2,
-            "words": 3,
+            "measurements": {
+                "eu-x": measure_words(
+                    "eu-x", bytes.fromhex("24420004") * 20, bytes.fromhex("24420004") * 19 + bytes(4)
+                ).document()
+            },
         }
         err = io.StringIO()
         with redirect_stderr(err):
             engine.narrate(record)
-        self.assertEqual(err.getvalue(), "  f: tried 2 variants in 60s; best leaves 3 words different\n")
+        self.assertEqual(
+            err.getvalue(),
+            "f: tried 2 variants\nf: eu-x: 19/20 words identical; 1 target word different; 0 inserted words\n",
+        )

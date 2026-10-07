@@ -37,7 +37,9 @@ def reconcile(project: Project, step: str) -> list[str]:
             tracked.add(name)
             if kind == "blob" and mode in ("100644", "100755"):
                 committed[name] = blob_id
-    entry = steps._read(project).get(step)
+    from unbake.work.attempts import ledger
+
+    entry = ledger(project).step(step)
     if entry is None:
         return changed
     outputs = dict(entry.get("outputs", {}))

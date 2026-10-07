@@ -14,6 +14,7 @@ from unbake import scratch
 from unbake.config import Held, Host, Project
 from unbake.layout import boundary, split
 from unbake.layout.rodata_references import collect
+from unbake.process import named as cause_named
 from unbake.process import temporary_environment
 
 
@@ -21,14 +22,35 @@ def prove(project: Project, version: str, start: int, end: int, policy: Host) ->
     configured = project.version(version)
     image = configured.baserom.read_bytes()
     if hashlib.sha1(image).hexdigest() != configured.baserom_sha1:
-        raise Held("split", "split.code.rom_sha1: ROM differs from the confirmed cartridge")
+        raise Held(
+            cause_named(
+                "split.code.rom_sha1",
+                "split.code.rom_sha1: ROM differs from the confirmed cartridge",
+                owner="layout.code_interval",
+                stage="split",
+            )
+        )
     _, _, segments = split.layout(configured.split)
     selected = [r for s in segments for r in s.rows if r.start <= start < split.end(r)]
     if len(selected) != 1 or selected[0].kind not in ("data", "rodata", "rdata"):
-        raise Held("split", "split.code.owner: select one ROM-backed data/rodata/rdata interval")
+        raise Held(
+            cause_named(
+                "split.code.owner",
+                "split.code.owner: select one ROM-backed data/rodata/rdata interval",
+                owner="layout.code_interval",
+                stage="split",
+            )
+        )
     row = selected[0]
     if start >= end or start % 4 or end % 4 or end > min(split.end(row), len(image)):
-        raise Held("split", "split.code.interval: required increasing word-aligned offsets within one data row")
+        raise Held(
+            cause_named(
+                "split.code.interval",
+                "split.code.interval: required increasing word-aligned offsets within one data row",
+                owner="layout.code_interval",
+                stage="split",
+            )
+        )
     address = split.address(row, configured.split) + start - row.start
     with tempfile.NamedTemporaryFile(
         prefix="code-", suffix=".bin", dir=scratch.root(policy, project, "split")
@@ -55,7 +77,14 @@ def prove(project: Project, version: str, start: int, end: int, policy: Host) ->
         )
     instructions = re.findall(r"^\s*[0-9a-fA-F]+:\s+([0-9a-fA-F]{8})\s+(\S+)", decoded.stdout, re.M)
     if decoded.returncode or len(instructions) != (end - start) // 4 or any(i[1].startswith(".") for i in instructions):
-        raise Held("split", "split.code.decode: every word must decode as a VR4300 instruction")
+        raise Held(
+            cause_named(
+                "split.code.decode",
+                "split.code.decode: every word must decode as a VR4300 instruction",
+                owner="layout.code_interval",
+                stage="split",
+            )
+        )
     words = {at: struct.unpack_from(">I", image, at)[0] for at in range(start, end, 4)}
     functions = split.functions(project, version)
     sources: list[dict[str, Any]] = []
@@ -104,8 +133,13 @@ def prove(project: Project, version: str, start: int, end: int, policy: Host) ->
                         )
     if not sources:
         raise Held(
-            "split",
-            "split.code.reference: data-to-code correction needs a direct code target or referenced code-pointer table",
+            cause_named(
+                "split.code.reference",
+                "split.code.reference: data-to-code correction needs a direct code target "
+                "or referenced code-pointer table",
+                owner="layout.code_interval",
+                stage="split",
+            )
         )
     from unbake.work.shape import for_compiler
 
@@ -120,7 +154,14 @@ def prove(project: Project, version: str, start: int, end: int, policy: Host) ->
         for_compiler(compiler, (*compiler.cflags, *project.unit_flags.get(Path(row.path).name, ()))),
     )
     if not evidence.proven:
-        raise Held("split", "split.code.control_flow: " + "; ".join(evidence.unproven))
+        raise Held(
+            cause_named(
+                "layout.code_interval.prove",
+                "split.code.control_flow: " + "; ".join(evidence.unproven),
+                owner="layout.code_interval",
+                stage="split",
+            )
+        )
     return {
         "version": version,
         "start": start,

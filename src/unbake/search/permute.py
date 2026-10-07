@@ -22,7 +22,8 @@ from unbake import atomic as atomic_files
 from unbake import pool
 from unbake.compilers import registry as toolchain
 from unbake.config import Held, Host, Project
-from unbake.process import temporary_environment
+from unbake.process import capture, temporary_environment
+from unbake.process import named as cause_named
 from unbake.search.core import Context, Mutation
 from unbake.work.compare import Compared
 
@@ -30,40 +31,89 @@ from unbake.work.compare import Compared
 def _required(owner: object, name: str, prefix: str) -> Any:
     value = getattr(owner, name, None)
     if value is None or value == "":
-        raise Held("permute", f"{prefix}.{name} is required")
+        raise Held(
+            cause_named(
+                "search.permute._required", f"{prefix}.{name} is required", owner="search.permute", stage="permute"
+            )
+        )
     return value
 
 
 def _outside(project: Project, path: Path, name: str) -> Path:
     path = Path(path).resolve()
     if path.is_relative_to(Path(project.root).resolve()):
-        raise Held("permute", f"{name} {path} is inside project.root")
+        raise Held(
+            cause_named(
+                "search.permute._outside",
+                f"{name} {path} is inside project.root",
+                owner="search.permute",
+                stage="permute",
+            )
+        )
     return path
 
 
 def checkout(archive: Path, digest: str, work: Path) -> Path:
     if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
-        raise Held("permute", "policy.permuter_sha256 must be a lowercase SHA-256")
+        raise Held(
+            cause_named(
+                "search.permute.checkout",
+                "policy.permuter_sha256 must be a lowercase SHA-256",
+                owner="search.permute",
+                stage="permute",
+            )
+        )
     try:
         with Path(archive).open("rb") as stream:
             actual = hashlib.file_digest(stream, "sha256").hexdigest()
         if actual != digest:
-            raise Held("permute", f"policy.permuter_archive policy.permuter_sha256 expected {digest}, found {actual}")
+            raise Held(
+                cause_named(
+                    "search.permute.checkout",
+                    f"policy.permuter_archive policy.permuter_sha256 expected {digest}, found {actual}",
+                    owner="search.permute",
+                    stage="permute",
+                )
+            )
         checkout = work / "dependency"
         checkout.mkdir()
         with tarfile.open(archive) as package:
             for member in package.getmembers():
                 destination = (checkout / member.name).resolve()
                 if not destination.is_relative_to(checkout) or not (member.isdir() or member.isfile()):
-                    raise Held("permute", f"policy.permuter_archive unsafe member {member.name}")
+                    raise Held(
+                        cause_named(
+                            "search.permute.checkout",
+                            f"policy.permuter_archive unsafe member {member.name}",
+                            owner="search.permute",
+                            stage="permute",
+                        )
+                    )
             package.extractall(checkout, filter="data")
         # The entry point sits at the archive root; src/permuter.py is the library module it imports.
         entries = list(checkout.glob("*/permuter.py"))
         if len(entries) != 1:
-            raise Held("permute", "policy.permuter_archive must contain exactly one top-level permuter.py")
+            raise Held(
+                cause_named(
+                    "search.permute.checkout",
+                    "policy.permuter_archive must contain exactly one top-level permuter.py",
+                    owner="search.permute",
+                    stage="permute",
+                )
+            )
         return entries[0]
     except (OSError, tarfile.TarError) as error:
-        raise Held("permute", f"policy.permuter_archive: {error}") from error
+        raise Held(
+            capture(
+                error,
+                cause=cause_named(
+                    "policy.permuter_archive",
+                    f"policy.permuter_archive: {error}",
+                    owner="search.permute",
+                    stage="permute",
+                ),
+            )
+        ) from error
 
 
 def compile_script(project: Project, policy: Host, source_path: Path, version: str, work: Path) -> str:
@@ -151,26 +201,74 @@ def _run(command: Sequence[str], cwd: Path, environment: Mapping[str, str], budg
                 return _RunResult(True, None)
         return _RunResult(True, status)
     except OSError as error:
-        raise Held("permute", f"permuter {shlex.join(command)}: {error}") from error
+        raise Held(
+            capture(
+                error,
+                cause=cause_named(
+                    "search.permute._run",
+                    f"permuter {shlex.join(command)}: {error}",
+                    owner="search.permute",
+                    stage="permute",
+                ),
+            )
+        ) from error
 
 
 def outputs(work: Path) -> Iterator[tuple[int, str]]:
     for directory in sorted(work.glob("output-*")):
         if not re.fullmatch(r"output-\d+-\d+", directory.name):
-            raise Held("permute", f"result directory {directory.name}: expected output-SCORE-INDEX")
+            raise Held(
+                cause_named(
+                    "search.permute.outputs",
+                    f"result directory {directory.name}: expected output-SCORE-INDEX",
+                    owner="search.permute",
+                    stage="permute",
+                )
+            )
         if directory.is_symlink():
-            raise Held("permute", f"result directory {directory}: symbolic link refused")
+            raise Held(
+                cause_named(
+                    "search.permute.outputs",
+                    f"result directory {directory}: symbolic link refused",
+                    owner="search.permute",
+                    stage="permute",
+                )
+            )
         try:
             score_path, source_path = directory / "score.txt", directory / "source.c"
             for path in (score_path, source_path):
                 if path.is_symlink():
-                    raise Held("permute", f"result {path}: symbolic link refused")
+                    raise Held(
+                        cause_named(
+                            "search.permute.outputs",
+                            f"result {path}: symbolic link refused",
+                            owner="search.permute",
+                            stage="permute",
+                        )
+                    )
             score = score_path.read_text().split()[0]
             if not re.fullmatch(r"\d+", score) or int(score) != int(directory.name.split("-")[1]):
-                raise Held("permute", f"result {score_path}: score disagrees with directory")
+                raise Held(
+                    cause_named(
+                        "search.permute.outputs",
+                        f"result {score_path}: score disagrees with directory",
+                        owner="search.permute",
+                        stage="permute",
+                    )
+                )
             yield int(score), source_path.read_text(encoding="utf-8")
         except (OSError, UnicodeError, IndexError) as error:
-            raise Held("permute", f"result {directory}: source.c and score.txt required: {error}") from error
+            raise Held(
+                capture(
+                    error,
+                    cause=cause_named(
+                        "search.permute.outputs",
+                        f"result {directory}: source.c and score.txt required: {error}",
+                        owner="search.permute",
+                        stage="permute",
+                    ),
+                )
+            ) from error
 
 
 @dataclass(frozen=True)
@@ -192,36 +290,94 @@ class Permuter:
         target = Path(_required(self, "target_object", "permuter"))
         budget = _required(self, "budget_seconds", "permuter")
         if type(budget) not in (int, float) or not math.isfinite(budget) or budget <= 0:
-            raise Held("permute", "permuter.budget_seconds must be positive and finite")
+            raise Held(
+                cause_named(
+                    "search.permute.propose",
+                    "permuter.budget_seconds must be positive and finite",
+                    owner="search.permute",
+                    stage="permute",
+                )
+            )
         remaining_deadline = _required(ctx, "deadline", "context")
         if type(remaining_deadline) not in (int, float) or not math.isfinite(remaining_deadline):
-            raise Held("permute", "context.deadline must be finite monotonic time")
+            raise Held(
+                cause_named(
+                    "search.permute.propose",
+                    "context.deadline must be finite monotonic time",
+                    owner="search.permute",
+                    stage="permute",
+                )
+            )
         deadline = min(time.monotonic() + budget, remaining_deadline)
         if time.monotonic() >= deadline:
             return
         if not isinstance(source, str) or not source.strip():
-            raise Held("permute", "source is required")
+            raise Held(
+                cause_named("search.permute.propose", "source is required", owner="search.permute", stage="permute")
+            )
         function = _required(trial, "function", "trial")
         if not re.fullmatch(r"[A-Za-z_]\w*", function) or source_path.stem != function or source_path.suffix != ".c":
-            raise Held("permute", "context.source must be named trial.function.c")
+            raise Held(
+                cause_named(
+                    "search.permute.propose",
+                    "context.source must be named trial.function.c",
+                    owner="search.permute",
+                    stage="permute",
+                )
+            )
         if not _required(trial, "compares", "trial"):
-            raise Held("permute", "trial.compares must name holding VERSIONs")
+            raise Held(
+                cause_named(
+                    "search.permute.propose",
+                    "trial.compares must name holding VERSIONs",
+                    owner="search.permute",
+                    stage="permute",
+                )
+            )
         archive = _required(policy, "permuter_archive", "policy")
         digest = _required(policy, "permuter_sha256", "policy")
         cores = _required(policy, "cores", "policy")
         if type(cores) is not int or cores <= 0:
-            raise Held("permute", "policy.cores must be a positive integer")
+            raise Held(
+                cause_named(
+                    "search.permute.propose",
+                    "policy.cores must be a positive integer",
+                    owner="search.permute",
+                    stage="permute",
+                )
+            )
         for dependency in ("pycparser", "toml"):
             if importlib.util.find_spec(dependency) is None:
-                raise Held("permute", f"dependency {dependency}: missing from interpreter {sys.executable}")
+                raise Held(
+                    cause_named(
+                        "search.permute.propose",
+                        f"dependency {dependency}: missing from interpreter {sys.executable}",
+                        owner="search.permute",
+                        stage="permute",
+                    )
+                )
         compiler = project.compiler_for(source_path)
         family = toolchain.specification(compiler.id).permuter
         if not family:
-            raise Held("permute", f"compiler.{compiler.id}: no registered scorer target")
+            raise Held(
+                cause_named(
+                    f"compiler.{compiler.id}",
+                    f"compiler.{compiler.id}: no registered scorer target",
+                    owner="search.permute",
+                    stage="permute",
+                )
+            )
         toolchain.verify(project.tools / compiler.id, toolchain.specification(compiler.id))
         try:
             if not target.is_file():
-                raise Held("permute", f"permuter.target_object {target}: missing object")
+                raise Held(
+                    cause_named(
+                        "search.permute.propose",
+                        f"permuter.target_object {target}: missing object",
+                        owner="search.permute",
+                        stage="permute",
+                    )
+                )
             out.mkdir(parents=True, exist_ok=True)
             work = Path(tempfile.mkdtemp(prefix="permute-", dir=out))
             entry = checkout(archive, digest, work)
@@ -253,13 +409,27 @@ class Permuter:
             if result.returncode not in (None, 0):
                 stderr_path = log_path.with_suffix(log_path.suffix + ".stderr")
                 stderr = stderr_path.read_text(encoding="utf-8", errors="replace").strip()
-                raise Held("permute", f"permuter {entry} exited {result.returncode}: {stderr}; inspect {stderr_path}")
+                raise Held(
+                    cause_named(
+                        "search.permute.propose",
+                        f"permuter {entry} exited {result.returncode}: {stderr}; inspect {stderr_path}",
+                        owner="search.permute",
+                        stage="permute",
+                    )
+                )
             log = log_path.read_text(encoding="utf-8")
             baseline = re.findall(r"base score = (\d+)", log)
             if result.returncode is None and not baseline:
                 return
             if len(baseline) != 1:
-                raise Held("permute", "permuter.log base score is required")
+                raise Held(
+                    cause_named(
+                        "search.permute.propose",
+                        "permuter.log base score is required",
+                        owner="search.permute",
+                        stage="permute",
+                    )
+                )
             seen = {hashlib.sha256(source.encode()).hexdigest()}
             for score, candidate in outputs(work):
                 if score >= int(baseline[0]):
@@ -270,4 +440,11 @@ class Permuter:
                 seen.add(digest)
                 yield Mutation("permute", f"external score {score}", candidate)
         except (OSError, UnicodeError, ValueError) as error:
-            raise Held("permute", f"search output: {error}") from error
+            raise Held(
+                capture(
+                    error,
+                    cause=cause_named(
+                        "search.permute.propose", f"search output: {error}", owner="search.permute", stage="permute"
+                    ),
+                )
+            ) from error

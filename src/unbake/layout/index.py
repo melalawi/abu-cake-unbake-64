@@ -10,6 +10,8 @@ from typing import Any
 
 from unbake import cache as retention
 from unbake.config import Held, Project
+from unbake.process import capture
+from unbake.process import named as cause_named
 
 
 def path(project: Project) -> Path:
@@ -24,7 +26,14 @@ def load(project: Project) -> dict[str, Any]:
         value = _decoded(target)
         return dict(json.loads(json.dumps(value)))
     except (OSError, ValueError, KeyError, TypeError) as error:
-        raise Held("layout", f"layout.index: {target}: {error}") from error
+        raise Held(
+            capture(
+                error,
+                cause=cause_named(
+                    "layout.index", f"layout.index: {target}: {error}", owner="layout.index", stage="layout"
+                ),
+            )
+        ) from error
 
 
 def _decoded(target: Path) -> dict[str, Any]:
@@ -57,7 +66,14 @@ def _decoded(target: Path) -> dict[str, Any]:
                         raise ValueError("unlisted type home")
             return value
         except (OSError, ValueError, KeyError, TypeError) as error:
-            raise Held("layout", f"layout.index: {target}: {error}") from error
+            raise Held(
+                capture(
+                    error,
+                    cause=cause_named(
+                        "layout.index", f"layout.index: {target}: {error}", owner="layout.index", stage="layout"
+                    ),
+                )
+            ) from error
 
     from unbake import inputs
 
@@ -113,7 +129,14 @@ def owned(project: Project) -> frozenset[Path]:
         for path in root.rglob("*.h"):
             if marked(path, root):
                 if not path.resolve().is_relative_to(root.resolve()):
-                    raise Held("layout", "layout.index: header symlink escapes include root")
+                    raise Held(
+                        cause_named(
+                            "layout.index",
+                            "layout.index: header symlink escapes include root",
+                            owner="layout.index",
+                            stage="layout",
+                        )
+                    )
                 found.add(path)
     return frozenset(found)
 
@@ -164,13 +187,30 @@ def _unindexed_headers(root: Path, ownership: Path, stamp: tuple[int, int, int])
                 found.append(path)
         return frozenset(found)
     except (OSError, ValueError, KeyError, TypeError) as error:
-        raise Held("layout", f"layout.index: unindexed installed headers: {error}") from error
+        raise Held(
+            capture(
+                error,
+                cause=cause_named(
+                    "layout.index",
+                    f"layout.index: unindexed installed headers: {error}",
+                    owner="layout.index",
+                    stage="layout",
+                ),
+            )
+        ) from error
 
 
 def _headers(root: Path, names: tuple[str, ...], stamp: tuple[int, int, int]) -> frozenset[Path]:
     result = frozenset(root / name for name in names)
     if any(not p.resolve().is_relative_to(root.resolve()) for p in result):
-        raise Held("layout", "layout.index: header symlink escapes include root")
+        raise Held(
+            cause_named(
+                "layout.index",
+                "layout.index: header symlink escapes include root",
+                owner="layout.index",
+                stage="layout",
+            )
+        )
     return result
 
 

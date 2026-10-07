@@ -12,6 +12,7 @@ from typing import Any
 from unbake import cache as retention
 from unbake import inputs, pool, tui
 from unbake.config import Held, Host, Project
+from unbake.process import named as cause_named
 from unbake.typemap import jump_tables, shards, storage
 from unbake.typemap.mips import Analysis
 
@@ -24,7 +25,14 @@ def _refined(shared: Any, job: Any) -> bytes:
         stream.seek(body["start"])
         binary = stream.read(body["end"] - body["start"])
     if hashlib.sha256(binary).hexdigest() != body["target_sha256"]:
-        raise Held("solve", f"map.abi.target_sha256: {version}: {name}: ROM target changed")
+        raise Held(
+            cause_named(
+                "map.abi.target_sha256",
+                f"map.abi.target_sha256: {version}: {name}: ROM target changed",
+                owner="typemap.abi_facts",
+                stage="solve",
+            )
+        )
     words = [word for (word,) in struct.iter_unpack(">I", binary)]
     edges = {}
     if any(word >> 26 == 0 and word & 63 == 8 and (word >> 21 & 31) != 31 for word in words):
@@ -87,12 +95,26 @@ def refine(project: Project, facts: dict[str, Any], policy: Host | None = None) 
         pointer = storage.read(index, "map.abi")
         filename = pointer.get("path")
         if not isinstance(filename, str) or Path(filename).name != filename:
-            raise Held("solve", "map.abi.path: invalid ABI supplement name")
+            raise Held(
+                cause_named(
+                    "map.abi.path",
+                    "map.abi.path: invalid ABI supplement name",
+                    owner="typemap.abi_facts",
+                    stage="solve",
+                )
+            )
         path = index.parent / filename
         storage.verify_file(path, pointer["sha256"], "map.abi")
         storage.validate_identity(project, pointer, "map.abi")
         if pointer.get("map_shard_sha256") != facts["shard_sha256"]:
-            raise Held("solve", "map.abi.shard: ABI supplement belongs to another map shard")
+            raise Held(
+                cause_named(
+                    "map.abi.shard",
+                    "map.abi.shard: ABI supplement belongs to another map shard",
+                    owner="typemap.abi_facts",
+                    stage="solve",
+                )
+            )
     else:
         inventory = {
             name: {

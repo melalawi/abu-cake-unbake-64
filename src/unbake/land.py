@@ -29,6 +29,8 @@ from unbake import cache as retention
 from unbake.cache import Cache
 from unbake.config import Held, Host, Project
 from unbake.layout import split
+from unbake.process import Fault, capture
+from unbake.process import named as cause_named
 from unbake.project import publication_transaction
 from unbake.project.headers import scan
 from unbake.work import attempts, compare
@@ -120,7 +122,14 @@ def dangling_includes(project: Project, names: list[str]) -> list[tuple[str, str
     for path in sorted(view.files):
         for include in scan(view.read(path).decode(errors="replace")):
             if include.unknown:
-                raise Held("land", f"land.include_unknown: {path}: native dependency proof required")
+                raise Held(
+                    cause_named(
+                        "land.include_unknown",
+                        f"land.include_unknown: {path}: native dependency proof required",
+                        owner="land",
+                        stage="land",
+                    )
+                )
             resolution = graph.resolve(path, include)
             if resolution.target is not None:
                 continue
@@ -134,9 +143,13 @@ def _refuse_dangling_includes(project: Project, names: list[str]) -> None:
     dangling = dangling_includes(project, names)
     if dangling:
         raise Held(
-            "land",
-            "commit.include: refusing a commit whose tree has a file including a project header it lacks: "
-            + "; ".join(f'{file} includes "{header}"' for file, header in dangling),
+            cause_named(
+                "land._refuse_dangling_includes",
+                "commit.include: refusing a commit whose tree has a file including a project header it lacks: "
+                + "; ".join((f'{file} includes "{header}"' for file, header in dangling)),
+                owner="land",
+                stage="land",
+            )
         )
 
 
@@ -182,15 +195,15 @@ def record(project: Project, host: Host) -> tuple[str, tuple[str, ...]] | None:
     changed attempts.json (report changes alone are committed with the other generated files)."""
     from unbake.report import progress
 
-    summary = attempts.summary_path(project)
-    before = attempts.committed_documents(project)
+    ledger_path = project.root / attempts.PATH
+    changed = _git(project, "status", "--porcelain", "--", attempts.PATH).strip()
+    if not changed:
+        return None
+    history = attempts.ledger(project).summaries()
+    functions = tuple(sorted(history))
     paths = progress.write(project, host)
     steps.record(project, "progress", steps.STEPS["progress"].key(project, host))
-    after = attempts.committed_documents(project)
-    functions = tuple(sorted(name for name in after if after[name] != before.get(name)))
-    if not functions:
-        return None
-    _commit(project, host, sorted({*paths, summary}), "Record attempts: " + ", ".join(functions))
+    _commit(project, host, sorted({*paths, ledger_path}), "Record attempts: " + ", ".join(functions))
     return _git(project, "rev-parse", "HEAD").strip(), functions
 
 
@@ -200,16 +213,55 @@ def publication_versions(
     """Explicit requirements, already published C, and exact freebies; no version is removed from the project."""
     holding = split.holding_versions(project, function)
     if not required or len(set(required)) != len(required) or set(required) - set(holding):
-        raise Held("land", f"land.versions: {function}: require distinct holding versions from {', '.join(holding)}")
+        raise Held(
+            cause_named(
+                "land.versions",
+                f"land.versions: {function}: require distinct holding versions from {', '.join(holding)}",
+                owner="land",
+                stage="land",
+            )
+        )
     mandatory = set(required) | {v for v in holding if compare.row_of(project, function, v).kind == "c"}
     exact = {v for v in holding if attempt.versions.get(v, {}).get("exact") is True}
     if missing := mandatory - exact:
+        comparison_refusal(function, attempt, tuple(v for v in holding if v in missing))
         raise Held(
-            "land",
-            f"land.not_exact: {function}: required or published versions are not exact: "
-            + ", ".join(v for v in holding if v in missing),
+            cause_named(
+                "land.publication_versions",
+                f"land.not_exact: {function}: required or published versions are not exact: "
+                + ", ".join(v for v in holding if v in missing),
+                owner="land",
+                stage="land",
+            )
         )
     return tuple(v for v in holding if v in exact)
+
+
+def comparison_refusal(function: str, attempt: attempts.Attempt, versions: tuple[str, ...]) -> None:
+    """An unavailable comparison transports its owning fault through exact admission."""
+    for version in versions:
+        measured = attempt.versions.get(version, {})
+        if measured.get("fault"):
+            fault = Fault.read(measured["fault"])
+            raise Held(
+                fault.framed(
+                    "land",
+                    "admission",
+                    f"{function} VERSION {version}: exact comparison unavailable",
+                    {"version": version, "source_sha256": attempt.sha256},
+                )
+            )
+        if measured.get("percent") is None:
+            raise Held(
+                cause_named(
+                    "land.comparison_unavailable",
+                    f"{function} VERSION {version}: comparison unavailable without retained native evidence",
+                    owner="land",
+                    stage="admission",
+                    subject=function,
+                    evidence={"version": version, "source_sha256": attempt.sha256, "native_fault": None},
+                )
+            )
 
 
 def exact_attempt(
@@ -219,37 +271,65 @@ def exact_attempt(
     from unbake.decomp import checks
 
     digest = hashlib.sha256(file.read_bytes()).hexdigest()
-    found = [row for row in attempts.read(project, function) if row.sha256 == digest]
+    found = [row for row in attempts.ledger(project).history(function) if row.sha256 == digest]
     if not found:
         raise Held(
-            "land",
-            f"land.not_compared: {function} was not compared since its last edit. Run: unbake compare {file}",
+            cause_named(
+                "land.not_compared",
+                f"land.not_compared: {function} was not compared since its last edit. Run: unbake compare {file}",
+                owner="land",
+                stage="land",
+            )
         )
     attempt = found[-1]
     if required_versions is not None:
         publication_versions(project, function, attempt, required_versions)
         broken = [row.finding for row in checks.findings(project, (file,), Cache(project.cache)).unmarked]
         if broken:
-            raise Held("land", f"land.rules: {function}: " + "; ".join(checks.plain(f) for f in broken))
+            raise Held(
+                cause_named(
+                    "land.exact_attempt",
+                    f"land.rules: {function}: " + "; ".join(checks.plain(f) for f in broken),
+                    owner="land",
+                    stage="land",
+                )
+            )
         return attempt
-    if any(row.get("percent") is None or row.get("fault") for row in attempt.versions.values()):
-        raise Held(
-            "land", f"land.not_exact: {function}: native comparison is unavailable; compare after resolving its fault"
-        )
+    comparison_refusal(function, attempt, tuple(attempt.versions))
     if attempt.exact:
         broken = [row.finding for row in checks.findings(project, (file,), Cache(project.cache)).unmarked]
         if broken:
-            raise Held("land", f"land.rules: {function}: " + "; ".join(checks.plain(f) for f in broken))
+            raise Held(
+                cause_named(
+                    "land.exact_attempt",
+                    f"land.rules: {function}: " + "; ".join(checks.plain(f) for f in broken),
+                    owner="land",
+                    stage="land",
+                )
+            )
         return attempt
     version, row = min(attempt.versions.items(), key=lambda item: item[1]["percent"])
     if row["percent"] < 100:
         raise Held(
-            "land",
-            f"land.not_exact: {function} matches only {attempt.best_percent:.2f}% (lowest version {version}). "
-            "Publish needs 100% in every version",
+            cause_named(
+                "land.not_exact",
+                (
+                    f"land.not_exact: {function} matches only {attempt.best_percent:.2f}% "
+                    f"(lowest version {version}). Publish needs 100% in every version"
+                ),
+                owner="land",
+                stage="land",
+            )
         )
     lines = [checks.plain(row.finding) for row in checks.findings(project, (file,), Cache(project.cache)).unmarked]
-    raise Held("land", f"land.rules: {function} matches 100% but breaks the source rules: {'; '.join(lines)}")
+    raise Held(
+        cause_named(
+            "land.rules",
+            f"land.rules: {function} matches 100% but breaks the source rules: {'; '.join(lines)}",
+            owner="land",
+            stage="land",
+        )
+    )
 
 
 def _with_compiler(project: Project, function: str, ident: str) -> Project:
@@ -263,7 +343,9 @@ def _compiler_config(project: Project, function: str, ident: str, before: bytes)
     """Keep the proved unit options and refuse config edits outside this publication's scope."""
     path = project.root / "config.toml"
     if path.read_bytes() != before:
-        raise Held("land", "land.config: config.toml changed since proof")
+        raise Held(
+            cause_named("land.config", "land.config: config.toml changed since proof", owner="land", stage="land")
+        )
     data = toml.loads(before.decode())
     if "config.toml" in dirty(project):
         committed = toml.loads(_git(project, "show", "HEAD:config.toml"))
@@ -273,7 +355,14 @@ def _compiler_config(project: Project, function: str, ident: str, before: bytes)
             return {**{key: value for key, value in document.items() if key != "units"}, "units": units}
 
         if other_options(data) != other_options(committed):
-            raise Held("land", f"land.config: {function}: unproved config changes outside its unit options")
+            raise Held(
+                cause_named(
+                    "land.config",
+                    f"land.config: {function}: unproved config changes outside its unit options",
+                    owner="land",
+                    stage="land",
+                )
+            )
     units = dict(data.get("units", {}))
     flags = project.unit_flags.get(function, ())
     if ident != project.default_compiler or flags:
@@ -316,9 +405,16 @@ def _prove_versions(
     for version, (equal, _) in zip(versions, results, strict=True):
         if not equal:
             raise Held(
-                "land",
-                f"land.mismatch: {function} compares exact but the {version} ROM built with it differs. "
-                f"The tree changed since the compare. Run: unbake compare {project.work / function / f'{function}.c'}",
+                cause_named(
+                    "land.mismatch",
+                    (
+                        f"land.mismatch: {function} compares exact but the {version} ROM built "
+                        f"with it differs. The tree changed since the compare. Run: unbake compare "
+                        f"{project.work / function / f'{function}.c'}"
+                    ),
+                    owner="land",
+                    stage="land",
+                )
             )
     return set().union(*(paths for _, paths in results))
 
@@ -332,13 +428,27 @@ def _fuzzy_signature(project: Project, function: str, version: str, source: str)
 
     body = mapped_body(project, function, version)
     if body is None:
-        raise Held("land", f"land.fuzzy_identity: {function} VERSION {version}: no current mapped entry")
+        raise Held(
+            cause_named(
+                "land.fuzzy_identity",
+                f"land.fuzzy_identity: {function} VERSION {version}: no current mapped entry",
+                owner="land",
+                stage="land",
+            )
+        )
     database = types_db.path(project)
     record = types_db.entries(database, "functions", [function]).get(function, {})
     record = leaf_entry_record(record, function, version, body)
     abi = record.get("abi", {})
     if abi.get("return_width") == 8 and (not abi.get("return_pair_known") or abi.get("conflicts")):
-        raise Held("land", f"land.fuzzy_abi: {function}: consumed integer return pair is unproven or contradictory")
+        raise Held(
+            cause_named(
+                "land.fuzzy_abi",
+                f"land.fuzzy_abi: {function}: consumed integer return pair is unproven or contradictory",
+                owner="land",
+                stage="land",
+            )
+        )
     expected = record.get("prototype") if record.get("state") == "known" else None
     declared_void = False
     if (
@@ -386,7 +496,14 @@ def _fuzzy_signature(project: Project, function: str, version: str, source: str)
         # proves an explicit no-argument definition's transport.
         expected = re.sub(r"(\b" + re.escape(function) + r"\s*)\(\s*\)", r"\g<1>(void)", expected)
     if not expected or re.search(r"\b" + re.escape(function) + r"\s*\(\s*\)", expected):
-        raise Held("land", f"land.fuzzy_abi: {function}: canonical entry signature is unresolved")
+        raise Held(
+            cause_named(
+                "land.fuzzy_abi",
+                f"land.fuzzy_abi: {function}: canonical entry signature is unresolved",
+                owner="land",
+                stage="land",
+            )
+        )
     expected = header_names.rewrite(expected, types_db.meta(database, "shared_aliases"), set())
     if own is None or not (
         redeclarations.equivalent(own["prototype"], expected, aliases)
@@ -401,7 +518,12 @@ def _fuzzy_signature(project: Project, function: str, version: str, source: str)
         )
     ):
         raise Held(
-            "land", f"land.fuzzy_abi: {function} VERSION {version}: definition differs from canonical `{expected}`"
+            cause_named(
+                "land.fuzzy_abi",
+                f"land.fuzzy_abi: {function} VERSION {version}: definition differs from canonical `{expected}`",
+                owner="land",
+                stage="land",
+            )
         )
 
     _fuzzy_calls(function, source, intrinsics=family_for(project.compiler_for(function)).source_intrinsics())
@@ -416,7 +538,17 @@ def _fuzzy_calls(function: str, source: str, *, intrinsics: tuple[str, ...] = ()
     try:
         tree = cdecl.parse(cdecl.declaration_source(source))
     except Exception as error:
-        raise Held("land", f"land.fuzzy_source: {function}: cannot validate call declarations: {error}") from error
+        raise Held(
+            capture(
+                error,
+                cause=cause_named(
+                    "land.fuzzy_source",
+                    f"land.fuzzy_source: {function}: cannot validate call declarations: {error}",
+                    owner="land",
+                    stage="land",
+                ),
+            )
+        ) from error
     declared = {node.name for node in tree.ext if isinstance(node, (c_ast.Decl, c_ast.Typedef))}
     declared.update(node.decl.name for node in tree.ext if isinstance(node, c_ast.FuncDef))
     declared.update(intrinsics)
@@ -424,12 +556,26 @@ def _fuzzy_calls(function: str, source: str, *, intrinsics: tuple[str, ...] = ()
         (node for node in tree.ext if isinstance(node, c_ast.FuncDef) and node.decl.name == function), None
     )
     if definition is None:
-        raise Held("land", f"land.fuzzy_identity: {function}: executable definition is missing")
+        raise Held(
+            cause_named(
+                "land.fuzzy_identity",
+                f"land.fuzzy_identity: {function}: executable definition is missing",
+                owner="land",
+                stage="land",
+            )
+        )
     text = c_generator.CGenerator().visit(definition)
     if placeholder := next(
         (token[0] for token in cdecl.SOURCE_TOKEN.finditer(text) if re.fullmatch(r"M2C_\w+", token[0])), None
     ):
-        raise Held("land", f"land.fuzzy_placeholder: {function}: unresolved {placeholder}")
+        raise Held(
+            cause_named(
+                "land.fuzzy_placeholder",
+                f"land.fuzzy_placeholder: {function}: unresolved {placeholder}",
+                owner="land",
+                stage="land",
+            )
+        )
     if definition.decl.type.args is not None:
         declared.update(param.name for param in definition.decl.type.args.params if isinstance(param, c_ast.Decl))
 
@@ -441,7 +587,14 @@ def _fuzzy_calls(function: str, source: str, *, intrinsics: tuple[str, ...] = ()
 
         def visit_FuncCall(self, node: Any) -> None:
             if isinstance(node.name, c_ast.ID) and node.name.name not in declared:
-                raise Held("land", f"land.fuzzy_undeclared: {function}: call to undeclared {node.name.name}")
+                raise Held(
+                    cause_named(
+                        "land.fuzzy_undeclared",
+                        f"land.fuzzy_undeclared: {function}: call to undeclared {node.name.name}",
+                        owner="land",
+                        stage="land",
+                    )
+                )
             self.generic_visit(node)
 
     Calls().visit(definition.body)
@@ -449,7 +602,7 @@ def _fuzzy_calls(function: str, source: str, *, intrinsics: tuple[str, ...] = ()
 
 def _fuzzy_builds_row(spec: tuple[Project, Project, Host, str, Path, str]) -> tuple[dict[str, Any], set[Path]]:
     from unbake.compilers.fingerprint import _body
-    from unbake.work.score import compare_words
+    from unbake.work.score import measure_words
 
     project, view, host, function, file, version = spec
     row = compare.row_of(project, function, version)
@@ -470,8 +623,16 @@ def _fuzzy_builds_row(spec: tuple[Project, Project, Host, str, Path, str]) -> tu
             except Held as error:
                 # Compiling admitted C is sufficient for guarded retention. A
                 # failed measurement remains unavailable, never a synthetic 0%.
-                return {"compiled": True, "percent": None, "exact": False, "fault": process.fault(error)}, dependencies
-            measured = compare_words(version, split.words(project, row), linked)
+                return {
+                    "compiled": True,
+                    "percent": None,
+                    "exact": False,
+                    "fault": capture(
+                        error, cause=cause_named("land.unexpected", str(error), owner="land", stage="land")
+                    ).document(),
+                }, dependencies
+            measured = measure_words(version, split.words(project, row), linked)
+            assert measured.typed is not None
             measured.typed["relocation"] += len(problems)
             return {**measured.document(), "compiled": True, "problems": problems}, dependencies
     except (Held, ValueError) as error:
@@ -480,7 +641,9 @@ def _fuzzy_builds_row(spec: tuple[Project, Project, Host, str, Path, str]) -> tu
             "percent": None,
             "exact": False,
             "reason": str(error),
-            "fault": process.fault(error),
+            "fault": capture(
+                error, cause=cause_named("land.unexpected", str(error), owner="land", stage="land")
+            ).document(),
         }, set()
 
 
@@ -535,7 +698,13 @@ def prove(
         failed = tuple({"version": v, **row} for v, row in scores.items() if not row["compiled"])
         if failed:
             raise Held(
-                "land", f"land.fuzzy_compile: {function}: {len(failed)} holding versions refused", failures=failed
+                cause_named(
+                    "land.fuzzy_compile",
+                    f"land.fuzzy_compile: {function}: {len(failed)} holding versions refused",
+                    owner="land",
+                    stage="land",
+                ),
+                failures=failed,
             )
         dependencies = set().union(*(paths for _, paths in results))
     else:
@@ -547,12 +716,33 @@ def prove(
         if not path.is_relative_to(project.root) or any(path.is_relative_to(home) for home in native):
             continue
         if any(path.is_relative_to(home) for home in (project.build, project.cache, project.roms)):
-            raise Held("land", f"land.dependency: {path}: published source depends on disposable or ROM input")
+            raise Held(
+                cause_named(
+                    "land.dependency",
+                    f"land.dependency: {path}: published source depends on disposable or ROM input",
+                    owner="land",
+                    stage="land",
+                )
+            )
         if path.resolve() != path:
-            raise Held("land", f"land.dependency: {path}: required regular project input, not a symlink")
+            raise Held(
+                cause_named(
+                    "land.dependency",
+                    f"land.dependency: {path}: required regular project input, not a symlink",
+                    owner="land",
+                    stage="land",
+                )
+            )
         # New staged headers are installed by this same publication.
         if not path.is_file() and (not path.is_relative_to(root) or path.relative_to(root).as_posix() not in headers):
-            raise Held("land", f"land.dependency: {path}: required regular project input")
+            raise Held(
+                cause_named(
+                    "land.dependency",
+                    f"land.dependency: {path}: required regular project input",
+                    owner="land",
+                    stage="land",
+                )
+            )
         publish_inputs.add(path)
     changed = {
         project.include[-1] / name: text.encode()
@@ -561,7 +751,14 @@ def prove(
     }
     for edit in source_edits:
         if not edit.path.is_file() or edit.path.read_text() != edit.before:
-            raise Held("land", f"land.consumer: {edit.path}: source changed since fold")
+            raise Held(
+                cause_named(
+                    "land.consumer",
+                    f"land.consumer: {edit.path}: source changed since fold",
+                    owner="land",
+                    stage="land",
+                )
+            )
         changed[edit.path] = edit.after.encode()
     if changed:
         from unbake.layout import redeclarations
@@ -596,7 +793,9 @@ def _fuzzy_score(project: Project, function: str, scores: dict[str, dict[str, An
     sizes = {v: compare.row_of(project, function, v).end - compare.row_of(project, function, v).start for v in scores}
     total = sum(sizes.values())
     if not total:
-        raise Held("land", f"land.fuzzy_score: {function}: empty target")
+        raise Held(
+            cause_named("land.fuzzy_score", f"land.fuzzy_score: {function}: empty target", owner="land", stage="land")
+        )
     return sum(sizes[v] * float(scores[v]["percent"]) for v in scores) / total
 
 
@@ -632,9 +831,16 @@ def _refuse_edited_headers(project: Project) -> None:
 
     if edited := generated_state.reconcile(project, "headers"):
         raise Held(
-            "land",
-            f"land.generated_edit: generated headers were edited by hand: {', '.join(edited)}. Put the declarations "
-            "in the draft; publish places them in the shared headers",
+            cause_named(
+                "land.generated_edit",
+                (
+                    f"land.generated_edit: generated headers were edited by hand: "
+                    f"{', '.join(edited)}. Put the declarations in the draft; publish places "
+                    f"them in the shared headers"
+                ),
+                owner="land",
+                stage="land",
+            )
         )
 
 
@@ -682,19 +888,33 @@ def land(
     _refuse_edited_headers(project)
     started = time.monotonic()
     function = compare.function_of(file)
-    previous_fuzzy = attempts.fuzzy(project, function)
+    previous_fuzzy = attempts.ledger(project).fuzzy(function)
     text = file.read_text()
     if previous_fuzzy is not None and file.resolve() == (project.src / f"{function}.c").resolve():
         text = attempts.unguarded(text)
     if fuzzy:
         if required_versions is not None:
-            raise Held("land", "land.fuzzy_versions: fuzzy retention compiles every holding version")
+            raise Held(
+                cause_named(
+                    "land.fuzzy_versions",
+                    "land.fuzzy_versions: fuzzy retention compiles every holding version",
+                    owner="land",
+                    stage="land",
+                )
+            )
         holding = split.holding_versions(project, function)
         if not holding or any(compare.row_of(project, function, v).kind != "asm" for v in holding):
-            raise Held("land", f"land.fuzzy_exact: {function}: fuzzy cannot replace exact C or original assembly")
+            raise Held(
+                cause_named(
+                    "land.fuzzy_exact",
+                    f"land.fuzzy_exact: {function}: fuzzy cannot replace exact C or original assembly",
+                    owner="land",
+                    stage="land",
+                )
+            )
         matching = [
             row
-            for row in attempts.read(project, function)
+            for row in attempts.ledger(project).history(function)
             if row.sha256 == hashlib.sha256(file.read_bytes()).hexdigest()
         ]
         attempt = matching[-1] if matching else None
@@ -718,10 +938,22 @@ def land(
     broken = [row.finding for row in (result.rows if fuzzy else result.unmarked)]
     if broken:
         rule_key = "land.fuzzy_rules" if fuzzy else "land.rules"
-        raise Held("land", f"{rule_key}: {function}: " + "; ".join(checks.plain(row) for row in broken))
+        raise Held(
+            cause_named(
+                "land.land",
+                f"{rule_key}: {function}: " + "; ".join(checks.plain(row) for row in broken),
+                owner="land",
+                stage="land",
+            )
+        )
     if fuzzy and folded.split_edits:
         raise Held(
-            "land", f"land.fuzzy_identity: {function}: resolve the proposed row ownership changes before retaining C"
+            cause_named(
+                "land.fuzzy_identity",
+                f"land.fuzzy_identity: {function}: resolve the proposed row ownership changes before retaining C",
+                owner="land",
+                stage="land",
+            )
         )
     source = attempts.guarded(folded.source) if fuzzy else folded.source
     headers = {**fold_apply.private_headers(project, function), **folded.headers}
@@ -745,7 +977,14 @@ def land(
                     previous_fuzzy["source_sha256"] is not None
                     and hashlib.sha256(before.encode()).hexdigest() != previous_fuzzy["source_sha256"]
                 ):
-                    raise Held("land", f"land.fuzzy_history: {function}: committed source differs from its receipt")
+                    raise Held(
+                        cause_named(
+                            "land.fuzzy_history",
+                            f"land.fuzzy_history: {function}: committed source differs from its receipt",
+                            owner="land",
+                            stage="land",
+                        )
+                    )
                 old_score = previous_fuzzy["score"]
                 if old_score is None:
                     baseline = prove(
@@ -764,9 +1003,15 @@ def land(
                 cleanup = score is not None and score == old_score and bool(checks.run(attempts.unguarded(before)))
                 if score is None or old_score is None or score < old_score or (score == old_score and not cleanup):
                     raise Held(
-                        "land",
-                        f"land.fuzzy_improvement: {function}: a strictly higher measured score or an equal measured "
-                        "score with source-rule cleanup is required",
+                        cause_named(
+                            "land.fuzzy_improvement",
+                            (
+                                f"land.fuzzy_improvement: {function}: a strictly higher measured score or "
+                                f"an equal measured score with source-rule cleanup is required"
+                            ),
+                            owner="land",
+                            stage="land",
+                        )
                     )
             fuzzy_receipt = {
                 "source_sha256": hashlib.sha256(source.encode()).hexdigest(),
@@ -774,8 +1019,7 @@ def land(
                 "score": score,
                 "versions": {v: row["percent"] for v, row in proof.scores.items()},
             }
-            attempts.append(
-                project,
+            attempts.ledger(project).compare(
                 attempts.Attempt(
                     attempts.now(),
                     function,
@@ -788,6 +1032,7 @@ def land(
                     time.monotonic() - started,
                     ident,
                 ),
+                compare.operation_dependencies(project, host, file),
             )
     finally:
         shutil.rmtree(stage, ignore_errors=True)
@@ -820,7 +1065,14 @@ def land(
     try:
         for edit in folded.source_edits:
             if not edit.path.is_file() or edit.path.read_text() != edit.before:
-                raise Held("land", f"land.consumer: {edit.path}: source changed since proof")
+                raise Held(
+                    cause_named(
+                        "land.consumer",
+                        f"land.consumer: {edit.path}: source changed since proof",
+                        owner="land",
+                        stage="land",
+                    )
+                )
         put(project.src / f"{function}.c", source.encode())
         for edit in folded.source_edits:
             put(edit.path, edit.after.encode())
@@ -836,16 +1088,29 @@ def land(
         from unbake import config
 
         if fuzzy or previous_fuzzy is not None:
-            put(attempts.summary_path(project), attempts.fuzzy_edit(project, function, fuzzy_receipt))
+            attempts.ledger(project).record_publication(
+                function,
+                fuzzy_receipt,
+                source,
+                versions,
+                ident,
+                compare.operation_dependencies(project, host, file),
+                committed=False,
+            )
         updated = config.load(project.root)
-        generated = buildfiles.write(updated, host)
+        receipts = attempts.ledger(updated).fuzzy_sources()
+        if fuzzy_receipt is not None:
+            receipts[function] = fuzzy_receipt
+        else:
+            receipts.pop(function, None)
+        generated = buildfiles.write(updated, host, receipts=receipts)
         units_path = project.root / "units.mk"
         if units_path.is_file():
             generated.append(units_path)
         steps.record(updated, "buildfiles", buildfiles.input_key(updated, host))
-        generated += progress.write(updated, host)
+        generated += progress.write(updated, host, receipts=receipts)
         steps.record(updated, "progress", steps.STEPS["progress"].key(updated, host))
-        _commit(project, host, sorted({*written, *generated, *dependencies}), message)
+        _commit(project, host, sorted({*written, *generated, *dependencies, project.root / attempts.PATH}), message)
     except BaseException:
         for path, previous in written.items():
             if previous is None:
@@ -854,6 +1119,14 @@ def land(
                 atomic_files.write(path, previous)
         raise
     commit = _git(project, "rev-parse", "HEAD").strip()
+    attempts.ledger(updated).record_publication(
+        function,
+        fuzzy_receipt,
+        source,
+        versions,
+        ident,
+        compare.operation_dependencies(updated, host, updated.src / f"{function}.c"),
+    )
     if on_commit is not None:
         on_commit(
             {
@@ -897,15 +1170,36 @@ def land_original(
     versions = list(split.holding_versions(project, function))
     rows = [compare.row_of(project, function, version) for version in versions]
     if any(row.kind != "asm" for row in rows):
-        raise Held("land", f"land.original_kind: {function}: only an unlanded asm row lands as original asm")
+        raise Held(
+            cause_named(
+                "land.original_kind",
+                f"land.original_kind: {function}: only an unlanded asm row lands as original asm",
+                owner="land",
+                stage="land",
+            )
+        )
     bodies = [split.words(project, row) for row in rows]
     proofs = [original_asm.prove(project, row, data) for row, data in zip(rows, bodies, strict=True)]
     if len({found.rule for found in proofs}) != 1:
-        raise Held("land", f"land.original_versions: {function}: versions prove different rules")
+        raise Held(
+            cause_named(
+                "land.original_versions",
+                f"land.original_versions: {function}: versions prove different rules",
+                owner="land",
+                stage="land",
+            )
+        )
     found = proofs[0]
     texts = {original_asm.write_source(project, host, row, data, found) for row, data in zip(rows, bodies, strict=True)}
     if len(texts) != 1:
-        raise Held("land", f"land.original_versions: {function}: versions need different .s text")
+        raise Held(
+            cause_named(
+                "land.original_versions",
+                f"land.original_versions: {function}: versions need different .s text",
+                owner="land",
+                stage="land",
+            )
+        )
     text = texts.pop()
     records = original_asm.load(project)
     records[function] = original_asm.Record(found.rule)
@@ -978,9 +1272,23 @@ def publish(
 
     result = Landed()
     if fuzzy and (originals or required_versions is not None):
-        raise Held("publish", "publish.fuzzy: use C files without --original or --require-version")
+        raise Held(
+            cause_named(
+                "publish.fuzzy",
+                "publish.fuzzy: use C files without --original or --require-version",
+                owner="land",
+                stage="publish",
+            )
+        )
     if originals and required_versions is not None:
-        raise Held("publish", "publish.versions: --original requires proof in every holding version")
+        raise Held(
+            cause_named(
+                "publish.versions",
+                "publish.versions: --original requires proof in every holding version",
+                owner="land",
+                stage="publish",
+            )
+        )
 
     committed_records: dict[str, dict[str, Any]] = {}
 
@@ -1025,7 +1333,13 @@ def publish(
             result.ready = [item for item, _ in work[position + (record is not None) :]]
             break
         except Held as error:
-            result.failed[name] = {"key": error.key, "reason": error.reason, "fault": process.fault(error)}
+            result.failed[name] = {
+                "key": error.key,
+                "reason": error.reason,
+                "fault": capture(
+                    error, cause=cause_named("land.unexpected", str(error), owner="land", stage="land")
+                ).document(),
+            }
             continue
         result.landed.append(name)
         result.commits.append(commit)
@@ -1056,7 +1370,9 @@ def publish(
                 "commit": commit,
                 "key": error.key,
                 "reason": error.reason,
-                "fault": process.fault(error),
+                "fault": capture(
+                    error, cause=cause_named("land.unexpected", str(error), owner="land", stage="land")
+                ).document(),
             }
             break
     return result

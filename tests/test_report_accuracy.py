@@ -18,6 +18,7 @@ from unittest.mock import patch
 import toml
 
 from tests.kit import host_values
+from tests.ledger_fixture import history_bytes
 from tests.project_fixture import ProjectCase
 from unbake import buildfiles, config
 from unbake.config import Held
@@ -42,9 +43,9 @@ class ReportAccuracyTests(ProjectCase):
             "score": score,
             "versions": {v: score for v in self.versions},
         }
-        table = attempts._committed(self.project)
+        table = attempts.ledger(self.project).summaries()
         table[name] = attempts.Summary(12, {v: best for v in self.versions}, False, 1, 1, receipt)
-        attempts.summary_path(self.project).write_bytes(attempts.encode(table))
+        (self.project.root / attempts.PATH).write_bytes(history_bytes(self.project, table))
         return receipt
 
     def reports(self):
@@ -81,7 +82,7 @@ class ReportAccuracyTests(ProjectCase):
         for best in (0, 57, 100):
             with self.subTest(best=best):
                 table = {"beta": attempts.Summary(12, {v: best for v in self.versions}, False, 1, 1)}
-                attempts.summary_path(self.project).write_bytes(attempts.encode(table))
+                (self.project.root / attempts.PATH).write_bytes(history_bytes(self.project, table))
                 report = progress.measure(self.project, self.host, "us")
                 self.assertEqual(report["measures"]["fuzzy_match_percent"], 0)
                 self.assertNotIn("fuzzy_match_percent", report["units"][1]["functions"][0])
@@ -185,7 +186,14 @@ class ReportAccuracyTests(ProjectCase):
             patch.object(Path, "read_bytes", read),
             patch.object(split, "functions", wraps=split.functions) as scans,
             patch.object(cdecl, "declarations", wraps=cdecl.declarations) as parses,
-            patch.object(attempts, "fuzzy_sources", wraps=attempts.fuzzy_sources) as receipts,
+            patch.object(
+                attempts.Ledger,
+                "fuzzy_sources",
+                autospec=True,
+                side_effect=lambda ledger: __import__(
+                    "tests.ledger_fixture", fromlist=["current_receipts"]
+                ).current_receipts(ledger),
+            ) as receipts,
             patch.object(subprocess, "run") as processes,
         ):
             inventory = state.inventory(self.project)
@@ -207,13 +215,13 @@ class ReportAccuracyTests(ProjectCase):
             ("versions", {"us": 15}, "source.versions"),
         ):
             with self.subTest(key=key):
-                table = attempts._committed(self.project)
+                table = attempts.ledger(self.project).summaries()
                 table["beta"] = replace(table["beta"], fuzzy={**receipt, key: value})
-                attempts.summary_path(self.project).write_bytes(attempts.encode(table))
+                (self.project.root / attempts.PATH).write_bytes(history_bytes(self.project, table))
                 with self.assertRaisesRegex(Held, reason):
                     state.inventory(self.project)
         table["beta"] = replace(table["beta"], fuzzy=None)
-        attempts.summary_path(self.project).write_bytes(attempts.encode(table))
+        (self.project.root / attempts.PATH).write_bytes(history_bytes(self.project, table))
         source = (self.project.src / "beta.c").read_bytes()
         with self.assertRaisesRegex(Held, "source.receipt.*reconcile"):
             progress.measure(self.project, self.host, "us")
@@ -221,14 +229,9 @@ class ReportAccuracyTests(ProjectCase):
 
     def test_duplicate_key_loss_sequence_refused_before_any_write(self):
         self.retained()
-        original = attempts._committed(self.project)["beta"].document()
-        older = {**original, "best": {v: 82 for v in self.versions}, "attempts": 1}
-        older.pop("fuzzy")
-        content = (
-            '{"v":1,"functions":{"beta":' + json.dumps(original) + ',"beta":' + json.dumps(older) + "}}"
-        ).encode()
-        self.assertNotIn("fuzzy", json.loads(content)["functions"]["beta"])
-        target = attempts.summary_path(self.project)
+        original = json.loads((self.project.root / attempts.PATH).read_bytes().splitlines()[-1])
+        content = attempts.encoded(original).replace(b'"schema":2', b'"schema":2,"schema":2') + b"\n"
+        target = self.project.root / attempts.PATH
         target.write_bytes(content)
         self.assertEqual(target.read_bytes(), content)
         with (
@@ -373,7 +376,7 @@ class ReportAccuracyTests(ProjectCase):
         self.retained(score=17)
         self.retained("gamma", score=None)
         # Begin with the same canonical committed summary that a prior publication writes.
-        attempts.write_summary(self.project, {"alpha", "beta", "gamma"})
+        self.assertEqual(set(attempts.ledger(self.project).fuzzy_sources()), {"beta", "gamma"})
         buildfiles.write_progress(self.project, publish_branch="main")
         out, err = io.StringIO(), io.StringIO()
         from unbake import cdecl

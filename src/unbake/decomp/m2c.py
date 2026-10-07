@@ -28,7 +28,8 @@ from unbake.decomp.draft_layouts import access_widths, normalize
 from unbake.decomp.draft_macros import lower
 from unbake.decomp.draft_syntax import address_arithmetic
 from unbake.decomp.field_access import share
-from unbake.process import read_text, run_tool
+from unbake.process import capture, read_text, run_tool
+from unbake.process import named as cause_named
 from unbake.project.headers import include_headers
 
 
@@ -42,18 +43,41 @@ def _shared_type_gate(output: str, function: str) -> None:
     source = cdecl.SOURCE_TOKEN.sub(lambda m: " " if m[0].startswith(('"', "'")) else m[0], source)
     declarations = cleaned_unit(source)
     if re.search(r"\btypedef\b|\b(?:struct|union)\s+\w*\s*\{", declarations):
-        raise Held("types", f"types.declaration: {function}: draft must reuse solved shared types")
+        raise Held(
+            cause_named(
+                "types.declaration",
+                f"types.declaration: {function}: draft must reuse solved shared types",
+                owner="decomp.m2c",
+                stage="types",
+            )
+        )
 
 
 def _headers(project: Project) -> list[tuple[Path, str]]:
     if not project.include:
-        raise Held("m2c", "paths.include is missing or empty")
+        raise Held(
+            cause_named("decomp.m2c._headers", "paths.include is missing or empty", owner="decomp.m2c", stage="m2c")
+        )
     for directory in project.include:
         if not Path(directory).is_dir():
-            raise Held("m2c", f"paths.include directory {directory} is missing")
+            raise Held(
+                cause_named(
+                    "decomp.m2c._headers",
+                    f"paths.include directory {directory} is missing",
+                    owner="decomp.m2c",
+                    stage="m2c",
+                )
+            )
     headers = include_headers(project)
     if not headers:
-        raise Held("m2c", f"paths.include {project.include}: project headers are missing")
+        raise Held(
+            cause_named(
+                "decomp.m2c._headers",
+                f"paths.include {project.include}: project headers are missing",
+                owner="decomp.m2c",
+                stage="m2c",
+            )
+        )
     return headers
 
 
@@ -63,7 +87,14 @@ def _context(headers: list[tuple[Path, str]], selected: set[Path]) -> str:
     relative_paths: dict[str, Path] = {}
     for path, relative in headers:
         if relative in relative_paths and relative_paths[relative] != path:
-            raise Held("m2c", f"paths.include has ambiguous header {relative}")
+            raise Held(
+                cause_named(
+                    "decomp.m2c._context",
+                    f"paths.include has ambiguous header {relative}",
+                    owner="decomp.m2c",
+                    stage="m2c",
+                )
+            )
         relative_paths[relative] = path
     # Include root headers in dependency order without copying their bodies.
     # Only unconditional includes can cover another selected root.
@@ -122,7 +153,11 @@ def _draft(
 ) -> str:
     """Draft text for one function. project is the draft view (its own include dir first)."""
     if not re.fullmatch(r"[A-Za-z_]\w*", function):
-        raise Held("m2c", "function is required and must be a C identifier")
+        raise Held(
+            cause_named(
+                "decomp.m2c._draft", "function is required and must be a C identifier", owner="decomp.m2c", stage="m2c"
+            )
+        )
     project.version(v)
     assembly_text, address = assembly_source(project, v, function, extracted)
     executable_path = str(policy.m2c)
@@ -132,7 +167,14 @@ def _draft(
     compiler = project.compiler_for(project.src / (function + ".c"))
     target = specification(compiler.id).m2c
     if not target:
-        raise Held("m2c", f"compiler.{compiler.id}: no registered decompiler target")
+        raise Held(
+            cause_named(
+                f"compiler.{compiler.id}",
+                f"compiler.{compiler.id}: no registered decompiler target",
+                owner="decomp.m2c",
+                stage="m2c",
+            )
+        )
     family = family_for(compiler)
     original_project = project
     work.mkdir(parents=True, exist_ok=True)
@@ -207,7 +249,14 @@ def _draft(
 
         types_path = types_db.path(original_project)
         if not types_path.is_file():
-            raise Held("draft", f"types.database: {types_path} is missing; the types step builds it")
+            raise Held(
+                cause_named(
+                    "types.database",
+                    f"types.database: {types_path} is missing; the types step builds it",
+                    owner="decomp.m2c",
+                    stage="draft",
+                )
+            )
     signatures = draft_abi.declarations(
         project, policy, v, body, context.read_text(), function=function, types_path=types_path
     )
@@ -234,7 +283,14 @@ def _draft(
         "m2c",
     )
     if not output.strip():
-        raise Held("m2c", f"policy.m2c {executable_path} produced no draft for {function}")
+        raise Held(
+            cause_named(
+                "decomp.m2c._draft",
+                f"policy.m2c {executable_path} produced no draft for {function}",
+                owner="decomp.m2c",
+                stage="m2c",
+            )
+        )
     if type_context and use_type_db and "Unable to find stack arg" in output:
         mapped = draft_abi.mapped_body(original_project, function, v)
         if mapped is not None:
@@ -245,7 +301,14 @@ def _draft(
         atomic_files.text(context, context.read_text() + "\n" + stack_header.read_text())
     output = normalize(output, context.read_text(), access_widths(assembly.read_text()))
     if "second half of f64" in output:
-        raise Held("m2c", f"{function}: unresolved second half of f64 in decompiler output")
+        raise Held(
+            cause_named(
+                f"{function}",
+                f"{function}: unresolved second half of f64 in decompiler output",
+                owner="decomp.m2c",
+                stage="m2c",
+            )
+        )
     output = stack_locals(output, context.read_text(), function, assembly.read_text())
     output = header_types(output, context.read_text())
     # Reject unsupported instructions/register reads before changing headers.
@@ -303,8 +366,15 @@ def _draft(
             prove(view, policy, function, v, compiled)
     except Held as error:
         raise Held(
-            error.phase,
-            f"m2c/type compile proof failed: {error.reason}",
+            capture(
+                error,
+                cause=cause_named(
+                    "decomp.m2c._draft",
+                    f"m2c/type compile proof failed: {error.reason}",
+                    owner="decomp.m2c",
+                    stage=error.phase,
+                ),
+            )
         ) from error
     return content
 
@@ -327,7 +397,25 @@ def draft(
         )
     except Held as error:
         if not error.reason.startswith(function + ":"):
-            raise Held(error.phase, f"{function}: {error.reason}", next_action=error.next_action) from error
+            raise Held(
+                capture(
+                    error,
+                    cause=cause_named(
+                        f"{function}",
+                        f"{function}: {error.reason}",
+                        owner="decomp.m2c",
+                        stage=error.phase,
+                        action=error.fault.cause.action,
+                    ),
+                )
+            ) from error
         raise
     except (OSError, UnicodeError) as error:
-        raise Held("m2c", f"{function}: draft input/output: {error}") from error
+        raise Held(
+            capture(
+                error,
+                cause=cause_named(
+                    f"{function}", f"{function}: draft input/output: {error}", owner="decomp.m2c", stage="m2c"
+                ),
+            )
+        ) from error

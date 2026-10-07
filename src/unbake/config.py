@@ -28,41 +28,48 @@ def _held(kind: type[Held], args: tuple[Any, ...], state: dict[str, Any]) -> Hel
     return held
 
 
-class Held(Exception):
-    def __init__(
-        self,
-        phase: str,
-        reason: str,
-        *,
-        next_action: str | None = None,
-        failures: tuple[dict[str, Any], ...] = (),
-        fault: dict[str, Any] | None = None,
-        data: dict[str, Any] | None = None,
-    ) -> None:
-        self.phase = phase
-        self.reason = reason
-        self.next_action = next_action
-        # Every (key, reason) when one refusal gathers several (all units a check found, not only the first).
-        self.failures = failures
-        self.fault = fault
-        self.data = data or {}
-        super().__init__(reason)
+def _cause(key: str, reason: str, *, owner: str, stage: str, action: Any = None) -> Any:
+    from unbake.process import named as cause_named
 
-    def __reduce__(self) -> tuple[Any, ...]:
-        """Pickle by fields, so a refusal raised in a pool worker reaches the parent as itself, not as a crash."""
-        return (_held, (type(self), self.args, self.__dict__))
+    return cause_named(key, reason, owner=owner, stage=stage, action=action)
+
+
+class Held(Exception):
+    """One explicit owning Fault. Text and outer wrappers never infer its key."""
+
+    def __init__(
+        self, value: Any, *, failures: tuple[dict[str, Any], ...] = (), data: dict[str, Any] | None = None
+    ) -> None:
+        from unbake.process import Cause, Fault
+
+        if not isinstance(value, (Cause, Fault)):
+            raise TypeError("Held requires an explicit Cause or Fault")
+        self.fault = Fault(value) if isinstance(value, Cause) else value
+        self.failures = failures
+        self.data = data or {}
+        super().__init__(self.fault.cause.reason)
+
+    @property
+    def phase(self) -> str:
+        return self.fault.cause.stage
 
     @property
     def key(self) -> str:
-        """The stable name of the refusal: the reason text before its first colon."""
-        return self.reason.split(":", 1)[0].strip()
+        return self.fault.cause.key
+
+    @property
+    def reason(self) -> str:
+        return self.fault.cause.reason
+
+    def __reduce__(self) -> tuple[Any, ...]:
+        return _held, (type(self), (self.fault,), self.__dict__)
 
 
 class Unfinished(Held, NotImplementedError):
     """Named refusal for an interface whose implementation has not landed."""
 
     def __init__(self, phase: str, key: str) -> None:
-        super().__init__(phase, f"{key}: implementation required")
+        super().__init__(_cause(key, f"{key}: implementation required", owner="config", stage=phase))
 
 
 # ---------------------------------------------------------------------------
@@ -195,12 +202,26 @@ class Project:
     def compiler_for(self, unit: str | Path) -> Compiler:
         ident = self.compiler_reference(unit)
         if ident not in self.compilers:
-            raise Held("config", f"[units].{Path(unit).stem}: unknown compiler {ident}")
+            raise Held(
+                _cause(
+                    f"[units].{Path(unit).stem}",
+                    f"[units].{Path(unit).stem}: unknown compiler {ident}",
+                    owner="config",
+                    stage="config",
+                )
+            )
         return self.compilers[ident]
 
     def version(self, v: str) -> Version:
         if v not in self.version_map:
-            raise Held("config", f"{self.root / 'config.toml'} [version].{v}: unknown VERSION")
+            raise Held(
+                _cause(
+                    "config.version",
+                    f"{self.root / 'config.toml'} [version].{v}: unknown VERSION",
+                    owner="config",
+                    stage="config",
+                )
+            )
         return self.version_map[v]
 
     def build_link(self, v: str) -> Path:
@@ -222,7 +243,14 @@ class PendingProject(Layout):
         label = _label(self.root / "config.toml", "build", key)
         values = build_values(dict(self.build_table), str(self.root / "config.toml"))
         if key not in values:
-            raise Held("config", f"{label}: missing value; set it in config.toml before setup")
+            raise Held(
+                _cause(
+                    f"{label}",
+                    f"{label}: missing value; set it in config.toml before setup",
+                    owner="config",
+                    stage="config",
+                )
+            )
         return _strings(values[key], label)
 
     @property
@@ -243,7 +271,11 @@ def _read(path: Path) -> dict[str, Any]:
         with path.open("rb") as source:
             return tomllib.load(source)
     except (OSError, tomllib.TOMLDecodeError) as error:
-        raise Held("config", f"{path}: {error}") from error
+        from unbake.process import capture
+
+        raise Held(
+            capture(error, cause=_cause(f"{path}", f"{path}: {error}", owner="config", stage="config"))
+        ) from error
 
 
 def _label(path: Path, table: str, name: str) -> str:
@@ -252,40 +284,42 @@ def _label(path: Path, table: str, name: str) -> str:
 
 def _required(values: dict[str, Any], name: str, label: str) -> Any:
     if name not in values:
-        raise Held("config", f"{label}: missing value")
+        raise Held(_cause(f"{label}", f"{label}: missing value", owner="config", stage="config"))
     return values[name]
 
 
 def _table(values: dict[str, Any], name: str, label: str) -> dict[str, Any]:
     value = _required(values, name, label)
     if not isinstance(value, dict):
-        raise Held("config", f"{label}: expected table")
+        raise Held(_cause(f"{label}", f"{label}: expected table", owner="config", stage="config"))
     return value
 
 
 def _text(value: object, label: str) -> str:
     if not isinstance(value, str) or not value.strip():
-        raise Held("config", f"{label}: expected nonempty string")
+        raise Held(_cause(f"{label}", f"{label}: expected nonempty string", owner="config", stage="config"))
     return value
 
 
 def _name(value: object, label: str) -> str:
     value = _text(value, label)
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", value):
-        raise Held("config", f"{label}: expected a single file stem")
+        raise Held(_cause(f"{label}", f"{label}: expected a single file stem", owner="config", stage="config"))
     return value
 
 
 def _strings(value: object, label: str) -> tuple[str, ...]:
     if not isinstance(value, list):
-        raise Held("config", f"{label}: expected array of strings")
+        raise Held(_cause(f"{label}", f"{label}: expected array of strings", owner="config", stage="config"))
     return tuple(_text(item, f"{label}[{index}]") for index, item in enumerate(value))
 
 
 def _digest(value: object, length: int, label: str) -> str:
     value = _text(value, label)
     if not re.fullmatch(rf"[0-9a-fA-F]{{{length}}}", value):
-        raise Held("config", f"{label}: expected {length}-digit hexadecimal digest")
+        raise Held(
+            _cause(f"{label}", f"{label}: expected {length}-digit hexadecimal digest", owner="config", stage="config")
+        )
     return value.lower()
 
 
@@ -301,7 +335,7 @@ def _positive(value: object, label: str, *, integer: bool) -> int | float:
     valid = type(value) is int if integer else type(value) in (int, float)
     if not valid or not isinstance(value, (int, float)) or value <= 0 or not math.isfinite(value):
         kind = "integer" if integer else "number"
-        raise Held("config", f"{label}: expected positive finite {kind}")
+        raise Held(_cause(f"{label}", f"{label}: expected positive finite {kind}", owner="config", stage="config"))
     return int(value) if integer else float(value)
 
 
@@ -309,17 +343,24 @@ def _relative(value: object, label: str, root: Path) -> Path:
     spelling = _text(value, label)
     path = Path(spelling)
     if path.is_absolute() or ".." in path.parts or path == Path(".") or any(ord(char) < 32 for char in spelling):
-        raise Held("config", f"{label}: expected project-relative path")
+        raise Held(_cause(f"{label}", f"{label}: expected project-relative path", owner="config", stage="config"))
     target = root / path
     if not target.resolve().is_relative_to(root):
-        raise Held("config", f"{label}: symlink escapes project")
+        raise Held(_cause(f"{label}", f"{label}: symlink escapes project", owner="config", stage="config"))
     return target
 
 
 def _refuse_retired(path: Path, data: dict[str, Any]) -> None:
     for section in RETIRED_SECTIONS:
         if section in data:
-            raise Held("config", f"{path} [{section}]: retired section; remove it")
+            raise Held(
+                _cause(
+                    "config._refuse_retired",
+                    f"{path} [{section}]: retired section; remove it",
+                    owner="config",
+                    stage="config",
+                )
+            )
 
 
 def discover(start: Path | None = None) -> Path:
@@ -327,7 +368,14 @@ def discover(start: Path | None = None) -> Path:
     for root in (directory, *directory.parents):
         if (root / "config.toml").is_file():
             return root
-    raise Held("config", "project.root: no project found from the working directory; supply --project DIR")
+    raise Held(
+        _cause(
+            "project.root",
+            "project.root: no project found from the working directory; supply --project DIR",
+            owner="config",
+            stage="config",
+        )
+    )
 
 
 def load_pending(root: Path) -> PendingProject:
@@ -337,11 +385,20 @@ def load_pending(root: Path) -> PendingProject:
     _refuse_retired(path, data)
     schema = _required(data, "schema", _label(path, "", "schema"))
     if type(schema) is not int or schema != SCHEMA_VERSION:
-        raise Held("config", f"{path} schema: expected {SCHEMA_VERSION}")
+        raise Held(
+            _cause("config.load_pending", f"{path} schema: expected {SCHEMA_VERSION}", owner="config", stage="config")
+        )
     project = _table(data, "project", f"{path} [project]")
     state = _required(project, "state", _label(path, "project", "state"))
     if state not in ("awaiting-roms", "ready"):
-        raise Held("config", f"{_label(path, 'project', 'state')}: expected awaiting-roms or ready")
+        raise Held(
+            _cause(
+                f"{_label(path, 'project', 'state')}",
+                f"{_label(path, 'project', 'state')}: expected awaiting-roms or ready",
+                owner="config",
+                stage="config",
+            )
+        )
     ident = _text(_required(project, "id", _label(path, "project", "id")), _label(path, "project", "id"))
     cap = _positive(
         _required(project, "layout_cap", _label(path, "project", "layout_cap")),
@@ -350,28 +407,43 @@ def load_pending(root: Path) -> PendingProject:
     )
     build = data.get("build", {})
     if not isinstance(build, dict):
-        raise Held("config", f"{path} [build]: expected table")
+        raise Held(_cause("config.load_pending", f"{path} [build]: expected table", owner="config", stage="config"))
     unknown = sorted(set(build) - BUILD_KEYS)
     if unknown:
-        raise Held("config", f"{path} [build].{unknown[0]}: unknown key")
+        raise Held(
+            _cause("config.load_pending", f"{path} [build].{unknown[0]}: unknown key", owner="config", stage="config")
+        )
     return PendingProject(root, ident, state, cap, tuple(sorted(build.items())))
 
 
 def _resident(path: Path, table: object) -> dict[str, tuple[ResidentMapping, ...]]:
     label = f"{path} [build.resident_mappings]"
     if not isinstance(table, dict):
-        raise Held("config", f"{label}: expected table")
+        raise Held(_cause(f"{label}", f"{label}: expected table", owner="config", stage="config"))
     result = {}
     for version, rows in table.items():
         if not isinstance(rows, list):
-            raise Held("config", f"{label}.{version}: expected array of tables")
+            raise Held(
+                _cause(
+                    f"{label}.{version}", f"{label}.{version}: expected array of tables", owner="config", stage="config"
+                )
+            )
         mappings = []
         for index, row in enumerate(rows):
             where = f"{label}.{version}[{index}]"
             if not isinstance(row, dict) or set(row) != {"address", "start", "end", "table_entry_bias"}:
-                raise Held("config", f"{where}: expected address, start, end, table_entry_bias")
+                raise Held(
+                    _cause(
+                        f"{where}",
+                        f"{where}: expected address, start, end, table_entry_bias",
+                        owner="config",
+                        stage="config",
+                    )
+                )
             if not all(type(row[key]) is int and row[key] >= 0 for key in row):
-                raise Held("config", f"{where}: expected non-negative integers")
+                raise Held(
+                    _cause(f"{where}", f"{where}: expected non-negative integers", owner="config", stage="config")
+                )
             mappings.append(ResidentMapping(row["address"], row["start"], row["end"], row["table_entry_bias"]))
         result[version] = tuple(mappings)
     return result
@@ -383,28 +455,34 @@ def load(root: Path, *, text: str | None = None) -> Project:
     path = root / "config.toml"
     pending = load_pending(root)
     if pending.state != "ready":
-        raise Held("config", "project.state: awaiting-roms; run unbake setup")
+        raise Held(
+            _cause("project.state", "project.state: awaiting-roms; run unbake setup", owner="config", stage="config")
+        )
     if text is None:
         data = _read(path)
     else:
         try:
             data = tomllib.loads(text)
         except tomllib.TOMLDecodeError as error:
-            raise Held("config", f"{path}: {error}") from error
+            from unbake.process import capture
+
+            raise Held(
+                capture(error, cause=_cause(f"{path}", f"{path}: {error}", owner="config", stage="config"))
+            ) from error
     _refuse_retired(path, data)
     unknown = sorted(set(data) - CONFIG_SECTIONS)
     if unknown:
-        raise Held("config", f"{path} [{unknown[0]}]: unknown section")
+        raise Held(_cause("config.load", f"{path} [{unknown[0]}]: unknown section", owner="config", stage="config"))
     project = _table(data, "project", f"{path} [project]")
     compiler_tables = _table(data, "compilers", f"{path} [compilers]")
     units_table = data.get("units", {})
     if not isinstance(units_table, dict):
-        raise Held("config", f"{path} [units]: expected table")
+        raise Held(_cause("config.load", f"{path} [units]: expected table", owner="config", stage="config"))
     version_tables = _table(data, "version", f"{path} [version]")
     build = _table(data, "build", f"{path} [build]")
     unknown = sorted(set(build) - BUILD_KEYS)
     if unknown:
-        raise Held("config", f"{path} [build].{unknown[0]}: unknown key")
+        raise Held(_cause("config.load", f"{path} [build].{unknown[0]}: unknown key", owner="config", stage="config"))
 
     def value(table: dict[str, Any], section: str, name: str) -> Any:
         return _required(table, name, _label(path, section, name))
@@ -414,28 +492,55 @@ def load(root: Path, *, text: str | None = None) -> Project:
     versions_label = _label(path, "project", "versions")
     versions = _strings(value(project, "project", "versions"), versions_label)
     if not versions or len(set(versions)) != len(versions):
-        raise Held("config", f"{versions_label}: expected distinct nonempty VERSIONs")
+        raise Held(
+            _cause(
+                f"{versions_label}",
+                f"{versions_label}: expected distinct nonempty VERSIONs",
+                owner="config",
+                stage="config",
+            )
+        )
     for v in versions:
         _name(v, versions_label)
         if v == "work":
-            raise Held("config", f"{versions_label}: VERSION 'work' collides with build/work")
+            raise Held(
+                _cause(
+                    f"{versions_label}",
+                    f"{versions_label}: VERSION 'work' collides with build/work",
+                    owner="config",
+                    stage="config",
+                )
+            )
     names_from = _text(value(project, "project", "names_from"), _label(path, "project", "names_from"))
     if names_from not in versions:
-        raise Held("config", f"{_label(path, 'project', 'names_from')}: unknown VERSION {names_from}")
+        raise Held(
+            _cause(
+                f"{_label(path, 'project', 'names_from')}",
+                f"{_label(path, 'project', 'names_from')}: unknown VERSION {names_from}",
+                owner="config",
+                stage="config",
+            )
+        )
     from unbake.compilers.registry import specification
 
     tools = Layout(root).tools
     if not compiler_tables:
-        raise Held("config", f"{path} [compilers]: expected nonempty table")
+        raise Held(
+            _cause("config.load", f"{path} [compilers]: expected nonempty table", owner="config", stage="config")
+        )
     compilers = {}
     for ident, table in compiler_tables.items():
         label = f"{path} [compilers.{ident}]"
         if not isinstance(table, dict):
-            raise Held("config", f"{label}: expected table")
+            raise Held(_cause(f"{label}", f"{label}: expected table", owner="config", stage="config"))
         try:
             spec = specification(ident)
         except Held as error:
-            raise Held("config", f"{label}: {error.reason}") from error
+            from unbake.process import capture
+
+            raise Held(
+                capture(error, cause=_cause(f"{label}", f"{label}: {error.reason}", owner="config", stage="config"))
+            ) from error
         cflags = _strings(_required(table, "cflags", label + ".cflags"), label + ".cflags")
         compilers[ident] = Compiler(
             ident,
@@ -447,21 +552,43 @@ def load(root: Path, *, text: str | None = None) -> Project:
         )
     default_compiler = _text(value(project, "project", "default_compiler"), _label(path, "project", "default_compiler"))
     if default_compiler not in compilers:
-        raise Held("config", f"{path} [project].default_compiler: unknown compiler {default_compiler}")
+        raise Held(
+            _cause(
+                "config.load",
+                f"{path} [project].default_compiler: unknown compiler {default_compiler}",
+                owner="config",
+                stage="config",
+            )
+        )
     units = {}
     unit_flags = {}
     for unit, row in units_table.items():
         label = f"{path} [units].{unit}"
         if not re.fullmatch(r"[A-Za-z_]\w*", unit):
-            raise Held("config", f"{label}: expected a function name")
+            raise Held(_cause(f"{label}", f"{label}: expected a function name", owner="config", stage="config"))
         if not isinstance(row, dict) or set(row) - {"compiler", "flags"} or "compiler" not in row:
-            raise Held("config", f"{label}: expected {{ compiler = ID, flags = [...] }}")
+            raise Held(
+                _cause(
+                    f"{label}", f"{label}: expected {{ compiler = ID, flags = [...] }}", owner="config", stage="config"
+                )
+            )
         ident = _text(row["compiler"], label + ".compiler")
         flags_row = _strings(row.get("flags", []), label + ".flags")
         if ident not in compilers:
-            raise Held("config", f"{label}.compiler: unknown compiler {ident}")
+            raise Held(
+                _cause(
+                    f"{label}.compiler", f"{label}.compiler: unknown compiler {ident}", owner="config", stage="config"
+                )
+            )
         if ident == default_compiler and not flags_row:
-            raise Held("config", f"{label}: equals the default compiler with no flags; remove the row")
+            raise Held(
+                _cause(
+                    f"{label}",
+                    f"{label}: equals the default compiler with no flags; remove the row",
+                    owner="config",
+                    stage="config",
+                )
+            )
         units[unit] = ident
         if flags_row:
             unit_flags[unit] = flags_row
@@ -486,7 +613,14 @@ def load(root: Path, *, text: str | None = None) -> Project:
             ),
         )
         if not version_map[v].baserom.is_relative_to(Layout(root).roms):
-            raise Held("config", f"{_label(path, section, 'baserom')}: expected a path under roms/")
+            raise Held(
+                _cause(
+                    f"{_label(path, section, 'baserom')}",
+                    f"{_label(path, section, 'baserom')}: expected a path under roms/",
+                    owner="config",
+                    stage="config",
+                )
+            )
 
     build = build_values(build, str(path))
 
@@ -612,6 +746,7 @@ _SETUP = (
 # The host keys each command needs.
 NEEDS: dict[str, tuple[str, ...]] = {
     "init": (),
+    "migrate-state": (),
     "setup": _SETUP,
     "next": (*_RESOURCES, *_CACHE),
     "draft": (*_COMPARE, "tools.m2c", "tools.splat", "tools.mips_objdump"),
@@ -659,12 +794,33 @@ def _host_table(path: Path, data: dict[str, Any]) -> dict[str, dict[str, Any]]:
     result: dict[str, dict[str, Any]] = {}
     for section, table in data.items():
         if section not in HOST_KEYS:
-            raise Held("config", f"unbake.toml [{section}]: unknown section ({path})")
+            raise Held(
+                _cause(
+                    "config._host_table",
+                    f"unbake.toml [{section}]: unknown section ({path})",
+                    owner="config",
+                    stage="config",
+                )
+            )
         if not isinstance(table, dict):
-            raise Held("config", f"unbake.toml [{section}]: expected table ({path})")
+            raise Held(
+                _cause(
+                    "config._host_table",
+                    f"unbake.toml [{section}]: expected table ({path})",
+                    owner="config",
+                    stage="config",
+                )
+            )
         for key in table:
             if key not in HOST_KEYS[section]:
-                raise Held("config", f"unbake.toml [{section}].{key}: unknown key ({path})")
+                raise Held(
+                    _cause(
+                        "config._host_table",
+                        f"unbake.toml [{section}].{key}: unknown key ({path})",
+                        owner="config",
+                        stage="config",
+                    )
+                )
         result[section] = dict(table)
     return result
 
@@ -673,7 +829,7 @@ def load_host(explicit: Path | None, project_root: Path | None, command: str) ->
     """Read the user file, then let <project>/.unbake/unbake.toml replace single keys."""
     path = host_path(explicit)
     if not path.is_file():
-        raise Held("config", f"unbake.toml: missing file {path}")
+        raise Held(_cause("unbake.toml", f"unbake.toml: missing file {path}", owner="config", stage="config"))
     values = _host_table(path, _read(path))
     sources = [path]
     if project_root is not None:
@@ -681,7 +837,14 @@ def load_host(explicit: Path | None, project_root: Path | None, command: str) ->
         if override.is_file():
             for section, table in _host_table(override, _read(override)).items():
                 if section == "resources" and "domain" in table:
-                    raise Held("config", f"{override} [resources].domain: machine domain belongs to the host file")
+                    raise Held(
+                        _cause(
+                            "config.load_host",
+                            f"{override} [resources].domain: machine domain belongs to the host file",
+                            owner="config",
+                            stage="config",
+                        )
+                    )
                 values.setdefault(section, {}).update(table)
             sources.append(override)
     host = Host(values, command, tuple(sources))
@@ -712,33 +875,60 @@ class Host:
 
     def require_command(self, command: str) -> None:
         if command not in NEEDS:
-            raise Held("config", f"command {command}: unknown command")
+            raise Held(
+                _cause("config.require_command", f"command {command}: unknown command", owner="config", stage="config")
+            )
         self.require(NEEDS[command])
 
     def _cross_checks(self, keys: set[str]) -> None:
         if {"cache.max_bytes", "cache.trim_to_bytes"} <= keys and self.cache_trim_to_bytes >= self.cache_max_bytes:
-            raise Held("config", "unbake.toml [cache].trim_to_bytes: expected less than [cache].max_bytes")
+            raise Held(
+                _cause(
+                    "config._cross_checks",
+                    "unbake.toml [cache].trim_to_bytes: expected less than [cache].max_bytes",
+                    owner="config",
+                    stage="config",
+                )
+            )
         if {"resources.memory_total_bytes", "resources.memory_parent_bytes", "resources.memory_worker_bytes"} <= keys:
             if self.memory_parent_bytes >= self.memory_total_bytes:
                 raise Held(
-                    "config",
-                    "unbake.toml [resources].memory_parent_bytes: expected less than [resources].memory_total_bytes",
+                    _cause(
+                        "config._cross_checks",
+                        "unbake.toml [resources].memory_parent_bytes: "
+                        "expected less than [resources].memory_total_bytes",
+                        owner="config",
+                        stage="config",
+                    )
                 )
             if self.memory_worker_bytes > self.memory_total_bytes - self.memory_parent_bytes:
                 raise Held(
-                    "config",
-                    "unbake.toml [resources].memory_worker_bytes: "
-                    "expected at most memory_total_bytes - memory_parent_bytes",
+                    _cause(
+                        "config._cross_checks",
+                        "unbake.toml [resources].memory_worker_bytes: "
+                        "expected at most memory_total_bytes - memory_parent_bytes",
+                        owner="config",
+                        stage="config",
+                    )
                 )
 
     def raw(self, dotted: str) -> Any:
         section, key = dotted.split(".", 1)
         if key not in HOST_KEYS.get(section, {}):
-            raise Held("config", f"{self._label(dotted)}: unknown key")
+            raise Held(
+                _cause(f"{self._label(dotted)}", f"{self._label(dotted)}: unknown key", owner="config", stage="config")
+            )
         table = self.values.get(section, {})
         if key not in table:
             choices = '; set "standalone" or an absolute broker manifest path' if dotted == "resources.domain" else ""
-            raise Held("config", f"{self._label(dotted)}: missing value (needed by {self.command}){choices}")
+            raise Held(
+                _cause(
+                    f"{self._label(dotted)}",
+                    f"{self._label(dotted)}: missing value (needed by {self.command}){choices}",
+                    owner="config",
+                    stage="config",
+                )
+            )
         return table[key]
 
     def has(self, dotted: str) -> bool:
@@ -754,13 +944,20 @@ class Host:
             if value == "standalone":
                 return value
             if not isinstance(value, str) or not value.strip() or not Path(value).expanduser().is_absolute():
-                raise Held("config", f'{label}: expected "standalone" or an absolute broker manifest path')
+                raise Held(
+                    _cause(
+                        f"{label}",
+                        f'{label}: expected "standalone" or an absolute broker manifest path',
+                        owner="config",
+                        stage="config",
+                    )
+                )
             return Path(value).expanduser()
         if kind == "int":
             return _positive(value, label, integer=True)
         if kind == "fraction":
             if type(value) not in (int, float) or not 0 < value <= 1:
-                raise Held("config", f"{label}: expected fraction in (0, 1]")
+                raise Held(_cause(f"{label}", f"{label}: expected fraction in (0, 1]", owner="config", stage="config"))
             return float(value)
         if kind == "hex64":
             return _digest(value, 64, label)
@@ -768,17 +965,28 @@ class Host:
             return _text(value, label)
         if kind == "dirs":
             if not isinstance(value, list) or not value:
-                raise Held("config", f"{label}: expected list of absolute directories")
+                raise Held(
+                    _cause(
+                        f"{label}", f"{label}: expected list of absolute directories", owner="config", stage="config"
+                    )
+                )
             directories = tuple(Path(_text(item, label)) for item in value)
             for directory in directories:
                 if not directory.is_absolute() or not directory.is_dir():
-                    raise Held("config", f"{label}: expected list of absolute directories; {directory}")
+                    raise Held(
+                        _cause(
+                            f"{label}",
+                            f"{label}: expected list of absolute directories; {directory}",
+                            owner="config",
+                            stage="config",
+                        )
+                    )
             return directories
         path = Path(_text(value, label)).expanduser()
         if not path.is_absolute():
-            raise Held("config", f"{label}: expected absolute path")
+            raise Held(_cause(f"{label}", f"{label}: expected absolute path", owner="config", stage="config"))
         if kind == "exe" and (not path.is_file() or not os.access(path, os.X_OK)):
-            raise Held("config", f"{label}: missing executable {path}")
+            raise Held(_cause(f"{label}", f"{label}: missing executable {path}", owner="config", stage="config"))
         return path
 
     # Typed accessors, one per key.

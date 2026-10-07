@@ -25,7 +25,7 @@ BUDGETS = {
     "worker_rss_bytes": 1 << 40,
 }
 # A host for code that only reads the budgets (steps.ensure in mocked step tables).
-BUDGET_HOST = SimpleNamespace(**BUDGETS)
+BUDGET_HOST = SimpleNamespace(**BUDGETS, memory_worker_bytes=512_000_000)
 
 EXECUTABLES = [
     "make",
@@ -61,9 +61,9 @@ def host_values(directory: Path) -> dict[str, dict[str, object]]:
             "domain": str(directory / "domain.toml"),
             "cores": 4,
             "workers": 2,
-            "memory_total_bytes": 8_000,
-            "memory_parent_bytes": 1_000,
-            "memory_worker_bytes": 2_000,
+            "memory_total_bytes": 6_000_000_000,
+            "memory_parent_bytes": 1_000_000_000,
+            "memory_worker_bytes": 512_000_000,
         },
         "cache": {
             "machine_root": str(directory / "cache"),

@@ -6,11 +6,12 @@ import hashlib
 import re
 
 from unbake.config import Held
+from unbake.process import named as cause_named
 
 
 def _function(value: object) -> str:
     if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z_]\w*", value):
-        raise Held("drafts", "function: expected a C identifier")
+        raise Held(cause_named("function", "function: expected a C identifier", owner="fold.drafts", stage="drafts"))
     return value
 
 
@@ -58,6 +59,10 @@ def unguard(source: str) -> str:
     """Remove exactly the outer partial wrapper or refuse its malformed form."""
     bounds = _partial_bounds(source)
     if bounds is None:
-        raise Held("drafts", "NON_MATCHING.guard is missing or invalid")
+        raise Held(
+            cause_named(
+                "fold.drafts.unguard", "NON_MATCHING.guard is missing or invalid", owner="fold.drafts", stage="drafts"
+            )
+        )
     start, end = bounds
     return "".join(line for index, line in enumerate(source.splitlines(keepends=True)) if index not in (start, end))

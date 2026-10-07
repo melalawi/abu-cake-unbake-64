@@ -7,6 +7,7 @@ from pathlib import Path
 from unbake import atomic, cache, inputs
 from unbake.compilers.families.types import PublicHeader
 from unbake.config import Held, Project
+from unbake.process import named as cause_named
 
 MARKER = "/* Generated public compiler provider. */"
 
@@ -31,7 +32,14 @@ def plan(project: Project) -> dict[Path, bytes]:
         for provider in variants.values():
             for alias, expected, declaration in provider.aliases:
                 if alias in declarations and declarations[alias] != (expected, declaration):
-                    raise Held("compiler-headers", f"compiler.header_alias: {name}: {alias}: incompatible families")
+                    raise Held(
+                        cause_named(
+                            "compiler.header_alias",
+                            f"compiler.header_alias: {name}: {alias}: incompatible families",
+                            owner="compilers.headers",
+                            stage="compiler-headers",
+                        )
+                    )
                 declarations[alias] = expected, declaration
         owners: dict[str, str] = {}
         for header, relative in include_headers(project):
@@ -51,10 +59,22 @@ def plan(project: Project) -> dict[Path, bytes]:
                     continue
                 if re.sub(r"\s+", "", aliases[alias]) != re.sub(r"\s+", "", declarations[alias][0]):
                     raise Held(
-                        "compiler-headers", f"compiler.header_alias: {relative}: {alias}: incompatible existing type"
+                        cause_named(
+                            "compiler.header_alias",
+                            f"compiler.header_alias: {relative}: {alias}: incompatible existing type",
+                            owner="compilers.headers",
+                            stage="compiler-headers",
+                        )
                     )
                 if alias in owners and owners[alias] != relative:
-                    raise Held("compiler-headers", f"compiler.header_alias: {alias}: multiple existing providers")
+                    raise Held(
+                        cause_named(
+                            "compiler.header_alias",
+                            f"compiler.header_alias: {alias}: multiple existing providers",
+                            owner="compilers.headers",
+                            stage="compiler-headers",
+                        )
+                    )
                 owners[alias] = relative
         lines = [
             MARKER,

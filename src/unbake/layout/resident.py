@@ -14,6 +14,7 @@ from pathlib import Path
 from unbake import atomic as atomic_files
 from unbake import cache, inputs
 from unbake.config import Held, Host, Project
+from unbake.process import named as cause_named
 
 MARKER = "/* Native resident constant storage; absolute access symbols retain their addresses. */"
 _DEFINITION = re.compile(r"const [A-Za-z_][\w ]*? (unbake_rodata_\w+?)(?:\[\w*\])* = .+;")
@@ -66,12 +67,26 @@ def deleted(text: str, unit: str) -> str:
         if guarded:
             if at >= len(lines) or lines[at].strip() != "#endif":
                 found = repr(lines[at]) if at < len(lines) else "the end of the file"
-                raise Held("resident", f"resident.{unit}: line {at + 1}: expected #endif, found {found}")
+                raise Held(
+                    cause_named(
+                        f"resident.{unit}",
+                        f"resident.{unit}: line {at + 1}: expected #endif, found {found}",
+                        owner="layout.resident",
+                        stage="resident",
+                    )
+                )
             at += 1
     result = "\n".join(out)
     used = sorted(name for name in names if re.search(rf"\b{name}\b", result))
     if used:
-        raise Held("resident", f"resident.{unit}: source still uses {', '.join(used)}")
+        raise Held(
+            cause_named(
+                f"resident.{unit}",
+                f"resident.{unit}: source still uses {', '.join(used)}",
+                owner="layout.resident",
+                stage="resident",
+            )
+        )
     return result
 
 
@@ -93,5 +108,5 @@ def run(project: Project, host: Host) -> list[Path]:
     if changed:
         land._commit(project, host, changed, "Delete resident constant blocks the link discards")
     if refused:
-        raise Held("resident", "; ".join(refused))
+        raise Held(cause_named("layout.resident.run", "; ".join(refused), owner="layout.resident", stage="resident"))
     return changed

@@ -44,7 +44,8 @@ from typing import Any, TypeVar, cast
 
 from unbake import atomic as atomic_files
 from unbake.config import Held, Host
-from unbake.process import temporary_environment
+from unbake.process import Fault, Frame, RetryRule, temporary_environment
+from unbake.process import named as cause_named
 
 T = TypeVar("T")
 R = TypeVar("R")
@@ -76,7 +77,39 @@ class TaskFailed(Held):
         versions = ", ".join(identity.get("versions", ()))
         where = fault.get("allocation", fault.get("cause", "worker exited"))
         suffix = "; retry failed" if fault.get("retry_exhausted", True) else ""
-        super().__init__("pool", f"{key}: {source} {functions} ({versions}): {where}{suffix}", fault=fault)
+        from unbake.inputs import DependencySet
+
+        dependencies = DependencySet(
+            (),
+            {
+                "input_keys": identity.get("input_keys", []),
+                "source_sha256": identity.get("source_sha256"),
+                "memory_worker_bytes": fault.get("configured_cap_bytes", fault.get("cap_bytes")),
+                "dependencies_unknown": not bool(identity.get("input_keys")),
+            },
+            {},
+        )
+        rule = RetryRule(
+            "dependencies" if key == "worker.memory" else "worker-generation",
+            ("value:input_keys", "value:source_sha256", "value:memory_worker_bytes")
+            if key == "worker.memory"
+            else ("value:worker_generation",),
+        )
+        super().__init__(
+            Fault(
+                cause_named(
+                    key,
+                    f"{source} {functions} ({versions}): {where}{suffix}",
+                    owner="pool",
+                    stage=str(where),
+                    subject=str(source),
+                    dependencies=dependencies,
+                    retry=rule,
+                    evidence=fault,
+                ),
+                (Frame("context", "pool", "worker", "worker transport", fault),),
+            )
+        )
         self.failure = key
         self.completed: list[tuple[TaskIdentity, Any]] = []
 
@@ -202,7 +235,14 @@ def _notify(state: str, stage: str, identity: TaskIdentity | None = None) -> Non
     # the watchdog itself. Large identities use the same explicit scratch transport.
     if len(payload) > 3000:
         if _progress_root is None:
-            raise Held("pool", "pool.progress: explicit scratch required for a large TaskIdentity")
+            raise Held(
+                cause_named(
+                    "pool.progress",
+                    "pool.progress: explicit scratch required for a large TaskIdentity",
+                    owner="pool",
+                    stage="pool",
+                )
+            )
         path = Path(_progress_root) / (uuid.uuid4().hex + ".pickle")
         atomic_files.fresh(path, payload)
         payload = pickle.dumps(("file", str(path)))
@@ -228,7 +268,14 @@ def _identify(fn: Any, shared: Any, item: Any) -> TaskIdentity:
 def admitted(workers: int, memory_total_bytes: int, memory_parent_bytes: int, memory_worker_bytes: int) -> int:
     """How many workers fit: at most `workers`, and their caps fit within total - parent."""
     if memory_worker_bytes <= 0 or memory_total_bytes <= memory_parent_bytes:
-        raise Held("pool", "pool.memory: worker cap and total-parent budget must be positive")
+        raise Held(
+            cause_named(
+                "pool.memory",
+                "pool.memory: worker cap and total-parent budget must be positive",
+                owner="pool",
+                stage="pool",
+            )
+        )
     return max(1, min(workers, (memory_total_bytes - memory_parent_bytes) // memory_worker_bytes))
 
 
@@ -318,8 +365,12 @@ def _socket_directory(root: Path) -> str:
         multiprocessing.connection.arbitrary_address = _socket_address  # type: ignore[attr-defined]
     elif len(os.fsencode(root)) > _SOCKET_ROOM:
         raise Held(
-            "pool",
-            f"pool.socket: cache.machine_root {root} is too long for the worker socket; configure a shorter path",
+            cause_named(
+                "pool.socket",
+                f"pool.socket: cache.machine_root {root} is too long for the worker socket; configure a shorter path",
+                owner="pool",
+                stage="pool",
+            )
         )
     previous = config.get("tempdir")
     if previous and Path(previous).parent == root and Path(previous).is_dir():
@@ -340,7 +391,14 @@ def _executor(
     progress_root: str | None = None,
 ) -> ProcessPoolExecutor:
     if scratch is None:
-        raise Held("pool", "pool.scratch: cache.machine_root is required for worker transport")
+        raise Held(
+            cause_named(
+                "pool.scratch",
+                "pool.scratch: cache.machine_root is required for worker transport",
+                owner="pool",
+                stage="pool",
+            )
+        )
     directory = _socket_directory(scratch)
     return ProcessPoolExecutor(
         max_workers=size,
@@ -414,14 +472,28 @@ def _named(fn: Callable[..., R], *arguments: Any) -> R:
         raise
     except Exception as error:
         raise Held(
-            "pool",
-            f"{effort.name_of(fn)}: {type(error).__name__} at {_where(error)}: {error}",
-            fault={
-                "action": effort.name_of(fn),
-                "category": "python",
-                "cause": type(error).__name__,
-                "where": _where(error),
-            },
+            Fault(
+                cause_named(
+                    f"{effort.name_of(fn)}",
+                    f"{effort.name_of(fn)}: {type(error).__name__} at {_where(error)}: {error}",
+                    owner="pool",
+                    stage="pool",
+                ),
+                (
+                    Frame(
+                        "context",
+                        "pool",
+                        "pool",
+                        f"{effort.name_of(fn)}: {type(error).__name__} at {_where(error)}: {error}",
+                        {
+                            "action": effort.name_of(fn),
+                            "category": "python",
+                            "cause": type(error).__name__,
+                            "where": _where(error),
+                        },
+                    ),
+                ),
+            )
         ) from error
 
 
@@ -458,10 +530,7 @@ def _measured(
     if isinstance(error, WorkerMemory):
         error.args[0].update(measured)
     elif isinstance(error, Held):
-        from unbake.process import fault
-
-        chain = fault(error)
-        error.fault = {**(error.fault or {}), **chain, **measured}
+        error.fault = error.fault.framed("pool", "worker", error.reason, measured)
     if fn is not _batch and error is None:
         _notify("item-done", "sendback")
     else:
@@ -670,7 +739,9 @@ class Pool:
                         continue
                     self._faults[token] = fault
                     assert fault.fault is not None
-                    fault.fault["configured_cap_bytes"] = self.memory_worker_bytes
+                    fault.fault = fault.fault.framed(
+                        "pool", "worker", "configured worker cap", {"configured_cap_bytes": self.memory_worker_bytes}
+                    )
                     current = self.watchdog.current[token]
                     self._report(token, "stuck", current)
                     kill_groups([cast(int, current.pid)])
@@ -686,8 +757,10 @@ class Pool:
                 if isinstance(error, WorkerMemory):
                     if not error.args[0].get("identity"):
                         error.args[0]["identity"] = asdict(identity)
-                elif isinstance(error, Held) and not (error.fault or {}).get("identity"):
-                    error.fault = {**(error.fault or {}), "identity": asdict(identity)}
+                elif isinstance(error, Held):
+                    error.fault = error.fault.framed(
+                        "pool", "worker", "physical input identity", {"identity": asdict(identity)}
+                    )
             return stuck
 
     def _forget(self, future: Future[Any]) -> None:
@@ -736,7 +809,7 @@ class Pool:
 
     def _submit(self, fn: Callable[[T], R], item: T) -> Future[R]:
         if self._executor is None:
-            raise Held("pool", "pool: use Pool as a context manager")
+            raise Held(cause_named("pool", "pool: use Pool as a context manager", owner="pool", stage="pool"))
         executor = self._executor
         token: str | None = None
         if fn is _measured and self._events is not None:
@@ -793,19 +866,30 @@ class Pool:
             if error is not None:
                 effort.count("worker.crash", 1, 1)
                 failed = Held(
-                    "pool",
-                    f"worker.crash: {effort.name_of(fn)}: {error}",
-                    fault={
-                        "action": effort.name_of(fn),
-                        "category": "worker-exit",
-                        "cause": type(error).__name__,
-                        "configured_cap_bytes": self.memory_worker_bytes,
-                        "wall_seconds": time.monotonic() - started,
-                        "wall_scope": "submission-to-completion",
-                        "cpu_seconds": None,
-                        "peak_rss_bytes": None,
-                        "counts": None,
-                    },
+                    Fault(
+                        cause_named(
+                            "worker.crash", f"worker.crash: {effort.name_of(fn)}: {error}", owner="pool", stage="pool"
+                        ),
+                        (
+                            Frame(
+                                "context",
+                                "pool",
+                                "pool",
+                                f"worker.crash: {effort.name_of(fn)}: {error}",
+                                {
+                                    "action": effort.name_of(fn),
+                                    "category": "worker-exit",
+                                    "cause": type(error).__name__,
+                                    "configured_cap_bytes": self.memory_worker_bytes,
+                                    "wall_seconds": time.monotonic() - started,
+                                    "wall_scope": "submission-to-completion",
+                                    "cpu_seconds": None,
+                                    "peak_rss_bytes": None,
+                                    "counts": None,
+                                },
+                            ),
+                        ),
+                    )
                 )
                 failed.__cause__ = error
                 self._failure(done, failed)
@@ -840,7 +924,14 @@ class Pool:
         path: Path | None = None
         if shared is not None:
             if self.scratch is None:
-                raise Held("pool", "pool.shared: this pool has no scratch directory for a shared value")
+                raise Held(
+                    cause_named(
+                        "pool.shared",
+                        "pool.shared: this pool has no scratch directory for a shared value",
+                        owner="pool",
+                        stage="pool",
+                    )
+                )
             self.scratch.mkdir(parents=True, exist_ok=True)
             path = self.scratch / f"shared-{os.getpid()}-{uuid.uuid4().hex}.pickle"
             atomic_files.fresh(path, pickle.dumps(shared, protocol=pickle.HIGHEST_PROTOCOL))
@@ -953,7 +1044,7 @@ class Pool:
                 self._failure(future, error)
                 failure = "worker.memory" if isinstance(error, MemoryError) else "worker.crash"
                 effort.count(failure, 1, 1)
-                if attempt:
+                if attempt or isinstance(error, MemoryError):
                     diagnostic = (
                         dict(error.args[0])
                         if isinstance(error, WorkerMemory)

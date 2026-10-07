@@ -12,6 +12,7 @@ from unbake import effort, pool
 from unbake.config import Held
 from unbake.fold import imports
 from unbake.layout import apply, header_loss, header_step, index, map
+from unbake.process import named
 from unbake.typemap import database, declaration_evidence, regeneration
 from unbake.typemap.split import guarded, required_providers
 
@@ -334,7 +335,11 @@ class RetainedMacroGlobalTests(ProjectCase):
                     function(job) if shared is None else function(shared, job) for job in jobs
                 ],
             ),
-            patch.object(header_step, "validate", side_effect=Held("headers", "native consumer refused")) as native,
+            patch.object(
+                header_step,
+                "validate",
+                side_effect=Held(named("fixture.refusal", "native consumer refused", owner="fixture", stage="headers")),
+            ) as native,
             patch.object(database.types_db, "stage") as stage,
             self.assertRaisesRegex(Held, "native consumer refused"),
         ):

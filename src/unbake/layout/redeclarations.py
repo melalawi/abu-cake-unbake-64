@@ -11,6 +11,8 @@ from unbake import cache as retention
 from unbake import cdecl
 from unbake.cdecl import declaration_source, declarations
 from unbake.config import Held
+from unbake.process import capture
+from unbake.process import named as cause_named
 from unbake.typemap.declarations import _type, canonical
 from unbake.typemap.header_names import type_identity
 
@@ -180,7 +182,17 @@ def parse(source: Path, variant: str) -> cdecl.Declarations:
         names = [m[1] for m in _DECLARATOR.finditer(variant) if m[1] not in _KEYWORDS]
         symbol = names[0] if names else variant.strip().splitlines()[0]
         detail = error.reason.split(":", 1)[-1].strip()
-        raise Held(error.phase, f"{error.key}: {source}: {symbol}: {detail}") from error
+        raise Held(
+            capture(
+                error,
+                cause=cause_named(
+                    f"{error.key}",
+                    f"{error.key}: {source}: {symbol}: {detail}",
+                    owner="layout.redeclarations",
+                    stage=error.phase,
+                ),
+            )
+        ) from error
 
 
 def declared(source: Path, text: str) -> dict[str, int]:
@@ -218,7 +230,14 @@ def variants(text: str) -> tuple[str, ...]:
         elif depth == 1:
             branches.append("".join(lines[start:position]))
             start = position + 1
-    raise Held("layout", "layout.redeclaration: unclosed declaration conditional")
+    raise Held(
+        cause_named(
+            "layout.redeclaration",
+            "layout.redeclaration: unclosed declaration conditional",
+            owner="layout.redeclarations",
+            stage="layout",
+        )
+    )
 
 
 @retention.memoized("layout.redeclarations.catalog", size=retention.memory_size, copy_out=retention.clone)
@@ -231,7 +250,14 @@ def catalog(header: str) -> dict[str, str]:
             row = declarations(variant)
             for name in row.typedefs | row.declared:
                 if name in result and not equivalent(result[name], variant, mapping):
-                    raise Held("layout", f"layout.redeclaration.{name}: shared conflict\n{result[name]}\n{variant}")
+                    raise Held(
+                        cause_named(
+                            f"layout.redeclaration.{name}",
+                            f"layout.redeclaration.{name}: shared conflict\n{result[name]}\n{variant}",
+                            owner="layout.redeclarations",
+                            stage="layout",
+                        )
+                    )
                 result[name] = variant
     return result
 
@@ -371,7 +397,14 @@ def strip(text: str, imported: list[str], disagreements: dict[str, tuple[str, st
     for header in imported:
         for name, declaration in catalog(header).items():
             if name in shared and not equivalent(shared[name], declaration, mapping):
-                raise Held("layout", f"layout.redeclaration.{name}: shared conflict\n{shared[name]}\n{declaration}")
+                raise Held(
+                    cause_named(
+                        f"layout.redeclaration.{name}",
+                        f"layout.redeclaration.{name}: shared conflict\n{shared[name]}\n{declaration}",
+                        owner="layout.redeclarations",
+                        stage="layout",
+                    )
+                )
             shared[name] = declaration
     for start, end, declaration, local in reversed(_locals(text)):
         collisions = local.keys() & shared.keys()
@@ -385,10 +418,24 @@ def strip(text: str, imported: list[str], disagreements: dict[str, tuple[str, st
                 shared_declaration = shared_declaration[:left] + shared_declaration[right:]
             if not equivalent(local[name], shared_declaration, local_mapping):
                 if disagreements is None:
-                    raise Held("layout", f"layout.redeclaration.{name}: local:\n{declaration}\nshared:\n{shared[name]}")
+                    raise Held(
+                        cause_named(
+                            f"layout.redeclaration.{name}",
+                            f"layout.redeclaration.{name}: local:\n{declaration}\nshared:\n{shared[name]}",
+                            owner="layout.redeclarations",
+                            stage="layout",
+                        )
+                    )
                 disagreements[name] = (local[name].strip(), shared[name].strip())
         if collisions != local.keys():
-            raise Held("layout", "layout.redeclaration: partially imported conditional declaration\n" + declaration)
+            raise Held(
+                cause_named(
+                    "layout.redeclarations.strip",
+                    "layout.redeclaration: partially imported conditional declaration\n" + declaration,
+                    owner="layout.redeclarations",
+                    stage="layout",
+                )
+            )
         # Remove declaration bytes only; retain preceding comments and directives.
         masked = declaration_source(declaration)
         match = re.search(r"\b(?:typedef|extern)\b", masked)

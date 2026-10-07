@@ -10,32 +10,29 @@ from unbake import pool
 
 
 class CompletionTests(unittest.TestCase):
-    def test_memory_recycle_does_not_discard_an_unstarted_sibling(self):
-        queued = Future()
+    def test_known_memory_failure_starts_no_unchanged_recovery_worker(self):
         calls = []
 
         class Executor:
             def submit(self, fn, task):
                 _, item = task
                 calls.append(item)
-                if item == 1:
-                    return queued
                 future = Future()
-                fault = MemoryError() if calls.count(0) == 1 else None
+                fault = MemoryError() if item == 0 else None
                 future.set_result((item, 0.0, 0, {}, fault))
                 return future
 
-            def shutdown(self, *, cancel_futures=False):
-                if cancel_futures:
-                    queued.cancel()
-                else:
-                    queued.set_result((1, 0.0, 0, {}, None))
+            def shutdown(self, **kwargs):
+                pass
 
         owner = pool.Pool(2, 8_000_000_000, 4_000_000_000, 512_000_000)
         owner._executor = Executor()
-        with patch.object(pool, "_executor", return_value=Executor()):
-            self.assertEqual(list(owner.map(int, [0, 1])), [0, 1])
-        self.assertEqual(calls, [0, 1, 0])
+        with (
+            patch.object(pool, "_executor", return_value=Executor()) as restarted,
+            self.assertRaises(pool.TaskFailed) as caught,
+        ):
+            list(owner.map(int, [0, 1]))
+        self.assertEqual((caught.exception.key, calls, restarted.call_count), ("worker.memory", [0, 1], 0))
 
     def test_a_finished_sibling_is_not_repeated_after_another_worker_crashes(self):
         calls = []
@@ -87,15 +84,16 @@ class CompletionTests(unittest.TestCase):
 
     def test_failure_is_reported_in_input_order_even_when_later_failure_finishes_first(self):
         from unbake.config import Held
+        from unbake.process import named
 
         second_done = threading.Event()
 
         def action(item):
             if item == 0:
                 second_done.wait(1.0)
-                raise Held("test", "first input refused")
+                raise Held(named("fixture.refusal", "first input refused", owner="fixture", stage="test"))
             second_done.set()
-            raise Held("test", "later input refused")
+            raise Held(named("fixture.refusal", "later input refused", owner="fixture", stage="test"))
 
         owner = pool.Pool(2, 8_000_000_000, 4_000_000_000, 512_000_000)
         with (

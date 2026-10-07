@@ -6,12 +6,13 @@ from typing import NoReturn
 
 from unbake import atomic as atomic_files
 from unbake.config import Held, Project
+from unbake.process import named as cause_named
 
 _FUNCTION = re.compile("[A-Za-z_][A-Za-z_0-9]*\\Z")
 
 
 def held(reason: str) -> NoReturn:
-    raise Held("match", reason)
+    raise Held(cause_named("fold.common.held", reason, owner="fold.common", stage="match"))
 
 
 def read(path: Path) -> bytes:

@@ -14,6 +14,7 @@ from unbake import pool
 from unbake.cdecl import SOURCE_TOKEN
 from unbake.config import Held, Host, Project
 from unbake.layout import index, map, redeclarations
+from unbake.process import named as cause_named
 from unbake.project.headers import FileBlob, Graph, HeaderCheck, Search, SearchFiles, TreeView
 from unbake.typemap import storage
 
@@ -53,7 +54,14 @@ def rewrite(
 ) -> str:
     owner = ownership.owners.get(member)
     if owner is None:
-        raise Held("layout", f"layout.member.{member}: source has no group")
+        raise Held(
+            cause_named(
+                f"layout.member.{member}",
+                f"layout.member.{member}: source has no group",
+                owner="layout.apply",
+                stage="layout",
+            )
+        )
     # A header is imported only for names the source does not already declare itself, or WANTED ones.
     tokens = spelled(text) - (_local_names(source, text) - wanted)
     homes = {owner.header} | {lookup["symbols"][name] for name in tokens if name in lookup["symbols"]}
@@ -108,7 +116,14 @@ def _staged_headers(project: Project, outputs: Mapping[Path, bytes | Path]) -> d
             continue
         root = next((root for root in project.include if path.is_relative_to(root)), None)
         if root is None:
-            raise Held("layout", f"layout.provider: {path}: staged header is outside the effective include roots")
+            raise Held(
+                cause_named(
+                    "layout.provider",
+                    f"layout.provider: {path}: staged header is outside the effective include roots",
+                    owner="layout.apply",
+                    stage="layout",
+                )
+            )
         names.add(path.relative_to(root).as_posix())
     changes = {}
     for name in sorted(names):
@@ -242,9 +257,16 @@ def render(
     from unbake.typemap import database, regeneration
 
     map.load(project)
-    loaded = database.load(project, allow_stale=True)
+    loaded = database.load(project)
     if loaded is None:
-        raise Held("headers", "headers.types: no type solution; the types step must run first")
+        raise Held(
+            cause_named(
+                "headers.types",
+                "headers.types: no type solution; the types step must run first",
+                owner="layout.apply",
+                stage="headers",
+            )
+        )
     # The loaded solution is memoised: rendering adds declaration evidence and alias fields, so it gets its own
     # top level and evidence map; every other record is only read.
     value = {**loaded, "declaration_evidence": dict(loaded.get("declaration_evidence", {}))}

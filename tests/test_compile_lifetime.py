@@ -10,6 +10,7 @@ from unittest.mock import patch
 from tests.project_fixture import ProjectCase
 from unbake import process, runner
 from unbake.config import Held
+from unbake.process import named
 from unbake.work import compare
 
 
@@ -55,7 +56,9 @@ class CompileLifetimeTests(ProjectCase):
     def test_consumer_fault_releases_only_its_temporary_object_and_keeps_the_cas(self):
         file = self.root / "alpha.c"
         file.write_text("int alpha(void) { return 1; }\n")
-        refusal = Held("link", "link.undefined: missing canonical symbol")
+        refusal = Held(
+            named("link.undefined", "link.undefined: missing canonical symbol", owner="fixture", stage="link")
+        )
         with patch.object(process, "run_tool", side_effect=self.native):
             with (
                 self.assertRaises(Held) as caught,

@@ -22,6 +22,8 @@ from unbake.cdecl import attribute_source, declaration_source
 from unbake.cdecl import declarations as header_declarations
 from unbake.config import Held, Host, Project
 from unbake.decomp.draft_context import ordered_headers
+from unbake.process import capture
+from unbake.process import named as cause_named
 from unbake.project.headers import include_headers
 from unbake.typemap import storage, unit_layouts
 
@@ -124,9 +126,26 @@ def source_definition_units(
         try:
             unit = _declaration_unit(declaration_source(text))
         except Held as error:
-            raise Held(error.phase, f"types.declaration: {source}: {error.reason}") from error
+            raise Held(
+                capture(
+                    error,
+                    cause=cause_named(
+                        "types.declaration",
+                        f"types.declaration: {source}: {error.reason}",
+                        owner="typemap.declarations",
+                        stage=error.phase,
+                    ),
+                )
+            ) from error
         if conditional_braces:
-            raise Held("solve", f"types.declaration: {source}: conditional braces require a preprocessor environment")
+            raise Held(
+                cause_named(
+                    "types.declaration",
+                    f"types.declaration: {source}: conditional braces require a preprocessor environment",
+                    owner="typemap.declarations",
+                    stage="solve",
+                )
+            )
         yield unit
         return
     from unbake.fold.source_views import active_source
@@ -141,7 +160,17 @@ def source_definition_units(
             seen.add(masked)
             unit = _declaration_unit(masked)
         except Held as error:
-            raise Held(error.phase, f"types.declaration: {source}: {version}: {error.reason}") from error
+            raise Held(
+                capture(
+                    error,
+                    cause=cause_named(
+                        "types.declaration",
+                        f"types.declaration: {source}: {version}: {error.reason}",
+                        owner="typemap.declarations",
+                        stage=error.phase,
+                    ),
+                )
+            ) from error
         yield unit
 
 
@@ -189,7 +218,14 @@ def _unit_bodies_blanked(source: str) -> str:
                 line = source.count("\n", 0, match.start()) + 1
                 context = cdecl.located(source, f":{line}:1: unclosed function body")
                 signature = re.sub(r"\s+", " ", source[statement_start : match.start()]).strip()[-200:]
-                raise Held("solve", f"types.declaration: {context}: function {signature}")
+                raise Held(
+                    cause_named(
+                        "types.declaration",
+                        f"types.declaration: {context}: function {signature}",
+                        owner="typemap.declarations",
+                        stage="solve",
+                    )
+                )
             assigned, previous = False, "}"
             statement_start = closing.end()
             continue
@@ -231,10 +267,9 @@ def headers(
     contents: dict[Path, str] | None = None,
 ) -> str:
     if contents is None:
+        generated = storage.generated_view(project)
         contents = {
-            path: path.read_text()
-            for path, _ in include_headers(project, exclude=lambda path: storage.generated(project, path))
-            if not storage.generated(project, path)
+            path: path.read_text() for path, _ in include_headers(project, exclude=generated) if not generated(path)
         }
     if extra is None:
         from unbake.cache import memo
@@ -285,10 +320,24 @@ def _headers(
         # Raw guarded headers are useful to in-memory callers; other conditionals need cpp.
         for path, text in contents.items():
             if re.search(r"^\s*#\s*(?:if\b|elif\b|else\b)", text, re.M):
-                raise Held("solve", f"types.declaration: {path}: policy.cpp required for conditional types")
+                raise Held(
+                    cause_named(
+                        "types.declaration",
+                        f"types.declaration: {path}: policy.cpp required for conditional types",
+                        owner="typemap.declarations",
+                        stage="solve",
+                    )
+                )
         if extra is not None:
             if re.search(r"^\s*#\s*(?:if\b|ifdef\b|ifndef\b|elif\b|else\b)", extra.read_text(), re.M):
-                raise Held("solve", f"types.declaration: {extra}: policy.cpp required for conditional C")
+                raise Held(
+                    cause_named(
+                        "types.declaration",
+                        f"types.declaration: {extra}: policy.cpp required for conditional C",
+                        owner="typemap.declarations",
+                        stage="solve",
+                    )
+                )
             text = "\n".join(contents[path] for path in ordered) + "\n"
             text += (_BOUNDARY + "\n" if raw else "") + extra.read_text()
             return text if raw else clean(text)
@@ -296,7 +345,14 @@ def _headers(
             return "\n".join(f'# 1 "{path}"\n' + clean(contents[path]) for path in ordered)
         return clean("\n".join(contents[path] for path in ordered))
     if not policy.cpp:
-        raise Held("solve", "policy.cpp: required for typed header preprocessing")
+        raise Held(
+            cause_named(
+                "policy.cpp",
+                "policy.cpp: required for typed header preprocessing",
+                owner="typemap.declarations",
+                stage="solve",
+            )
+        )
     source = "".join(f'#include "{path}"\n' for path in ordered)
     if extra is not None:
         if include_generated:
@@ -587,8 +643,20 @@ def extract(
     source = _declaration_unit(source)
     try:
         tree = _parser.parse(source) if _parser is not None else _tree(source, _scope or {})
+    except MemoryError:
+        raise
     except Exception as error:
-        raise Held("solve", f"types.declaration: {provenance}: {cdecl.located(original, str(error))}") from error
+        raise Held(
+            capture(
+                error,
+                cause=cause_named(
+                    "types.declaration",
+                    f"types.declaration: {provenance}: {cdecl.located(original, str(error))}",
+                    owner="typemap.declarations",
+                    stage="solve",
+                ),
+            )
+        ) from error
     incoming = {node.name: _type(node.type) for node in tree.ext if isinstance(node, c_ast.Typedef)}
     aliases = {} if _prefix is None else _prefix["aliases"] if _compact and not incoming else dict(_prefix["aliases"])
     aliases.update(incoming)
@@ -839,7 +907,14 @@ def published(
     else:
         prefix, marker, suffix = text.partition(_BOUNDARY + "\n")
         if not marker:
-            raise Held("solve", "types.declaration: missing preprocessor source boundary")
+            raise Held(
+                cause_named(
+                    "types.declaration",
+                    "types.declaration: missing preprocessor source boundary",
+                    owner="typemap.declarations",
+                    stage="solve",
+                )
+            )
     seed, scope, cleaned = _prefix_seed(prefix, contracts)
     unit = _declaration_unit(_unit_clean("published", suffix, line_markers=True))
     # New aggregate definitions need the full layout context. Anonymous
@@ -864,7 +939,17 @@ def published(
         try:
             cdecl.parse("\n".join(prototypes), typedefs=scope)
         except Exception as error:
-            raise Held("solve", f"types.declaration: {provenance}: emitted prototype: {error}") from error
+            raise Held(
+                capture(
+                    error,
+                    cause=cause_named(
+                        "types.declaration",
+                        f"types.declaration: {provenance}: emitted prototype: {error}",
+                        owner="typemap.declarations",
+                        stage="solve",
+                    ),
+                )
+            ) from error
     return result
 
 
@@ -965,9 +1050,19 @@ def _declared_job(job: tuple[Project, Host, str, dict[str, Any], set[Path]]) -> 
     current = pool.current_identity()
     identity = current if current is not None and current.action == "types" else _declared_identity(None, job)
     pool.progress(identity, step="declarations")
-    facts.store(project, policy).text(
-        text, provenance, authored, lambda: extract(text, provenance, authored_headers=authored)
+    from unbake import steps
+    from unbake.inputs import DependencySet
+    from unbake.process import cause_scope
+
+    dependencies = (
+        steps.operation_dependencies(project, policy, "types")
+        if policy is not None
+        else DependencySet((), {"dependencies_unknown": True}, {})
     )
+    with cause_scope(identity.source or "headers", dependencies, complete=policy is not None):
+        facts.store(project, policy).text(
+            text, provenance, authored, lambda: extract(text, provenance, authored_headers=authored)
+        )
 
 
 _declared_job._pool_identity = _declared_identity  # type: ignore[attr-defined]
@@ -1082,8 +1177,15 @@ def _collect(project: Project, policy: Host | None, store: Any, keys: list[str])
                     for name in duplicates:
                         if redeclarations.normalized(statement) != redeclarations.normalized(provided_layouts[name]):
                             raise Held(
-                                "types",
-                                f"declaration_evidence.{name}: local:\n{statement}\nshared:\n{provided_layouts[name]}",
+                                cause_named(
+                                    f"declaration_evidence.{name}",
+                                    (
+                                        f"declaration_evidence.{name}: local:\n{statement}\nshared:\n"
+                                        f"{provided_layouts[name]}"
+                                    ),
+                                    owner="typemap.declarations",
+                                    stage="types",
+                                )
                             )
                     if not duplicates:
                         supplemental.append(statement)

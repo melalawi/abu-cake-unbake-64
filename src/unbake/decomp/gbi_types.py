@@ -7,6 +7,7 @@ import re
 from unbake.config import Held, Project
 from unbake.decomp import gbi_audio
 from unbake.decomp.gbi_source import gfx_typedefs, packet_pointers, tokens, typedefs
+from unbake.process import named as cause_named
 
 
 def scalar_signature(declaration: str) -> list[str]:
@@ -97,7 +98,14 @@ def sdk_views(project: Project, source: str) -> str:
             # The local signed flag differs from the SDK unsigned flag. Preserve
             # this declaration if the field participates in any expression.
             if any(re.search(r"\b" + name + r"(?:\s*\[[^]]+\])?\s*(?:->|\.)\s*flag\b", source) for name in names):
-                raise Held("gbi", "flat Vtx uses a signed flag; SDK view would change its type")
+                raise Held(
+                    cause_named(
+                        "decomp.gbi_types.sdk_views",
+                        "flat Vtx uses a signed flag; SDK view would change its type",
+                        owner="decomp.gbi_types",
+                        stage="gbi",
+                    )
+                )
             source = source[: vertex[0]] + source[vertex[1] :]
             fields = {
                 "x": "v.ob[0]",
@@ -128,9 +136,23 @@ def sdk_views(project: Project, source: str) -> str:
                 None,
             )
             if match is None:
-                raise Held("gbi", "float Mtx view has no existing shared matrix declaration")
+                raise Held(
+                    cause_named(
+                        "decomp.gbi_types.sdk_views",
+                        "float Mtx view has no existing shared matrix declaration",
+                        owner="decomp.gbi_types",
+                        stage="gbi",
+                    )
+                )
             if re.search(r"(?:->|\.)\s*m\b", source):
-                raise Held("gbi", "float Mtx member access needs a proven array view")
+                raise Held(
+                    cause_named(
+                        "decomp.gbi_types.sdk_views",
+                        "float Mtx member access needs a proven array view",
+                        owner="decomp.gbi_types",
+                        stage="gbi",
+                    )
+                )
             path, name = match
             source = source[: matrix[0]] + source[matrix[1] :]
             source = re.sub(r"\bMtx\b", name, source)
@@ -195,7 +217,14 @@ def canonical(project: Project, source: str) -> str:
         for start, end in gfx_spans:
             declaration = source[start:end]
             if not packet_shape(declaration):
-                raise Held("gbi", "local Gfx storage is not a proven two-word packet")
+                raise Held(
+                    cause_named(
+                        "decomp.gbi_types.canonical",
+                        "local Gfx storage is not a proven two-word packet",
+                        owner="decomp.gbi_types",
+                        stage="gbi",
+                    )
+                )
             direct |= not bool(re.search(r"\bwords\b", declaration))
             removals.append((start, end))
         for target in gfx_aliases:
@@ -210,7 +239,14 @@ def canonical(project: Project, source: str) -> str:
             )
             shape = re.search(r"\bstruct\s+" + re.escape(target) + r"\s*\{([^{}]+)\}\s*;", context)
             if shape is None or tokens(shape[1]) != ["u32", "words_w0", ";", "u32", "words_w1", ";"]:
-                raise Held("gbi", f"Gfx alias {target}: storage layout is not proven SDK-compatible")
+                raise Held(
+                    cause_named(
+                        "decomp.gbi_types.canonical",
+                        f"Gfx alias {target}: storage layout is not proven SDK-compatible",
+                        owner="decomp.gbi_types",
+                        stage="gbi",
+                    )
+                )
             flattened = True
             removals.append(source_types["Gfx"][:2])
         # Remove identical scalar declarations before inserting their shared header.
@@ -221,11 +257,25 @@ def canonical(project: Project, source: str) -> str:
                 continue
             if name in scalar_types:
                 if scalar_signature(declaration) != scalar_signature(scalar_types[name][2]):
-                    raise Held("gbi", f"local scalar {name} differs from the shared declaration")
+                    raise Held(
+                        cause_named(
+                            "decomp.gbi_types.canonical",
+                            f"local scalar {name} differs from the shared declaration",
+                            owner="decomp.gbi_types",
+                            stage="gbi",
+                        )
+                    )
                 removals.append((start, end))
             elif name in sdk_types:
                 if tokens(declaration) != tokens(sdk_types[name][2]):
-                    raise Held("gbi", f"local SDK type {name} differs from the shared declaration")
+                    raise Held(
+                        cause_named(
+                            "decomp.gbi_types.canonical",
+                            f"local SDK type {name} differs from the shared declaration",
+                            owner="decomp.gbi_types",
+                            stage="gbi",
+                        )
+                    )
                 removals.append((start, end))
         includes += [f'#include "{scalar.name}"', '#include "n64sdk.h"']
     if audio:
@@ -237,7 +287,14 @@ def canonical(project: Project, source: str) -> str:
         if not packet_shape(declaration, indirect[1] if indirect else None) or (
             words and not packet_shape(audio_fields)
         ):
-            raise Held("gbi", "local Acmd storage is not a proven two-word packet")
+            raise Held(
+                cause_named(
+                    "decomp.gbi_types.canonical",
+                    "local Acmd storage is not a proven two-word packet",
+                    owner="decomp.gbi_types",
+                    stage="gbi",
+                )
+            )
         removals.append(audio[:2])
         # Awords is supplied by the shared type header; other local spellings
         # can only disappear if used exclusively by this removed Acmd type.

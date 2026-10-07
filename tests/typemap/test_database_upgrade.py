@@ -32,7 +32,7 @@ class DatabaseUpgradeTests(test_solve_reuse.SolveReuseFixture):
                 self.assertEqual(self.published.call_count, calls + 1)
                 self.assertEqual(types_db.meta(self.database, "revision"), revision + 1)
                 self.assertIsNotNone(types_db.meta(self.database, "inference_key"))
-                self.assertTrue(solver.marker(self.project).is_file())
+                self.assertIsNotNone(steps.recorded(self.project, "types"))
 
     def test_step_cache_cannot_reuse_old_meta_even_when_its_key_matches(self):
         self.solve()
@@ -134,9 +134,9 @@ class DatabaseUpgradeTests(test_solve_reuse.SolveReuseFixture):
         with closing(sqlite3.connect(self.database)) as connection, connection:
             connection.execute("PRAGMA user_version = 0")
             connection.execute("DROP TABLE summary")
-            connection.execute("DROP TABLE redraft")
+            connection.execute("DROP TABLE IF EXISTS redraft")
             connection.execute("DELETE FROM meta WHERE key = 'revision'")
-        self.assertEqual(types_db.redrafts(self.database), {})
+        self.assertEqual(__import__("unbake.work.attempts", fromlist=["ledger"]).ledger(self.project).redrafts(), {})
         self.solve()
         self.assertEqual(types_db.meta(self.database, "revision"), 1)
         self.assertTrue(types_db.compatible(self.database))

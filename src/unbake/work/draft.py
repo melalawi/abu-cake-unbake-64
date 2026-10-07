@@ -15,8 +15,10 @@ from unbake import atomic as atomic_files
 from unbake import cache as retention
 from unbake import extract
 from unbake.config import Held, Host, Project, draft_view
-from unbake.decomp import exclusions, m2c, type_context
+from unbake.decomp import exclusions, m2c
 from unbake.layout import split
+from unbake.process import Action, capture
+from unbake.process import named as cause_named
 from unbake.work import attempts
 
 
@@ -43,13 +45,20 @@ def published_seed(project: Project, function: str) -> str | None:
 
     versions = split.holding_versions(project, function)
     kinds = [compare.row_of(project, function, version).kind for version in versions]
-    if attempts.fuzzy(project, function) is not None:
+    if attempts.ledger(project).fuzzy(function) is not None:
         return attempts.unguarded((project.src / f"{function}.c").read_text())
     if "c" not in kinds:
         return None
     source = project.src / f"{function}.c"
     if all(kind == "c" for kind in kinds) and not checks.unmarked(source):
-        raise Held("draft", f"draft.published: {function}: {source} is published and breaks no source rule")
+        raise Held(
+            cause_named(
+                "draft.published",
+                f"draft.published: {function}: {source} is published and breaks no source rule",
+                owner="work.draft",
+                stage="draft",
+            )
+        )
     return prelude.fields(prelude.resolve(source.read_text()))
 
 
@@ -58,9 +67,13 @@ def check_existing(project: Project, function: str, *, replace: bool) -> str | N
     file = project.work / function / f"{function}.c"
     if file.exists() and not replace:
         raise Held(
-            "draft",
-            f"draft.exists: {file} already exists; edit it, or redraft with --replace",
-            next_action=f"unbake compare {file}",
+            cause_named(
+                "draft.exists",
+                f"draft.exists: {file} already exists; edit it, or redraft with --replace",
+                owner="work.draft",
+                stage="draft",
+                action=Action("command", argv=("compare", str(file))),
+            ),
             data={
                 "phase": "preflight",
                 "blocked_before_build": True,
@@ -73,20 +86,41 @@ def check_existing(project: Project, function: str, *, replace: bool) -> str | N
     return inputs.digest(file, algorithm="sha256", reuse=retention.configured()) if file.is_file() else None
 
 
-def draft(project: Project, host: Host, function: str, *, replace: bool, expected_output: str | None) -> Drafted:
+def _draft(project: Project, host: Host, function: str, *, replace: bool, expected_output: str | None) -> Drafted:
     pin = check_existing(project, function, replace=replace)
     if pin != expected_output:
-        raise Held("draft", "draft.changed: existing draft changed during preparation")
+        raise Held(
+            cause_named(
+                "draft.changed",
+                "draft.changed: existing draft changed during preparation",
+                owner="work.draft",
+                stage="draft",
+            )
+        )
 
     def guard() -> None:
         if check_existing(project, function, replace=replace) != pin:
-            raise Held("draft", "draft.changed: output changed since preparation")
+            raise Held(
+                cause_named(
+                    "draft.changed",
+                    "draft.changed: output changed since preparation",
+                    owner="work.draft",
+                    stage="draft",
+                )
+            )
 
     seed = published_seed(project, function)
     if seed is None and function in exclusions.load(project):
-        raise Held("draft", f"draft.excluded: {function}: listed in {exclusions.MANIFEST}")
+        raise Held(
+            cause_named(
+                "draft.excluded",
+                f"draft.excluded: {function}: listed in {exclusions.MANIFEST}",
+                owner="work.draft",
+                stage="draft",
+            )
+        )
     versions = split.holding_versions(project, function)
-    directory = attempts.directory(project, function)
+    directory = project.work / function
     file = directory / f"{function}.c"
     if seed is not None:
         if replace:
@@ -108,7 +142,9 @@ def draft(project: Project, host: Host, function: str, *, replace: bool, expecte
         atomic_files.text(file, seed, encoding="utf-8")
         return Drafted(function, file, versions)
     version = naming_version(project, versions)
-    _digest, context = type_context.snapshot(project, function)
+    from unbake.typemap import database
+
+    _digest, context = database.digest(project), database.context(project, function=function)
     extracted = extract.directory(project, host, version)
     scratch = directory / ".m2c"
     if scratch.exists():
@@ -131,11 +167,39 @@ def draft(project: Project, host: Host, function: str, *, replace: bool, expecte
         atomic_files.text(file, unproven.read_text(encoding="utf-8"), encoding="utf-8")
         shutil.rmtree(scratch, ignore_errors=True)
         raise Held(
-            "draft",
-            f"draft.unproven: {file} does not compile yet; edit it: {error.reason}",
-            next_action=f"unbake compare {file}",
+            capture(
+                error,
+                cause=cause_named(
+                    "draft.unproven",
+                    f"draft.unproven: {file} does not compile yet; edit it: {error.reason}",
+                    owner="work.draft",
+                    stage="draft",
+                    action=Action("command", argv=("compare", str(file))),
+                ),
+            )
         ) from error
     guard()
     atomic_files.text(file, content, encoding="utf-8")
     shutil.rmtree(scratch, ignore_errors=True)
     return Drafted(function, file, versions)
+
+
+def draft(project: Project, host: Host, function: str, *, replace: bool, expected_output: str | None) -> Drafted:
+    if attempts.producer_operation() is not None:
+        return _draft(project, host, function, replace=replace, expected_output=expected_output)
+    from unbake import steps
+    from unbake.work.attempts import RetryScope, command_ledger
+
+    with (
+        command_ledger(project),
+        RetryScope(
+            project, "draft", function, {"replace": replace}, steps.operation_dependencies(project, host, "types")
+        ) as scope,
+    ):
+        result = _draft(project, host, function, replace=replace, expected_output=expected_output)
+        scope.value = {
+            "function": function,
+            "file": str(result.file.relative_to(project.root)),
+            "versions": list(result.versions),
+        }
+        return result

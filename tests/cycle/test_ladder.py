@@ -7,6 +7,7 @@ from unittest.mock import patch
 from tests.kit import TempCase
 from unbake.config import Held
 from unbake.cycle import ladder
+from unbake.process import named
 from unbake.search import BUILTINS
 
 
@@ -68,7 +69,10 @@ class TroubleTests(TempCase):
             self.assertIn(part, text)
 
     def test_missing_target_assembly_is_written_by_name_not_dropped(self) -> None:
-        self.assertIn("unavailable: extract: no asm", self.write({}, Held("extract", "extract: no asm")))
+        self.assertIn(
+            "unavailable: extract: no asm",
+            self.write({}, Held(named("extract", "extract: no asm", owner="fixture", stage="extract"))),
+        )
 
 
 if __name__ == "__main__":

@@ -5,6 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from tests.ledger_fixture import history_bytes
 from tests.project_fixture import ProjectCase
 from unbake import buildfiles, config, land
 from unbake.cache import Cache
@@ -47,8 +48,8 @@ class FuzzyCleanupTests(ProjectCase):
             "score": score,
             "versions": dict.fromkeys(self.versions, score),
         }
-        attempts.summary_path(self.project).write_bytes(
-            attempts.encode({FUNCTION: attempts.Summary(12, {}, False, 0.0, 1, receipt)})
+        (self.project.root / attempts.PATH).write_bytes(
+            history_bytes(self.project, {FUNCTION: attempts.Summary(12, {}, False, 0.0, 1, receipt)})
         )
 
     def publish_source(self, source=CLEANED, score=20.0, *, fuzzy=True, folded=None):
@@ -83,7 +84,7 @@ class FuzzyCleanupTests(ProjectCase):
         self.assertEqual(result, "c0ffee")
         self.assertEqual(self.source.read_text(), attempts.guarded(CLEANED))
         self.assertEqual(commit.args[3], f"Fuzzy {FUNCTION}")
-        receipt = attempts.fuzzy(self.project, FUNCTION)
+        receipt = attempts.ledger(self.project).fuzzy(FUNCTION)
         self.assertEqual(receipt["score"], 20.0)
         self.assertEqual(receipt["source_sha256"], hashlib.sha256(self.source.read_bytes()).hexdigest())
         self.assertEqual({v: self.project.version(v).split.read_bytes() for v in self.versions}, splits)
@@ -93,19 +94,19 @@ class FuzzyCleanupTests(ProjectCase):
 
     def test_real_cleanup_lower_or_unknown_score_never_replaces(self):
         self.seed()
-        summary = attempts.summary_path(self.project).read_bytes()
+        summary = (self.project.root / attempts.PATH).read_bytes()
         for score in (19.0, None):
             with self.subTest(score=score), self.assertRaisesRegex(Held, "land.fuzzy_improvement"):
                 self.publish_source(score=score)
             self.assertEqual(self.source.read_text(), COMMITTED)
-            self.assertEqual(attempts.summary_path(self.project).read_bytes(), summary)
+            self.assertEqual((self.project.root / attempts.PATH).read_bytes(), summary)
 
     def test_clean_baseline_needs_higher_score(self):
         self.seed(CLEANED)
         with self.assertRaisesRegex(Held, "land.fuzzy_improvement"):
             self.publish_source()
         self.publish_source(score=21.0)
-        self.assertEqual(attempts.fuzzy(self.project, FUNCTION)["score"], 21.0)
+        self.assertEqual(attempts.ledger(self.project).fuzzy(FUNCTION)["score"], 21.0)
 
     def test_unknown_baseline_requires_available_measurement(self):
         self.seed(score=None)
@@ -160,7 +161,7 @@ class FuzzyCleanupTests(ProjectCase):
             0.1,
             "ido-7.1",
         )
-        with patch.object(attempts, "read", return_value=[measured]):
+        with patch.object(attempts.Ledger, "history", return_value=[measured]):
             with self.assertRaisesRegex(Held, "land.rules.*raw display list"):
                 land.exact_attempt(self.project, FUNCTION, self.file)
             with self.assertRaisesRegex(Held, "land.rules.*raw display list"):

@@ -9,6 +9,7 @@ from typing import TypeVar
 
 from unbake.config import Held
 from unbake.decomp.needs import SymbolNeed
+from unbake.process import named as cause_named
 
 
 @dataclass(frozen=True)
@@ -60,7 +61,7 @@ T = TypeVar("T")
 
 def required(value: T | None, name: str) -> T:
     if value is None or value == "":
-        raise Held("symbols", f"{name}: missing value")
+        raise Held(cause_named(f"{name}", f"{name}: missing value", owner="decomp.symbols", stage="symbols"))
     return value
 
 
@@ -79,7 +80,14 @@ def references(target_words: Sequence[int], gp: int | None) -> list[Reference]:
     for index, word in enumerate(target_words):
         reset_now, reset_after_slot = reset_after_slot, False
         if type(word) is not int or not 0 <= word <= 0xFFFFFFFF:
-            raise Held("symbols", f"target_words[{index}]: expected unsigned word")
+            raise Held(
+                cause_named(
+                    f"target_words[{index}]",
+                    f"target_words[{index}]: expected unsigned word",
+                    owner="decomp.symbols",
+                    stage="symbols",
+                )
+            )
         op, rs, rt = word >> 26, word >> 21 & 31, word >> 16 & 31
         immediate = word & 0xFFFF
         if op in _LOADS and rs in constants:
@@ -120,16 +128,31 @@ def symbol_line(need: SymbolNeed) -> str:
     for field in ("version", "name", "address", "section", "type", "size"):
         required(getattr(need, field), f"{need.name}.{field}")
     if not re.fullmatch(_NAME, need.name):
-        raise Held("symbols", f"{need.name}.name: invalid symbol")
+        raise Held(
+            cause_named(
+                f"{need.name}.name", f"{need.name}.name: invalid symbol", owner="decomp.symbols", stage="symbols"
+            )
+        )
     if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", need.type):
-        raise Held("symbols", f"{need.name}.type: invalid Splat type")
+        raise Held(
+            cause_named(
+                f"{need.name}.type", f"{need.name}.type: invalid Splat type", owner="decomp.symbols", stage="symbols"
+            )
+        )
     address_only = (need.type, need.size) == ("address", 0)
     if (
         not 0 <= need.address <= 0xFFFFFFFF
         or (need.size <= 0 and not address_only)
         or (need.type == "address" and not address_only)
     ):
-        raise Held("symbols", f"{need.name}.address/size: invalid range")
+        raise Held(
+            cause_named(
+                f"{need.name}.address/size",
+                f"{need.name}.address/size: invalid range",
+                owner="decomp.symbols",
+                stage="symbols",
+            )
+        )
     if address_only:
         return f"{need.name} = 0x{need.address:08X};"
     return f"{need.name} = 0x{need.address:08X}; // type:{need.type} size:0x{need.size:X}"

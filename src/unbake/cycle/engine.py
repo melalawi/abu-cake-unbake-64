@@ -22,12 +22,14 @@ from typing import Any, TextIO
 
 from unbake import atomic as atomic_files
 from unbake import cache as retention
-from unbake import inputs, tui
+from unbake import config, inputs, tui
 from unbake.cli.output import Result
 from unbake.config import Held, Host, Project
 from unbake.cycle import ladder, rank
 from unbake.cycle.events import Emitter
-from unbake.process import fault as cause_fault
+from unbake.process import Fault, Frame, capture
+from unbake.process import named as cause_named
+from unbake.work import attempts
 
 STAGES = (
     "queued",
@@ -71,7 +73,6 @@ class Row:
 
 
 def _draft_task(spec: tuple[Path, Host, str, bool]) -> dict[str, Any]:
-    from unbake import config
     from unbake.work import draft
 
     root, host, function, replace = spec
@@ -85,7 +86,9 @@ def _draft_task(spec: tuple[Path, Host, str, bool]) -> dict[str, Any]:
             "ok": False,
             "key": error.key,
             "diagnostic": error.reason,
-            "fault": cause_fault(error),
+            "fault": capture(
+                error, cause=cause_named("cycle.engine.unexpected", str(error), owner="cycle.engine", stage="cycle")
+            ).document(),
             "seconds": time.monotonic() - started,
         }
     return {"ok": True, "file": str(made.file), "seconds": time.monotonic() - started}
@@ -102,7 +105,6 @@ def first_difference(lines: list[str]) -> str:
 
 
 def _compare_task(spec: tuple[Path, Host, str]) -> dict[str, Any]:
-    from unbake import config
     from unbake.work import compare
 
     root, host, file = spec
@@ -114,15 +116,31 @@ def _compare_task(spec: tuple[Path, Host, str]) -> dict[str, Any]:
             "ok": False,
             "key": error.key,
             "diagnostic": error.reason,
-            "fault": cause_fault(error),
+            "fault": capture(
+                error, cause=cause_named("cycle.engine.unexpected", str(error), owner="cycle.engine", stage="cycle")
+            ).document(),
             "seconds": time.monotonic() - started,
         }
+    first = compare.row_of(config.load(root), measured.function, next(iter(measured.compares)))
+    observed = attempts.Attempt(
+        attempts.now(),
+        measured.function,
+        measured.source_sha256,
+        first.end - first.start,
+        measured.document()["versions"],
+        measured.best_percent,
+        measured.exact,
+        measured.seconds,
+        measured.compiler,
+    )
     return {
+        "attempt": observed.document(),
+        **({"fault": next(iter(measured.faults.values()))} if measured.faults else {}),
         "ok": not measured.faults,
         "sha256": measured.source_sha256,
         "per_version": {
             v: {
-                "percent": round(c.match_percent, 6),
+                "percent": round(c.percent, 6) if c.percent is not None else None,
                 "exact": c.exact,
                 "first": first_difference(c.lines),
                 **({"fault": measured.faults[v]} if v in measured.faults else {}),
@@ -131,7 +149,7 @@ def _compare_task(spec: tuple[Path, Host, str]) -> dict[str, Any]:
         },
         "best_percent": None if measured.faults else measured.best_percent,
         "exact": measured.exact,
-        "diagnostic": next((first_difference(measured.compares[v].lines) for v in measured.faults), "")
+        "diagnostic": next((Fault.read(fault).cause.reason for fault in measured.faults.values()), "")
         or next((first_difference(c.lines) for c in measured.compares.values() if not c.exact), "")
         or next((f"rule broken: {line}" for line in measured.rule_lines), ""),
         "seconds": time.monotonic() - started,
@@ -139,7 +157,6 @@ def _compare_task(spec: tuple[Path, Host, str]) -> dict[str, Any]:
 
 
 def _search_task(spec: tuple[Path, Host, str, str]) -> dict[str, Any]:
-    from unbake import config
     from unbake.work import search
 
     root, host, file, method = spec
@@ -151,14 +168,16 @@ def _search_task(spec: tuple[Path, Host, str, str]) -> dict[str, Any]:
             "ok": False,
             "key": error.key,
             "diagnostic": error.reason,
-            "fault": cause_fault(error),
+            "fault": capture(
+                error, cause=cause_named("cycle.engine.unexpected", str(error), owner="cycle.engine", stage="cycle")
+            ).document(),
             "seconds": time.monotonic() - started,
         }
     return {
         "ok": True,
         "best_file": str(found.best_file),
         "mutations": found.mutations,
-        "words": found.words,
+        "measurements": {v: m.document() for v, m in found.measurements.items()},
         "seconds": time.monotonic() - started,
     }
 
@@ -166,7 +185,7 @@ def _search_task(spec: tuple[Path, Host, str, str]) -> dict[str, Any]:
 def _recheck_task(spec: tuple[Path, Host, str]) -> dict[str, Any]:
     """A landed function measured again as the unit it lives in (merge-units may have moved it): the unit is built
     with the current headers and must equal the ROM row in every holding version, and break no source rule."""
-    from unbake import config, runner
+    from unbake import runner
     from unbake.decomp import checks
     from unbake.layout import split
 
@@ -175,7 +194,14 @@ def _recheck_task(spec: tuple[Path, Host, str]) -> dict[str, Any]:
     try:
         for version, row in split.member_owners(project, function).items():
             if row.kind != "c":
-                raise Held("match", f"{function}: containing unit {row.path} is not C in VERSION {version}")
+                raise Held(
+                    cause_named(
+                        f"{function}",
+                        f"{function}: containing unit {row.path} is not C in VERSION {version}",
+                        owner="cycle.engine",
+                        stage="match",
+                    )
+                )
             data = runner.build_unit(project, host, Path(row.path).name, version)
             if data != split.words(project, row):
                 return {
@@ -191,7 +217,14 @@ def _recheck_task(spec: tuple[Path, Host, str]) -> dict[str, Any]:
                     "diagnostic": f"rule broken: {checks.plain(broken[0])}",
                 }
     except Held as error:
-        return {"exact": False, "best_percent": None, "diagnostic": error.reason, "fault": cause_fault(error)}
+        return {
+            "exact": False,
+            "best_percent": None,
+            "diagnostic": error.reason,
+            "fault": capture(
+                error, cause=cause_named("cycle.engine.unexpected", str(error), owner="cycle.engine", stage="cycle")
+            ).document(),
+        }
     return {"exact": True, "best_percent": 100.0, "diagnostic": ""}
 
 
@@ -245,11 +278,15 @@ def narrate(record: dict[str, Any]) -> None:
             )
         case "fn.search.start":
             tui.line(f"{function}: trying {record['method']} changes")
-        case "fn.search.done" if "words" in record:
+        case "fn.search.done" if "measurements" in record:
+            from unbake.work.score import Measurement
+
             tui.line(
-                f"  {function}: tried {record['mutations']} variants in {record['seconds']:g}s; "
-                f"best leaves {record['words']} words different"
+                f"{function}: tried {record['mutations']} variants"
+                + ("; no mutation proposed" if record["mutations"] == 0 else "")
             )
+            for value in record["measurements"].values():
+                tui.line(f"{function}: {Measurement.read(value).description()}")
         case "fn.exact":
             tui.verdict("cracked", f"{function}: byte-identical in every version")
         case "fn.creative":
@@ -327,7 +364,14 @@ def choose(project: Project, host: Host, pick: int | None, functions: tuple[str,
         missing = [name for name in functions if name not in by_name]
         if missing:
             reasons = "; ".join(f"{name}: {plan.refusal(project, name)}" for name in missing)
-            raise Held("cycle", f"cycle.functions: not candidates: {reasons}")
+            raise Held(
+                cause_named(
+                    "cycle.functions",
+                    f"cycle.functions: not candidates: {reasons}",
+                    owner="cycle.engine",
+                    stage="cycle",
+                )
+            )
         return [by_name[name] for name in functions]
     order = ranked(project, host)
     if pick is not None:
@@ -354,6 +398,7 @@ class Task:
     argument: str  # the function to draft, or the file to compare or search
     replace: bool = False
     method: str = ""  # the search method
+    operation: attempts.Operation | None = None
 
 
 def run(
@@ -374,7 +419,14 @@ def run(
     started = steps.ensure(project, host, PICK_STEPS)
     picked = choose(project, host, pick, functions)
     if not picked:
-        raise Held("cycle", "cycle.pick: nothing to work on (no candidates in the size window)")
+        raise Held(
+            cause_named(
+                "cycle.pick",
+                "cycle.pick: nothing to work on (no candidates in the size window)",
+                owner="cycle.engine",
+                stage="cycle",
+            )
+        )
     started += steps.ensure(project, host, DRAFT_STEPS)
     tui.line(f"Cycle on {len(picked)} functions: {', '.join(row.function for row in picked)}")
     emitter = Emitter(events)
@@ -425,12 +477,11 @@ def run(
     landed: list[str] = []
     fuzzy_landed: list[str] = []
     # The task each row has in the pool; its result is read only while it is still the row's task.
-    inflight: dict[str, tuple[Future[dict[str, Any]], Task]] = {}
+    inflight: dict[str, tuple[Future[attempts.Outcome], Task]] = {}
     # Tasks held back while a land waits for the pool to drain; they start after the land's steps.
     deferred: dict[str, Task] = {}
     # Exact or best retained source waiting for the same drained writer boundary.
     ready: list[str] = []
-    retried: set[tuple[str, str]] = set()
     watcher_stop = threading.Event()
     from unbake.cycle import watcher
 
@@ -465,7 +516,14 @@ def run(
             return [done.step for done in steps.ensure(project, host, names, report=report) if done.ran]
         except Held as error:
             steps_error = error.reason
-            emitter.emit("steps.held", key=error.key, reason=error.reason, fault=cause_fault(error))
+            emitter.emit(
+                "steps.held",
+                key=error.key,
+                reason=error.reason,
+                fault=capture(
+                    error, cause=cause_named("cycle.engine.unexpected", str(error), owner="cycle.engine", stage="cycle")
+                ).document(),
+            )
             return []
 
     watching.start()
@@ -479,12 +537,39 @@ def run(
                 deferred[function] = task
                 return
             deferred.pop(function, None)
+            dependencies = task_dependencies(project, host, task)
+            argument = (
+                task.argument
+                if task.kind == "draft"
+                else "project:" + str(Path(task.argument).relative_to(project.root))
+            )
+            request = {"argument": argument, "replace": task.replace, "method": task.method}
+            scope = attempts.RetryScope(project, task.kind, function, request, dependencies)
+            try:
+                scope.__enter__()
+            except Held as error:
+                row = rows[function]
+                row.stage, row.diagnostic = "held", error.reason
+                emitter.emit(
+                    "fn.held",
+                    function=function,
+                    key=error.key,
+                    reason=error.reason,
+                    fault=error.fault.document(),
+                    next=next_words("cycle", "--functions", function),
+                )
+                return
+            scope.scope.__exit__(None, None, None)
+            fn: Callable[..., dict[str, Any]]
+            arguments: tuple[Any, ...]
             if task.kind == "draft":
-                future = workers.submit(_draft_task, (project.root, host, task.argument, task.replace))
+                fn, arguments = _draft_task, (project.root, host, task.argument, task.replace)
             elif task.kind == "search":
-                future = workers.submit(_search_task, (project.root, host, task.argument, task.method))
+                fn, arguments = _search_task, (project.root, host, task.argument, task.method)
             else:
-                future = workers.submit(_compare_task, (project.root, host, task.argument))
+                fn, arguments = _compare_task, (project.root, host, task.argument)
+            future = workers.submit(execute_task, (scope.operation, fn, arguments))
+            task = __import__("dataclasses").replace(task, operation=scope.operation)
             inflight[function] = (future, task)
             future.add_done_callback(lambda done: inbox.put((task.kind, (function, done))))
 
@@ -523,7 +608,6 @@ def run(
                 start(row)
 
         def finish_land(row: Row) -> None:
-            from unbake import config
 
             current_project = config.load(project.root)
             if row.fuzzy:
@@ -548,7 +632,12 @@ def run(
                         function=row.function,
                         versions=list(row.versions),
                         diagnostic=error.reason,
-                        fault=cause_fault(error),
+                        fault=capture(
+                            error,
+                            cause=cause_named(
+                                "cycle.engine.unexpected", str(error), owner="cycle.engine", stage="cycle"
+                            ),
+                        ).document(),
                         returned_to_worker=False,
                     )
                     return
@@ -569,14 +658,16 @@ def run(
             try:
                 commit = land.land(current_project, host, Path(row.file))
             except Held as error:
-                again = (row.function, row.sha256) not in retried
-                retried.add((row.function, row.sha256))
+                again = False
                 emitter.emit(
                     "fn.land_failed",
                     function=row.function,
                     versions=list(row.versions),
                     diagnostic=error.reason,
-                    fault=cause_fault(error),
+                    fault=capture(
+                        error,
+                        cause=cause_named("cycle.engine.unexpected", str(error), owner="cycle.engine", stage="cycle"),
+                    ).document(),
                     returned_to_worker=again,
                 )
                 row.diagnostic = error.reason
@@ -595,7 +686,6 @@ def run(
                 bytes=row.bytes,
                 versions=list(row.versions),
                 seconds=round(time.monotonic() - started, 3),
-                retried=(row.function, row.sha256) in retried,
             )
             emitter.emit("fn.committed", function=row.function, commit=commit, message=message)
 
@@ -660,11 +750,11 @@ def run(
                 function=row.function,
                 method=method,
                 ok=result["ok"],
-                seconds=round(result["seconds"], 3),
+                seconds=round(result["seconds"], 3) if result["seconds"] is not None else None,
                 **({} if result["ok"] else {"diagnostic": result["diagnostic"]}),
                 **({"fault": result["fault"]} if "fault" in result else {}),
                 **({"diagnostic": SKIPPED} if result["ok"] and not result["mutations"] else {}),
-                **({"mutations": result["mutations"], "words": result["words"]} if result["ok"] else {}),
+                **({"mutations": result["mutations"], "measurements": result["measurements"]} if result["ok"] else {}),
             )
             if not result["ok"]:
                 # A method that errors is a tool gap, never a plateau: the row holds with the method's reason.
@@ -727,7 +817,8 @@ def run(
                     for row in rows.values()
                     if ran
                     and not row.held
-                    and (row.stage in REDONE or (row.stage == "held" and {"types", "headers"} & set(ran)))
+                    and (row.stage in REDONE or row.stage == "held")
+                    and dependency_unlocked(row)
                 ],
             )
             deferred.clear()
@@ -736,6 +827,19 @@ def run(
                 redo(row)
             for function, task in held_back.items():
                 submit(function, task)
+
+        def dependency_unlocked(row: Row) -> bool:
+            from unbake.work.attempts import ledger, retry_pending
+            from unbake.work.compare import operation_dependencies
+
+            history = ledger(project)
+            previous = history.latest("compare", row.function)
+            if previous is None or previous["dependencies"]["values"].get("dependencies_unknown", False):
+                return True
+            file = Path(row.file) if row.file else project.work / row.function / (row.function + ".c")
+            if not file.is_file():
+                return False
+            return retry_pending(project, "compare", row.function, operation_dependencies(project, host, file))
 
         def drain() -> None:
             """Cancel queued tasks so the pool empties fast; cancelled ones are held back and started again."""
@@ -763,16 +867,25 @@ def run(
                     entry = inflight.get(function)
                     if entry is None or entry[0] is not done:
                         continue  # superseded by a newer task for the row
+                    task = entry[1]
                     del inflight[function]
                     if done.cancelled():
                         deferred.setdefault(function, entry[1])
                     elif kind == "draft":
-                        _drafted(rows[function], _result(done), project, emitter, next_words, start, stopper)
+                        _drafted(
+                            rows[function],
+                            _result(done, task.operation, project),
+                            project,
+                            emitter,
+                            next_words,
+                            start,
+                            stopper,
+                        )
                     elif kind == "search":
                         if function not in deferred:  # a newer edit waits: this search read an older text
-                            searched(rows[function], _result(done))
+                            searched(rows[function], _result(done, task.operation, project))
                     else:
-                        outcome = _compared(rows[function], _result(done), emitter, stopper)
+                        outcome = _compared(rows[function], _result(done, task.operation, project), emitter, stopper)
                         if outcome == "exact":
                             rows[function].fuzzy = False
                             rows[function].ladder.best = 100.0
@@ -841,7 +954,6 @@ def run(
                     land_drained(resume=False)
             if board is not None:
                 board.close()
-    from unbake import config
 
     recorded = land.record(config.load(project.root), host)
     if recorded is not None:
@@ -917,7 +1029,7 @@ def _drafted(
             function=function,
             ok=False,
             file=str(written) if written.is_file() else "",
-            seconds=round(result["seconds"], 3),
+            seconds=round(result["seconds"], 3) if result["seconds"] is not None else None,
             diagnostic=result["diagnostic"],
             **({"fault": result["fault"]} if "fault" in result else {}),
         )
@@ -937,7 +1049,13 @@ def _drafted(
             next=next_words("draft", function),
         )
         return
-    emitter.emit("fn.draft.done", function=function, ok=True, file=result["file"], seconds=round(result["seconds"], 3))
+    emitter.emit(
+        "fn.draft.done",
+        function=function,
+        ok=True,
+        file=result["file"],
+        seconds=round(result["seconds"], 3) if result["seconds"] is not None else None,
+    )
     stopper.note_activity()
     row.drafted_sha = inputs.digest(Path(result["file"]), algorithm="sha256", reuse=retention.configured())
     start(row)
@@ -957,7 +1075,7 @@ def _compared(row: Row, result: dict[str, Any], emitter: Emitter, stopper: Stop)
             per_version=result.get("per_version", {}),
             best_percent=None,
             tries=row.tries,
-            seconds=round(result["seconds"], 3),
+            seconds=round(result["seconds"], 3) if result["seconds"] is not None else None,
             diagnostic=result["diagnostic"],
             **({"fault": result["fault"]} if "fault" in result else {}),
         )
@@ -973,7 +1091,7 @@ def _compared(row: Row, result: dict[str, Any], emitter: Emitter, stopper: Stop)
         per_version=result["per_version"],
         best_percent=result["best_percent"],
         tries=row.tries,
-        seconds=round(result["seconds"], 3),
+        seconds=round(result["seconds"], 3) if result["seconds"] is not None else None,
         diagnostic=result["diagnostic"],
         **({"fault": result["fault"]} if "fault" in result else {}),
     )
@@ -985,7 +1103,9 @@ def _compared(row: Row, result: dict[str, Any], emitter: Emitter, stopper: Stop)
     return "short" if row.best_percent < 100 else ""
 
 
-def _result(done: Future[dict[str, Any]]) -> dict[str, Any]:
+def _result(
+    done: Future[attempts.Outcome], operation: attempts.Operation | None = None, project: Project | None = None
+) -> dict[str, Any]:
     from unbake.pool import WorkerMemory
 
     if done.cancelled():
@@ -999,20 +1119,38 @@ def _result(done: Future[dict[str, Any]]) -> dict[str, Any]:
             if isinstance(error, MemoryError)
             else "worker.crash"
         )
-        return {
+        value: dict[str, Any] = {
             "ok": False,
             "key": key,
             "diagnostic": f"{type(error).__name__}: {error}",
             "seconds": (
-                (error.fault or {}).get("wall_seconds")
+                next(
+                    (
+                        frame.evidence.get("wall_seconds")
+                        for frame in reversed(error.fault.chain)
+                        if isinstance(frame, Frame) and "wall_seconds" in frame.evidence
+                    ),
+                    None,
+                )
                 if isinstance(error, Held)
                 else error.args[0].get("wall_seconds")
                 if isinstance(error, WorkerMemory)
                 else None
             ),
-            "fault": cause_fault(error),
+            "fault": capture(
+                error, cause=cause_named("cycle.engine.unexpected", str(error), owner="cycle.engine", stage="cycle")
+            ).document(),
         }
-    return done.result()
+        outcome = attempts.Outcome(
+            operation.id if operation else "0" * 32, "blocked", value, Fault.read(value["fault"]), {}
+        )
+    else:
+        outcome = done.result()
+    if operation is not None and project is not None:
+        history = attempts.ledger(project)
+        previous = history.latest(operation.kind, operation.subject)
+        history.record(operation, outcome, parents=(previous["event_id"],) if previous else ())
+    return dict(outcome.value)
 
 
 def _key(
@@ -1046,3 +1184,40 @@ def _key(
         else:
             row.stage = "queued"
             start(row)
+
+
+def task_dependencies(project: Project, host: Host, task: Task) -> inputs.DependencySet:
+    from unbake import steps
+
+    if task.kind == "draft":
+        return steps.operation_dependencies(project, host, "types")
+    from unbake.work.compare import operation_dependencies
+
+    return operation_dependencies(project, host, Path(task.argument))
+
+
+def execute_task(job: tuple[attempts.Operation, Callable[..., dict[str, Any]], tuple[Any, ...]]) -> attempts.Outcome:
+    from unbake import effort
+
+    operation, fn, arguments = job
+    before = effort.counted()
+    with attempts.producing(operation):
+        value = fn(arguments)
+    fault = Fault.read(value["fault"]) if value.get("fault") else None
+    if not value["ok"] and fault is None:
+        fault = Fault(
+            cause_named(
+                "cycle.unavailable",
+                value.get("diagnostic") or "measurement unavailable",
+                owner="cycle.engine",
+                stage=operation.kind,
+                subject=operation.subject,
+                dependencies=operation.dependencies,
+            )
+        )
+    work = {
+        name: counts[0] - before.get(name, (0, 0))[0]
+        for name, counts in effort.counted().items()
+        if counts[0] != before.get(name, (0, 0))[0]
+    }
+    return attempts.Outcome(operation.id, "ok" if value["ok"] else "blocked", value, fault, work)

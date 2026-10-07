@@ -7,9 +7,11 @@ import time
 import unittest
 from pathlib import Path
 
+from tests.ledger_fixture import fault_evidence
 from unbake import effort, pool
 from unbake.config import Held
 from unbake.cycle.engine import _result
+from unbake.process import named
 
 CAP = 512000000
 
@@ -23,7 +25,11 @@ def burn():
 
 def refused(value):
     burn()
-    raise Held("integration", "integration.refused: measured child failure")
+    raise Held(
+        named(
+            "integration.refused", "integration.refused: measured child failure", owner="fixture", stage="integration"
+        )
+    )
 
 
 def allocation(value):
@@ -73,8 +79,8 @@ class PoolEvidenceTests(unittest.TestCase):
         with self.workers() as workers, self.assertRaises(pool.TaskFailed) as caught:
             list(workers.map(allocation, [None]))
         self.assertEqual(caught.exception.key, "worker.memory")
-        self.assertEqual(caught.exception.fault["configured_cap_bytes"], CAP)
-        self.assertGreaterEqual(caught.exception.fault["cpu_seconds"], 0.03)
+        self.assertEqual(fault_evidence(caught.exception.fault)["configured_cap_bytes"], CAP)
+        self.assertGreaterEqual(fault_evidence(caught.exception.fault)["cpu_seconds"], 0.03)
         self.assertEqual(effort.counted()["integration.work"], (before[0] + 2, before[1] + 2))
 
     def test_abrupt_child_exit_reports_observed_submission_wall(self):

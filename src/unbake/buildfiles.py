@@ -14,6 +14,7 @@ import hashlib
 import re
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from unbake import atomic as atomic_files
 from unbake import cache, inputs
@@ -22,6 +23,7 @@ from unbake.compilers import drivers
 from unbake.compilers import registry as compiler_registry
 from unbake.config import Held, Host, Project
 from unbake.layout import split
+from unbake.process import named as cause_named
 
 # Bump when this step's output changes for the same inputs. Keys never digest the tool's code.
 SCHEMA = 10
@@ -65,7 +67,14 @@ def relative(project: Project, path: Path) -> str:
 def words(values: tuple[str, ...] | list[str]) -> str:
     for value in values:
         if any(c in value for c in " \t\n'\"$#\\"):
-            raise Held("buildfiles", f"buildfiles.flag: {value!r}: flags may not contain spaces, quotes, $, # or \\")
+            raise Held(
+                cause_named(
+                    "buildfiles.flag",
+                    f"buildfiles.flag: {value!r}: flags may not contain spaces, quotes, $, # or \\",
+                    owner="buildfiles",
+                    stage="buildfiles",
+                )
+            )
     return " ".join(values)
 
 
@@ -81,7 +90,14 @@ def units(project: Project, version: str) -> list[Unit]:
         name = Path(row.path).name
         suffix = SOURCE_SUFFIX[row.kind]
         if not (project.src / f"{name}{suffix}").is_file():
-            raise Held("buildfiles", f"buildfiles.source: {version} row {name} has no src/{name}{suffix}")
+            raise Held(
+                cause_named(
+                    "buildfiles.source",
+                    f"buildfiles.source: {version} row {name} has no src/{name}{suffix}",
+                    owner="buildfiles",
+                    stage="buildfiles",
+                )
+            )
         result.append(Unit(name, row.address, row.start, row.end - row.start, row.kind))
     return sorted(result, key=lambda unit: unit.start)
 
@@ -140,7 +156,12 @@ def symbols_ld(project: Project, version: str) -> str:
     for name, address in bindings(project, version).items():
         if name in provided and provided[name] != address:
             raise Held(
-                "buildfiles", f"symbols.runtime_identity: {name}: configured address disagrees with proved native code"
+                cause_named(
+                    "symbols.runtime_identity",
+                    f"symbols.runtime_identity: {name}: configured address disagrees with proved native code",
+                    owner="buildfiles",
+                    stage="buildfiles",
+                )
             )
         provided[name] = address
     return "".join(f"PROVIDE({name} = 0x{address:08X});\n" for name, address in sorted(provided.items()))
@@ -170,7 +191,14 @@ def slices_mk(project: Project, version: str) -> str:
     cursor = 0
     for unit in units(project, version):
         if unit.start < cursor:
-            raise Held("buildfiles", f"buildfiles.overlap: {version} {unit.name} starts inside the previous row")
+            raise Held(
+                cause_named(
+                    "buildfiles.overlap",
+                    f"buildfiles.overlap: {version} {unit.name} starts inside the previous row",
+                    owner="buildfiles",
+                    stage="buildfiles",
+                )
+            )
         if unit.start > cursor:
             lines.append(f"{version}.S.{cursor:08X} := {cursor} {unit.start - cursor}\n")
             pieces.append(f"{build}/slices/{cursor:08X}.bin")
@@ -178,7 +206,14 @@ def slices_mk(project: Project, version: str) -> str:
         pieces.append(f"{build}/{'units' if unit.kind == 'c' else 'hasm'}/{unit.name}.bin")
         cursor = unit.start + unit.size
     if cursor > rom_size:
-        raise Held("buildfiles", f"buildfiles.rom_size: {version} rows end past the ROM")
+        raise Held(
+            cause_named(
+                "buildfiles.rom_size",
+                f"buildfiles.rom_size: {version} rows end past the ROM",
+                owner="buildfiles",
+                stage="buildfiles",
+            )
+        )
     if cursor < rom_size:
         lines.append(f"{version}.S.{cursor:08X} := {cursor} {rom_size - cursor}\n")
         pieces.append(f"{build}/slices/{cursor:08X}.bin")
@@ -186,13 +221,13 @@ def slices_mk(project: Project, version: str) -> str:
     return "".join(lines)
 
 
-def units_mk(project: Project) -> str:
+def units_mk(project: Project, *, receipts: dict[str, dict[str, Any]] | None = None) -> str:
     """Pattern-specific values (all versions) for units off the default compiler or with their own flags."""
     lines = [HEADER]
     default = project.compilers[project.default_compiler]
     from unbake.work import attempts
 
-    fuzzy = attempts.fuzzy_sources(project)
+    fuzzy = attempts.ledger(project).fuzzy_sources() if receipts is None else receipts
     names = sorted({path.stem for path in project.src.glob("*.c")})
     for name in names:
         targets = f"build/%/src/{name}.i build/%/src/{name}.key build/%/units/{name}.bin"
@@ -418,7 +453,14 @@ def makefile(project: Project, host: Host) -> str:
 def _pinned(action: tuple[str, str, str]) -> str:
     name, sha, tag = action
     if len(sha) != 40 or any(c not in "0123456789abcdef" for c in sha):
-        raise Held("buildfiles", f"buildfiles.ci_pin: {name}: a full 40-hex commit SHA is required")
+        raise Held(
+            cause_named(
+                "buildfiles.ci_pin",
+                f"buildfiles.ci_pin: {name}: a full 40-hex commit SHA is required",
+                owner="buildfiles",
+                stage="buildfiles",
+            )
+        )
     return f"{name}@{sha} # {tag}"
 
 
@@ -444,7 +486,9 @@ def github_progress(
     """Verify source semantics with a content-pinned tool before publishing version reports."""
     branch = host.publish_branch if host is not None else publish_branch
     if branch is None:
-        raise Held("buildfiles", "buildfiles.publish_branch: owning branch required")
+        raise Held(
+            cause_named("buildfiles.publish_branch", "owning branch required", owner="buildfiles", stage="buildfiles")
+        )
     commands = _progress_verifier(verifier_payload)
     lines = [
         HEADER,
@@ -521,11 +565,18 @@ def n64link_pin(host: Host) -> str:
     if printed != N64LINK_RELEASE:
         required = N64LINK_RELEASE.strip()
         actual = printed.strip()
-        raise Held("buildfiles", f"buildfiles.n64link: {host.n64link} prints {actual!r}; {required!r} is required")
+        raise Held(
+            cause_named(
+                "buildfiles.n64link",
+                f"buildfiles.n64link: {host.n64link} prints {actual!r}; {required!r} is required",
+                owner="buildfiles",
+                stage="buildfiles",
+            )
+        )
     return N64LINK_RELEASE
 
 
-def generate(project: Project, host: Host) -> dict[Path, bytes]:
+def generate(project: Project, host: Host, *, receipts: dict[str, dict[str, Any]] | None = None) -> dict[Path, bytes]:
     """Every build file, by path; refused when an original-asm source or row lacks its proved record."""
     from unbake.decomp import original_asm
 
@@ -535,7 +586,7 @@ def generate(project: Project, host: Host) -> dict[Path, bytes]:
     payload = verify.bundle()
     files: dict[Path, str] = {
         project.root / "Makefile": makefile(project, host),
-        project.root / "units.mk": units_mk(project),
+        project.root / "units.mk": units_mk(project, receipts=receipts),
         project.tools / "n64link.version": n64link_pin(host),
         project.root / ".github/workflows/progress.yml": github_progress(project, host, verifier_payload=payload),
         project.root / ".gitlab-ci.yml": gitlab_progress(project, verifier_payload=payload),
@@ -571,8 +622,7 @@ def input_key(project: Project, host: Host) -> str:
     # Contents, not just names: symbols.ld provides the address-named symbols these files spell.
     parts.extend(sorted(project.src.glob("*.c")))
     parts.extend(sorted(project.src.glob("*.s")))
-    summary = attempts.summary_path(project)
-    parts.append(summary if summary.is_file() else "no attempts")
+    parts.append(cache.serialized(attempts.ledger(project).fuzzy_sources()))
     from unbake.decomp import original_asm
 
     manifest = project.root / original_asm.MANIFEST
@@ -594,9 +644,9 @@ def drift(project: Project, host: Host) -> list[Path]:
     ]
 
 
-def write(project: Project, host: Host) -> list[Path]:
+def write(project: Project, host: Host, *, receipts: dict[str, dict[str, Any]] | None = None) -> list[Path]:
     """Write the build files whose bytes changed; return them."""
-    generated = generate(project, host)
+    generated = generate(project, host, receipts=receipts)
     changed = [path for path, content in generated.items() if not path.is_file() or path.read_bytes() != content]
     for path in changed:
         atomic_files.write(path, generated[path])

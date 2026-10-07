@@ -8,6 +8,7 @@ from typing import Any, TypeAlias
 
 from unbake.config import Held, Host, Project
 from unbake.layout.split import Edit
+from unbake.process import named as cause_named
 
 
 @dataclass(frozen=True)
@@ -80,11 +81,32 @@ def name(need: object) -> str:
 
 def register_resolver(kind: type[Need], order: int, resolver: Resolver) -> None:
     if kind not in _KINDS.values():
-        raise Held("needs", f"resolver.kind {kind}: unknown need")
+        raise Held(
+            cause_named(
+                "decomp.needs.register_resolver",
+                f"resolver.kind {kind}: unknown need",
+                owner="decomp.needs",
+                stage="needs",
+            )
+        )
     if kind in RESOLVERS:
-        raise Held("needs", f"resolver {kind.__name__}: already registered")
+        raise Held(
+            cause_named(
+                "decomp.needs.register_resolver",
+                f"resolver {kind.__name__}: already registered",
+                owner="decomp.needs",
+                stage="needs",
+            )
+        )
     if not callable(resolver) or isinstance(order, bool) or not isinstance(order, int):
-        raise Held("needs", f"resolver {kind.__name__}: order and callable required")
+        raise Held(
+            cause_named(
+                "decomp.needs.register_resolver",
+                f"resolver {kind.__name__}: order and callable required",
+                owner="decomp.needs",
+                stage="needs",
+            )
+        )
     RESOLVERS[kind] = (order, resolver)
 
 
@@ -97,17 +119,26 @@ def resolvers() -> list[tuple[type[Need], int, Resolver]]:
 
 def encode(need: Need) -> dict[str, object]:
     if type(need) not in _KINDS.values():
-        raise Held("needs", f"need {name(need)}: unknown kind")
+        raise Held(
+            cause_named("decomp.needs.encode", f"need {name(need)}: unknown kind", owner="decomp.needs", stage="needs")
+        )
     return {"need_type": type(need).__name__, **{field.name: getattr(need, field.name) for field in fields(need)}}
 
 
 def decode(row: Any) -> Need:
     kind = _KINDS.get(row.get("need_type", "")) if isinstance(row, dict) else None
     if kind is None:
-        raise Held("needs", f"need {row}: unknown kind")
+        raise Held(cause_named("decomp.needs.decode", f"need {row}: unknown kind", owner="decomp.needs", stage="needs"))
     for field in fields(kind):
         if field.name not in row:
-            raise Held("needs", f"{kind.__name__}.{field.name}: missing value")
+            raise Held(
+                cause_named(
+                    f"{kind.__name__}.{field.name}",
+                    f"{kind.__name__}.{field.name}: missing value",
+                    owner="decomp.needs",
+                    stage="needs",
+                )
+            )
     return kind(**{field.name: row[field.name] for field in fields(kind)})
 
 
@@ -117,14 +148,28 @@ def resolve(
     """Refuse unregistered kinds before writing, then apply each ordered batch."""
     for need in pending:
         if type(need) not in RESOLVERS:
-            raise Held("match", f"unresolved need {name(need)} ({type(need).__name__})")
+            raise Held(
+                cause_named(
+                    "decomp.needs.resolve",
+                    f"unresolved need {name(need)} ({type(need).__name__})",
+                    owner="decomp.needs",
+                    stage="match",
+                )
+            )
     resolved: list[str] = []
     for kind, _, resolver in resolvers():
         batch = [need for need in pending if type(need) is kind]
         if batch:
             edits = resolver(batch, project, policy)
             if edits is None:
-                raise Held("match", f"unresolved need {name(batch[0])}: resolver returned no edits")
+                raise Held(
+                    cause_named(
+                        "decomp.needs.resolve",
+                        f"unresolved need {name(batch[0])}: resolver returned no edits",
+                        owner="decomp.needs",
+                        stage="match",
+                    )
+                )
             apply(project, policy, edits)
             resolved.extend(name(need) for need in batch)
     return resolved

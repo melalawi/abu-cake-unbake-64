@@ -15,6 +15,7 @@ from unbake import cache as retention
 from unbake import pool, tui
 from unbake.cache import Cache, key, serialized
 from unbake.config import Held, Host, Project
+from unbake.process import named as cause_named
 from unbake.typemap import facts
 
 SCHEMA = 3
@@ -57,7 +58,14 @@ class Receipts:
         """Load a fresh graph, binding only the receipt slots to this run's evidence."""
         count, content = frozen
         if count != len(self.rows):
-            raise Held("solve", f"types.cache: {count} cached receipts for {len(self.rows)} current ones")
+            raise Held(
+                cause_named(
+                    "types.cache",
+                    f"types.cache: {count} cached receipts for {len(self.rows)} current ones",
+                    owner="typemap.inference_cache",
+                    stage="solve",
+                )
+            )
         return _Reader(io.BytesIO(content), [dict(row) for row in self.rows]).load()
 
 
@@ -81,7 +89,11 @@ class _Reader(pickle.Unpickler):
 
     def persistent_load(self, identity: Any) -> Any:
         if type(identity) is not int or not 0 <= identity < len(self.rows):
-            raise Held("solve", "types.cache: invalid receipt slot")
+            raise Held(
+                cause_named(
+                    "types.cache", "types.cache: invalid receipt slot", owner="typemap.inference_cache", stage="solve"
+                )
+            )
         return self.rows[identity]
 
 

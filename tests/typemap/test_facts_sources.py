@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from tests.kit import TempCase
+from tests.ledger_fixture import fault_evidence
 from unbake.project.headers import Graph
 from unbake.typemap import declarations, facts
 
@@ -157,6 +158,6 @@ class UnitFaultIdentityTests(TempCase):
             self.assertRaises(Held) as caught,
         ):
             facts._unit_job((SimpleNamespace(root=self.root), None, {}, frozenset()), tasks)
-        self.assertEqual(caught.exception.fault["identity"]["source"], "actual.c")
-        self.assertEqual(caught.exception.fault["identity"]["versions"], ("de",))
+        self.assertEqual(fault_evidence(caught.exception.fault)["identity"]["source"], "actual.c")
+        self.assertEqual(fault_evidence(caught.exception.fault)["identity"]["versions"], ("de",))
         self.assertIsInstance(caught.exception.__cause__, SystemError)

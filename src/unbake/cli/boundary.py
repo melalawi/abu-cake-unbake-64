@@ -9,6 +9,7 @@ from pathlib import Path
 from unbake.cli.args import Context, integer
 from unbake.cli.output import Result
 from unbake.config import Held
+from unbake.process import named as cause_named
 
 NAME = "boundary"
 HELP = "Edit function and data boundaries (preview by default; --apply to write)."
@@ -83,9 +84,23 @@ def run(context: Context) -> Result:
         outcome = boundary_ops.same_symbol(project, host, args.file, apply=args.apply)
     elif args.verb == "name-data":
         if args.all_versions and (args.version or args.address is not None or args.rename_from):
-            raise Held("boundary", "boundary.name_data: --all-versions excludes --version, --address and --rename-from")
+            raise Held(
+                cause_named(
+                    "boundary.name_data",
+                    "boundary.name_data: --all-versions excludes --version, --address and --rename-from",
+                    owner="cli.boundary",
+                    stage="boundary",
+                )
+            )
         if not args.all_versions and (args.version is None or args.address is None):
-            raise Held("boundary", "boundary.name_data: supply --version and --address, or --all-versions")
+            raise Held(
+                cause_named(
+                    "boundary.name_data",
+                    "boundary.name_data: supply --version and --address, or --all-versions",
+                    owner="cli.boundary",
+                    stage="boundary",
+                )
+            )
         outcome = boundary_ops.name_data(
             project,
             host,

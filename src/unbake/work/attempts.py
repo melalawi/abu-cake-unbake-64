@@ -1,27 +1,200 @@
-"""Attempt history: build/work/FUNC/attempts.jsonl per function, and the committed summary attempts.json.
-
-Only the process that ran a compare appends its line, with a single O_APPEND write. The local logs live under
-build/ and are never committed, so the progress report folds them into attempts.json at the project root
-(write_summary). summaries() is the one reader of the folded history: the committed file merged with every
-local log, so fuzzy progress and the ranker's history survive a fresh tree.
-"""
+"""The schema2 immutable outcome ledger: one tracked history, one incremental command index."""
 
 from __future__ import annotations
 
+import fcntl
+import hashlib
 import json
 import math
 import os
 import re
 import shutil
-from dataclasses import dataclass, replace
+import uuid
+from collections.abc import Iterable, Mapping
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
-from unbake import atomic as atomic_files
+from unbake import atomic, strict_json
 from unbake.config import Held, Project
+from unbake.inputs import DependencySet, LogicalPath
+from unbake.process import Action, Fault, RetryRule, capture
+from unbake.process import named as cause_named
+from unbake.work.score import Measurement
 
-SUMMARY = "attempts.json"
+PATH = "attempts.jsonl"
+FIELDS = frozenset(
+    {
+        "schema",
+        "event_id",
+        "operation_id",
+        "project_id",
+        "kind",
+        "parents",
+        "subject",
+        "request",
+        "dependencies",
+        "result",
+        "work",
+        "observed_at",
+    }
+)
+
+
+@dataclass(frozen=True)
+class Operation:
+    id: str
+    project_id: str
+    kind: str
+    subject: str
+    request: Mapping[str, Any]
+    dependencies: DependencySet
+
+    @classmethod
+    def make(
+        cls, project: Project, kind: str, subject: str, request: Mapping[str, Any], dependencies: DependencySet
+    ) -> Operation:
+        return cls(uuid.uuid4().hex, project.id, kind, subject, dict(request), dependencies)
+
+
+@dataclass(frozen=True)
+class Outcome:
+    operation_id: str
+    state: Literal["ok", "blocked", "committed"]
+    value: Mapping[str, Any]
+    fault: Fault | None
+    work: Mapping[str, int]
+    proof_ids: tuple[str, ...] = ()
+
+    def document(self) -> dict[str, Any]:
+        return {
+            "operation_id": self.operation_id,
+            "state": self.state,
+            "value": dict(self.value),
+            "fault": self.fault.document() if self.fault else None,
+            "work": dict(self.work),
+            "proof_ids": list(self.proof_ids),
+        }
+
+
+@dataclass(frozen=True)
+class RetryDecision:
+    allowed: bool
+    changed: tuple[str, ...]
+    reused: bool
+    retryability: str
+
+
+@dataclass(frozen=True)
+class Event:
+    schema: int
+    event_id: str
+    operation_id: str
+    project_id: str
+    kind: str
+    parents: tuple[str, ...]
+    subject: str
+    request: Mapping[str, Any]
+    dependencies: Mapping[str, Any]
+    result: Mapping[str, Any]
+    work: Mapping[str, int]
+    observed_at: str
+
+    def document(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class Publication:
+    event_id: str
+    function: str
+    kind: Literal["exact", "fuzzy", "original"]
+    source: LogicalPath | None
+    source_sha256: str | None
+    stored_source_sha256: str | None
+    compiler: str | None
+    versions: tuple[str, ...]
+    measurements: Mapping[str, Measurement | None]
+    receipt: Mapping[str, Any]
+    dependency_set: DependencySet
+    proof_ids: tuple[str, ...]
+    committed_source_sha256: str | None
+    origin: Literal["native", "history.imported"]
+    available: bool
+    unavailable_reason: str | None
+
+    def similarity(self, version: str) -> float | None:
+        """Current source-bound observation only; imported null never consults attempt best."""
+        if not self.available or version not in self.versions:
+            return None
+        measured = self.measurements.get(version)
+        if measured is not None:
+            return measured.percent if measured.available else None
+        value = self.receipt.get("versions", {}).get(version)
+        return float(value) if value is not None else None
+
+    def proof_reusable(self) -> bool:
+        return (
+            self.available
+            and self.origin == "native"
+            and bool(self.proof_ids)
+            and not self.dependency_set.values.get("dependencies_unknown")
+        )
+
+
+@dataclass(frozen=True)
+class Summary:
+    bytes: int
+    best: dict[str, float]
+    exact: bool
+    minutes: float
+    attempts: int
+    fuzzy: dict[str, Any] | None = None
+    imported_bounds: tuple[int, int] | None = None
+
+    @property
+    def best_percent(self) -> float | None:
+        return max(self.best.values(), default=None)
+
+    def document(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def read(cls, value: Mapping[str, Any]) -> Summary:
+        if set(value) != {"bytes", "best", "exact", "minutes", "attempts", "fuzzy", "imported_bounds"}:
+            raise ValueError("history.imported: complete summary baseline required")
+        if (
+            any(type(value[k]) is not int or value[k] < 0 for k in ("bytes", "attempts"))
+            or type(value["exact"]) is not bool
+        ):
+            raise ValueError("history.imported: invalid count or exact flag")
+        if type(value["minutes"]) not in (int, float) or not math.isfinite(value["minutes"]) or value["minutes"] < 0:
+            raise ValueError("history.imported: invalid effort baseline")
+        if not isinstance(value["best"], dict) or any(
+            not isinstance(k, str) or type(v) not in (int, float) or not math.isfinite(v) or not 0 <= v <= 100
+            for k, v in value["best"].items()
+        ):
+            raise ValueError("history.imported: invalid score bounds")
+        bounds = value["imported_bounds"]
+        if bounds is not None and (
+            not isinstance(bounds, (tuple, list))
+            or len(bounds) != 2
+            or any(type(v) is not int or v < 0 for v in bounds)
+            or not bounds[0] <= value["attempts"] <= bounds[1]
+        ):
+            raise ValueError("history.imported: invalid attempt overlap bounds")
+        return cls(
+            value["bytes"],
+            value["best"],
+            value["exact"],
+            value["minutes"],
+            value["attempts"],
+            value["fuzzy"],
+            tuple(bounds) if bounds else None,
+        )
 
 
 @dataclass(frozen=True)
@@ -37,213 +210,573 @@ class Attempt:
     compiler: str
 
     def document(self) -> dict[str, Any]:
-        return {
-            "t": self.t,
-            "function": self.function,
-            "sha256": self.sha256,
-            "bytes": self.bytes,
-            "versions": self.versions,
-            "best_percent": self.best_percent,
-            "exact": self.exact,
-            "seconds": self.seconds,
-            "compiler": self.compiler,
-        }
+        return asdict(self)
 
 
-def directory(project: Project, function: str) -> Path:
-    return project.work / function
+def encoded(value: Any) -> bytes:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False).encode()
 
 
-def path(project: Project, function: str) -> Path:
-    return directory(project, function) / "attempts.jsonl"
+def dependency_record(value: Mapping[str, Any]) -> DependencySet:
+    from unbake.inputs import FilePin
+
+    pins = tuple(
+        FilePin(
+            LogicalPath(row["path"]["root"], tuple(row["path"]["parts"])),
+            row["state"],
+            row["sha256"],
+            LogicalPath(row["link_target"]["root"], tuple(row["link_target"]["parts"])) if row["link_target"] else None,
+        )
+        for row in value["files"]
+    )
+    return DependencySet(pins, value["values"], value["recipes"])
 
 
 def now() -> str:
-    return datetime.now(UTC).isoformat(timespec="seconds")
+    return datetime.now(UTC).isoformat(timespec="microseconds")
 
 
-def append(project: Project, attempt: Attempt) -> None:
-    target = path(project, attempt.function)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    line = (json.dumps(attempt.document(), sort_keys=True) + "\n").encode()
-    descriptor = os.open(target, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
-    try:
-        os.write(descriptor, line)
-    finally:
-        os.close(descriptor)
+class Ledger:
+    def __init__(self, project: Project) -> None:
+        self.project = project
+        self.path = project.root / PATH
+        self.events: dict[str, dict[str, Any]] = {}
+        self.order: list[str] = []
+        self.inode: tuple[int, int] | None = None
+        self.offset = 0
+        self.prefix_reads = 0
+        self.incremental_updates = 0
 
-
-def read(project: Project, function: str) -> list[Attempt]:
-    target = path(project, function)
-    if not target.is_file():
-        return []
-    rows = []
-    for number, line in enumerate(target.read_text().splitlines(), 1):
-        if not line.strip():
-            continue
-        try:
-            value = json.loads(line)
-            rows.append(
-                Attempt(
-                    value["t"],
-                    value["function"],
-                    value["sha256"],
-                    int(value["bytes"]),
-                    dict(value["versions"]),
-                    None if value["best_percent"] is None else float(value["best_percent"]),
-                    bool(value["exact"]),
-                    float(value["seconds"]),
-                    str(value["compiler"]),
+    def _refresh(self) -> None:
+        if not self.path.exists():
+            self.events.clear()
+            self.order.clear()
+            self.inode = None
+            self.offset = 0
+            if (self.project.root / "attempts.json").exists() or (self.project.build / "steps.json").exists():
+                raise Held(
+                    cause_named(
+                        "ledger.migration",
+                        "offline state migration required before ordinary commands",
+                        owner="work.attempts",
+                        stage="history",
+                        action=Action("command", argv=("migrate-state", "--plan")),
+                    )
+                )
+            return
+        if self.path.is_symlink():
+            raise Held(
+                cause_named(
+                    "ledger.symlink", "ledger must be a regular owned file", owner="work.attempts", stage="history"
                 )
             )
-        except (ValueError, KeyError, TypeError) as error:
-            raise Held("work", f"attempts.{function}: {target}:{number}: {error}") from error
-    return rows
-
-
-def functions(project: Project) -> list[str]:
-    """Functions with a work directory holding a draft."""
-    if not project.work.is_dir():
-        return []
-    return sorted(entry.name for entry in project.work.iterdir() if (entry / f"{entry.name}.c").is_file())
-
-
-def minutes(rows: list[Attempt]) -> float:
-    """Wall minutes from the first attempt to the first exact one (or the last attempt)."""
-    if not rows:
-        return 0.0
-    first = datetime.fromisoformat(rows[0].t)
-    stop = next((row for row in rows if row.exact), rows[-1])
-    spent = (datetime.fromisoformat(stop.t) - first).total_seconds() + stop.seconds
-    return max(spent / 60.0, 1.0 / 60.0)
-
-
-@dataclass(frozen=True)
-class Summary:
-    """Folded history of one function: rounded so rewriting the same history gives the same bytes."""
-
-    bytes: int
-    best: dict[str, float]
-    exact: bool
-    minutes: float
-    attempts: int
-    fuzzy: dict[str, Any] | None = None
-
-    def document(self) -> dict[str, Any]:
-        return {
-            "attempts": self.attempts,
-            "best": dict(sorted(self.best.items())),
-            "bytes": self.bytes,
-            "exact": self.exact,
-            "minutes": self.minutes,
-            **({"fuzzy": self.fuzzy} if self.fuzzy is not None else {}),
-        }
-
-    @property
-    def best_percent(self) -> float | None:
-        return max(self.best.values(), default=None)
-
-
-def summarize(rows: list[Attempt]) -> Summary:
-    best: dict[str, float] = {}
-    for row in rows:
-        for version, result in row.versions.items():
-            if result.get("percent") is not None and not result.get("fault"):
-                best[version] = max(best.get(version, 0.0), round(float(result["percent"]), 6))
-    return Summary(rows[-1].bytes, best, any(row.exact for row in rows), round(minutes(rows), 2), len(rows))
-
-
-def merge(committed: Summary | None, local: Summary | None) -> Summary:
-    """Per version the higher best, exact if either is; size from the local log; effort never shrinks."""
-    if committed is None or local is None:
-        found = committed or local
-        assert found is not None
-        return found
-    best = dict(committed.best)
-    for version, percent in local.best.items():
-        best[version] = max(best.get(version, 0.0), percent)
-    return Summary(
-        local.bytes,
-        best,
-        committed.exact or local.exact,
-        max(committed.minutes, local.minutes),
-        max(committed.attempts, local.attempts),
-        local.fuzzy if local.fuzzy is not None else committed.fuzzy,
-    )
-
-
-def summary_path(project: Project) -> Path:
-    return project.root / SUMMARY
-
-
-def _fuzzy_receipt(value: Any) -> dict[str, Any] | None:
-    if value is None:
-        return None
-    if not isinstance(value, dict) or set(value) != {"source_sha256", "compiler", "score", "versions"}:
-        raise ValueError("fuzzy receipt: expected source_sha256, compiler, score and versions")
-    digest = value["source_sha256"]
-    if digest is not None and (not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest)):
-        raise ValueError("fuzzy receipt: invalid source_sha256")
-    if not isinstance(value["compiler"], str) or not value["compiler"]:
-        raise ValueError("fuzzy receipt: compiler is missing")
-    versions = value["versions"]
-    if not isinstance(versions, dict) or not versions or any(not isinstance(v, str) or not v for v in versions):
-        raise ValueError("fuzzy receipt: holding versions are missing")
-    for number in (value["score"], *versions.values()):
-        if number is not None and (
-            type(number) not in (int, float) or not math.isfinite(number) or not 0 <= number <= 100
-        ):
-            raise ValueError("fuzzy receipt: expected measured percentage or null")
-    return value
-
-
-def _committed(project: Project) -> dict[str, Summary]:
-    target = summary_path(project)
-    if not target.is_file():
-        return {}
-    try:
-        document = json.loads(target.read_bytes())
-        if document["v"] != 1:
-            raise ValueError(f"v must be 1, not {document['v']!r}")
-        return {
-            str(name): Summary(
-                int(value["bytes"]),
-                {str(version): float(percent) for version, percent in value["best"].items()},
-                bool(value["exact"]),
-                float(value["minutes"]),
-                int(value["attempts"]),
-                _fuzzy_receipt(value.get("fuzzy")),
+        info = self.path.stat()
+        inode = info.st_dev, info.st_ino
+        if inode != self.inode or info.st_size < self.offset:
+            self.events.clear()
+            self.order.clear()
+            self.offset = 0
+            self.prefix_reads += 1
+        if info.st_size == self.offset:
+            return
+        with self.path.open("rb") as stream:
+            stream.seek(self.offset)
+            data = stream.read()
+        if data and not data.endswith(b"\n"):
+            raise Held(
+                cause_named(
+                    "ledger.incomplete",
+                    "truncated outcome record; preserve file and recover transaction",
+                    owner="work.attempts",
+                    stage="history",
+                )
             )
-            for name, value in document["functions"].items()
+        for line in data.splitlines():
+            if not line:
+                continue
+            try:
+                self._index(strict_json.loads(line, self.path))
+            except (ValueError, TypeError, KeyError) as error:
+                raise Held(
+                    capture(
+                        error,
+                        cause=cause_named(
+                            "ledger.corrupt", f"{self.path.name}: {error}", owner="work.attempts", stage="history"
+                        ),
+                    )
+                ) from error
+        self.inode, self.offset = inode, info.st_size
+
+    def _index(self, event: dict[str, Any]) -> None:
+        validate_event(event)
+        if set(event) != FIELDS or event["schema"] != 2:
+            raise Held(
+                cause_named(
+                    "ledger.schema",
+                    "complete schema2 event required; use offline migration",
+                    owner="work.attempts",
+                    stage="history",
+                )
+            )
+        if event["project_id"] != self.project.id:
+            raise Held(
+                cause_named(
+                    "ledger.project", "event belongs to another project", owner="work.attempts", stage="history"
+                )
+            )
+        identity = event["event_id"]
+        prior = self.events.get(identity)
+        if prior is not None:
+            if encoded(prior) != encoded(event):
+                raise Held(
+                    cause_named(
+                        "ledger.event_conflict",
+                        f"conflicting immutable event {identity}",
+                        owner="work.attempts",
+                        stage="history",
+                    )
+                )
+            return
+        if any(parent not in self.events for parent in event["parents"]):
+            raise Held(
+                cause_named(
+                    "ledger.parents", f"unavailable event parent for {identity}", owner="work.attempts", stage="history"
+                )
+            )
+        self.events[identity] = event
+        self.order.append(identity)
+        self.incremental_updates += 1
+
+    def append(self, event: Event) -> str:
+        value = event.document()
+        validate_event(value)
+        lock = self.project.root / ".attempts.lock"
+        lock.parent.mkdir(parents=True, exist_ok=True)
+        with lock.open("a+b") as stream:
+            fcntl.flock(stream, fcntl.LOCK_EX)
+            self._refresh()
+            prior = self.events.get(event.event_id)
+            if prior is not None:
+                if encoded(prior) != encoded(value):
+                    raise Held(
+                        cause_named(
+                            "ledger.event_conflict", "conflicting event id", owner="work.attempts", stage="history"
+                        )
+                    )
+                return event.event_id
+            if any(parent not in self.events for parent in value["parents"]):
+                raise Held(
+                    cause_named("ledger.parents", "event parent unavailable", owner="work.attempts", stage="history")
+                )
+            atomic.append_record(self.path, encoded(value) + b"\n", durable=True)
+            self._index(value)
+            info = self.path.stat()
+            self.inode = info.st_dev, info.st_ino
+            self.offset = info.st_size
+        return event.event_id
+
+    def record(self, operation: Operation, outcome: Outcome, *, parents: tuple[str, ...] = ()) -> str:
+        if outcome.fault is not None:
+            outcome = replace(outcome, fault=portable_fault(self.project, outcome.fault))
+        outcome = replace(outcome, value=portable_value(self.project, outcome.value))
+        return self.append(
+            Event(
+                2,
+                uuid.uuid4().hex,
+                operation.id,
+                operation.project_id,
+                operation.kind,
+                parents,
+                operation.subject,
+                dict(operation.request),
+                operation.dependencies.document(),
+                outcome.document(),
+                dict(outcome.work),
+                now(),
+            )
+        )
+
+    def outcome(self, operation: Operation) -> Outcome | None:
+        self._refresh()
+        for identity in reversed(self.order):
+            row = self.events[identity]
+            if (row["kind"], row["subject"], row["request"], row["dependencies"]) != (
+                operation.kind,
+                operation.subject,
+                dict(operation.request),
+                operation.dependencies.document(),
+            ):
+                continue
+            data = row["result"]
+            if row["kind"] == "history.imported":
+                continue
+            return Outcome(
+                data["operation_id"],
+                data["state"],
+                data["value"],
+                Fault.read(data["fault"]) if data["fault"] else None,
+                data["work"],
+                tuple(data["proof_ids"]),
+            )
+        return None
+
+    def retry(self, operation: Operation, current: DependencySet) -> RetryDecision:
+        self._refresh()
+        candidate = next(
+            (
+                self.events[i]
+                for i in reversed(self.order)
+                if self.events[i]["kind"] == operation.kind
+                and self.events[i]["subject"] == operation.subject
+                and self.events[i]["result"]["state"] == "blocked"
+            ),
+            None,
+        )
+        if candidate is None:
+            return RetryDecision(True, (), False, "unblocked")
+        fault = Fault.read(candidate["result"]["fault"])
+        if fault.cause.retryability == "unknown":
+            return RetryDecision(True, (), False, "unknown")
+        changes = dependency_changes(fault.cause.dependency_set, current)
+        watched = fault.cause.retry.watch
+        relevant = tuple(name for name in changes if not watched or name in watched)
+        allowed = bool(relevant) and fault.cause.retry.kind != "never"
+        return RetryDecision(allowed, relevant, not allowed, fault.cause.retryability)
+
+    def blocked(self, *, operation: str | None = None) -> tuple[Outcome, ...]:
+        self._refresh()
+        latest = {}
+        for identity in self.order:
+            row = self.events[identity]
+            if operation is None or row["kind"] == operation:
+                latest[row["kind"], row["subject"]] = row
+        return tuple(
+            Outcome(
+                row["operation_id"],
+                "blocked",
+                row["result"]["value"],
+                Fault.read(row["result"]["fault"]),
+                row["work"],
+                tuple(row["result"]["proof_ids"]),
+            )
+            for row in sorted(latest.values(), key=lambda r: (r["kind"], r["subject"]))
+            if row["result"]["state"] == "blocked"
+        )
+
+    def latest(self, kind: str, subject: str) -> dict[str, Any] | None:
+        self._refresh()
+        return next(
+            (
+                self.events[i]
+                for i in reversed(self.order)
+                if self.events[i]["kind"] == kind and self.events[i]["subject"] == subject
+            ),
+            None,
+        )
+
+    def note(
+        self,
+        kind: str,
+        subject: str,
+        value: Mapping[str, Any],
+        *,
+        dependencies: DependencySet,
+        state: Literal["ok", "blocked", "committed"] = "ok",
+        fault: Fault | None = None,
+    ) -> str:
+        operation = Operation.make(self.project, kind, subject, {}, dependencies)
+        previous = self.latest(kind, subject)
+        return self.record(
+            operation,
+            Outcome(operation.id, state, value, fault, {}),
+            parents=(previous["event_id"],) if previous else (),
+        )
+
+    def step(self, name: str) -> dict[str, Any] | None:
+        event = self.latest("step", name)
+        return (
+            dict(event["result"]["value"])
+            if event and event["result"]["state"] == "ok" and "key" in event["result"]["value"]
+            else None
+        )
+
+    def record_step(self, name: str, content_key: str, outputs: Mapping[str, str]) -> str:
+        value = {"key": content_key, "outputs": dict(outputs)}
+        previous = self.latest("step", name)
+        if previous and previous["result"]["state"] == "ok" and previous["result"]["value"] == value:
+            return str(previous["event_id"])
+        return self.note("step", name, value, dependencies=DependencySet((), {"input_key": content_key}, {}))
+
+    def rename(self, renamed: Mapping[str, str]) -> None:
+        for old, new in sorted(renamed.items()):
+            self.note(
+                "source.rename",
+                old,
+                {"old": old, "new": new},
+                dependencies=DependencySet((), {"dependencies_unknown": True}, {}),
+            )
+
+    def redrafts(self) -> dict[str, Any]:
+        self._refresh()
+        marks: dict[str, Any] = {}
+        for identity in self.order:
+            event = self.events[identity]
+            if event["kind"] == "draft.required":
+                value = event["result"]["value"]
+                if value["mark"] is None:
+                    marks.pop(event["subject"], None)
+                else:
+                    marks[event["subject"]] = value["mark"]
+        return marks
+
+    def mark_drafts(self, marks: Mapping[str, Any]) -> None:
+        previous = self.redrafts()
+        for function in sorted(previous.keys() | marks.keys()):
+            if previous.get(function) != marks.get(function):
+                self.note(
+                    "draft.required",
+                    function,
+                    {"mark": marks.get(function)},
+                    dependencies=DependencySet(
+                        (), {"type_db_sha256": (marks.get(function) or {}).get("type_db_sha256")}, {}
+                    ),
+                )
+
+    def history(self, function: str) -> list[Attempt]:
+        self._refresh()
+        return [
+            Attempt(**row["result"]["value"]["attempt"])
+            for identity in self.order
+            for row in [self.events[identity]]
+            if row["subject"] == function and row["kind"] == "compare" and "attempt" in row["result"]["value"]
+        ]
+
+    def compare(self, attempt: Attempt, dependencies: DependencySet) -> str:
+        operation = Operation.make(
+            self.project, "compare", attempt.function, {"source_sha256": attempt.sha256}, dependencies
+        )
+        return self.record(
+            operation,
+            Outcome(
+                operation.id,
+                "ok",
+                {"attempt": attempt.document()},
+                None,
+                {},
+            ),
+        )
+
+    def summaries(self) -> dict[str, Summary]:
+        self._refresh()
+        table = {}
+        for identity in self.order:
+            row = self.events[identity]
+            subject = row["subject"]
+            data = row["result"]["value"]
+            if row["kind"] == "history.imported":
+                table[subject] = Summary.read(data["summary"])
+            elif row["kind"] == "compare" and "attempt" in data:
+                attempt = Attempt(**data["attempt"])
+                previous = table.get(subject, Summary(0, {}, False, 0.0, 0))
+                best = dict(previous.best)
+                for version, value in attempt.versions.items():
+                    percent = value.get("percent")
+                    if percent is not None and not value.get("fault"):
+                        best[version] = max(best.get(version, 0.0), float(percent))
+                table[subject] = Summary(
+                    attempt.bytes,
+                    best,
+                    previous.exact or attempt.exact,
+                    previous.minutes + attempt.seconds / 60,
+                    previous.attempts + 1,
+                    previous.fuzzy,
+                    previous.imported_bounds,
+                )
+            elif row["kind"] == "publication.fuzzy":
+                previous = table.get(subject, Summary(0, {}, False, 0.0, 0))
+                table[subject] = Summary(
+                    previous.bytes,
+                    previous.best,
+                    previous.exact,
+                    previous.minutes,
+                    previous.attempts,
+                    data["publication"]["receipt"],
+                    previous.imported_bounds,
+                )
+            elif row["kind"] in ("publication.exact", "publication.original"):
+                previous = table.get(subject, Summary(0, {}, False, 0.0, 0))
+                table[subject] = replace(previous, fuzzy=None, exact=True)
+            elif row["kind"] == "source.rename":
+                prior = table.pop(data["old"], None)
+                if prior is not None:
+                    table[data["new"]] = prior
+        return table
+
+    def publications(self) -> Mapping[str, Publication]:
+        self._refresh()
+        current: dict[str, Publication] = {}
+        for identity in self.order:
+            event = self.events[identity]
+            if event["kind"] == "source.rename":
+                data = event["result"]["value"]
+                old = current.pop(data["old"], None)
+                if old is not None:
+                    current[data["new"]] = replace(
+                        old,
+                        function=data["new"],
+                        available=False,
+                        unavailable_reason="renamed source requires current binding and proof",
+                    )
+                continue
+            if event["kind"] not in ("publication.exact", "publication.fuzzy", "publication.original"):
+                continue
+            if event["result"]["state"] != "committed":
+                continue
+            data = event["result"]["value"]["publication"]
+            source = data["source"]
+            dependencies = dependency_record(event["dependencies"])
+            current[event["subject"]] = Publication(
+                identity,
+                event["subject"],
+                data["kind"],
+                LogicalPath(source["root"], tuple(source["parts"])) if source else None,
+                data["source_sha256"],
+                data["stored_source_sha256"],
+                data["compiler"],
+                tuple(data["versions"]),
+                {
+                    v: Measurement.read(value) if value is not None else None
+                    for v, value in data["measurements"].items()
+                },
+                data["receipt"],
+                dependencies,
+                tuple(event["result"]["proof_ids"]),
+                data["committed_source_sha256"],
+                data["origin"],
+                data["available"],
+                data["unavailable_reason"],
+            )
+        return current
+
+    def publication(
+        self,
+        function: str,
+        *,
+        version: str | None = None,
+        source_sha256: str | None = None,
+        compiler: str | None = None,
+    ) -> Publication | None:
+        record = self.publications().get(function)
+        if record is None:
+            return None
+        mismatch = []
+        if version is not None and version not in record.versions:
+            mismatch.append("holding version")
+        if source_sha256 is not None and source_sha256 != record.source_sha256:
+            mismatch.append("source hash")
+        if compiler is not None and compiler != record.compiler:
+            mismatch.append("compiler")
+        return (
+            replace(record, available=False, unavailable_reason="changed " + ", ".join(mismatch))
+            if mismatch
+            else record
+        )
+
+    def fuzzy(self, function: str) -> dict[str, Any] | None:
+        record = self.publication(function)
+        return dict(record.receipt) if record is not None and record.available and record.kind == "fuzzy" else None
+
+    def fuzzy_sources(self) -> dict[str, dict[str, Any]]:
+        return {
+            name: dict(record.receipt)
+            for name, record in self.publications().items()
+            if record.available and record.kind == "fuzzy"
         }
-    except (ValueError, KeyError, TypeError, AttributeError) as error:
-        raise Held("work", f"{SUMMARY}: {target}: {error}") from error
+
+    def record_publication(
+        self,
+        function: str,
+        receipt: Mapping[str, Any] | None,
+        source: str,
+        versions: Iterable[str],
+        compiler: str,
+        dependencies: DependencySet,
+        *,
+        committed: bool = True,
+    ) -> str:
+        from unbake.inputs import bytes_digest
+
+        kind = "fuzzy" if receipt is not None else "exact"
+        digest = bytes_digest(source.encode(), algorithm="sha256")
+        publication = {
+            "kind": kind,
+            "source": {"root": "project", "parts": ["src", function + ".c"]},
+            "source_sha256": digest,
+            "stored_source_sha256": digest,
+            "compiler": compiler,
+            "versions": list(versions),
+            "measurements": {v: None for v in versions},
+            "receipt": dict(receipt or {}),
+            "committed_source_sha256": digest if committed else None,
+            "origin": "native",
+            "available": True,
+            "unavailable_reason": None,
+        }
+        return self.note(
+            "publication." + kind if committed else "publication.prepared",
+            function,
+            {"publication": publication},
+            dependencies=dependencies,
+            state="committed" if committed else "ok",
+        )
+
+    def batch(self, batch_id: str) -> tuple[dict[str, Any], ...]:
+        self._refresh()
+        return tuple(self.events[i] for i in self.order if self.events[i]["operation_id"] == batch_id)
+
+    @staticmethod
+    def merge(base: bytes, ours: bytes, theirs: bytes) -> bytes:
+        events: dict[str, dict[str, Any]] = {}
+        for content in (base, ours, theirs):
+            for line in content.splitlines():
+                row = strict_json.loads(line, "ledger merge")
+                validate_event(row)
+                identity = row["event_id"]
+                if row.get("schema") != 2 or set(row) != FIELDS:
+                    raise ValueError("ledger.schema: complete schema2 event required")
+                if identity in events and encoded(events[identity]) != encoded(row):
+                    raise ValueError("ledger.event_conflict: conflicting immutable id")
+                events[identity] = row
+        remaining = set(events)
+        written: set[str] = set()
+        order = []
+        while remaining:
+            ready = sorted(i for i in remaining if set(events[i]["parents"]) <= written)
+            if not ready:
+                raise ValueError("ledger.parents: unavailable or cyclic parents")
+            for identity in ready:
+                order.append(events[identity])
+                written.add(identity)
+                remaining.remove(identity)
+        return b"".join(encoded(row) + b"\n" for row in order)
 
 
-def committed_documents(project: Project) -> dict[str, dict[str, Any]]:
-    """attempts.json as it is on disk, by function (empty when absent)."""
-    return {name: summary.document() for name, summary in _committed(project).items()}
+_current: ContextVar[Ledger | None] = ContextVar("unbake_ledger", default=None)
 
 
-def _logged(project: Project) -> list[str]:
-    if not project.work.is_dir():
-        return []
-    return sorted(entry.name for entry in project.work.iterdir() if (entry / "attempts.jsonl").is_file())
+@contextmanager
+def command_ledger(project: Project) -> Any:
+    current = _current.get()
+    token = _current.set(current if current is not None and current.project.root == project.root else Ledger(project))
+    try:
+        yield _current.get()
+    finally:
+        _current.reset(token)
 
 
-def summaries(project: Project) -> dict[str, Summary]:
-    """The committed attempts.json merged with every local attempts.jsonl. Every history reader uses this."""
-    table = _committed(project)
-    for function in _logged(project):
-        rows = read(project, function)
-        if rows:
-            table[function] = merge(table.get(function), summarize(rows))
-    return dict(sorted(table.items()))
-
-
-def encode(table: dict[str, Summary]) -> bytes:
-    functions = {name: table[name].document() for name in sorted(table)}
-    return (json.dumps({"functions": functions, "v": 1}, indent=2, sort_keys=True) + "\n").encode()
+def ledger(project: Project) -> Ledger:
+    current = _current.get()
+    return current if current is not None and current.project.root == project.root else Ledger(project)
 
 
 FUZZY_PREFIX = "#ifdef NON_MATCHING\n"
@@ -257,41 +790,19 @@ def guarded(text: str) -> str:
 
 def unguarded(text: str) -> str:
     if not text.startswith(FUZZY_PREFIX) or not text.endswith(FUZZY_SUFFIX):
-        raise Held("work", "fuzzy.source: retained fuzzy source lost its NON_MATCHING guard")
+        raise Held(
+            cause_named(
+                "fuzzy.source",
+                "fuzzy.source: retained fuzzy source lost its NON_MATCHING guard",
+                owner="work.attempts",
+                stage="work",
+            )
+        )
     return text[len(FUZZY_PREFIX) : -len(FUZZY_SUFFIX)]
 
 
-def fuzzy(project: Project, function: str) -> dict[str, Any] | None:
-    """The one committed fuzzy receipt; local score history cannot change its publication state."""
-    summary = _committed(project).get(function)
-    return summary.fuzzy if summary is not None else None
-
-
-def fuzzy_sources(project: Project) -> dict[str, dict[str, Any]]:
-    return {name: summary.fuzzy for name, summary in _committed(project).items() if summary.fuzzy is not None}
-
-
-def fuzzy_edit(project: Project, function: str, receipt: dict[str, Any] | None) -> bytes:
-    """Update publication state in the existing attempts summary, for land's ordinary atomic writer."""
-    table = summaries(project)
-    if function not in table:
-        raise Held("work", f"fuzzy.history: {function}: measured compile attempt is missing")
-    table[function] = replace(table[function], fuzzy=receipt)
-    return encode(table)
-
-
-def write_summary(project: Project, rows: set[str]) -> Path:
-    """Fold the local logs into attempts.json, keeping only functions that are still rows of some version."""
-    table = {name: summary for name, summary in summaries(project).items() if name in rows}
-    target = summary_path(project)
-    content = encode(table)
-    if not target.is_file() or target.read_bytes() != content:
-        atomic_files.write(target, content)
-    return target
-
-
 # Draft history moves with a rename: text files carry the new name; compiled objects are rebuilt, not carried.
-_TEXT = frozenset({".c", ".h", ".jsonl", ".json", ".txt", ".s", ".md"})
+_TEXT = frozenset({".c", ".h", ".txt", ".s", ".md"})
 
 
 @dataclass(frozen=True)
@@ -307,12 +818,19 @@ def stage_renames(project: Project, renamed: dict[str, str]) -> list[Carry]:
     carries = []
     try:
         for old, new in sorted(renamed.items()):
-            source = directory(project, old)
+            source = project.work / old
             if not source.is_dir():
                 continue
-            target = directory(project, new)
+            target = project.work / new
             if target.exists():
-                raise Held("work", f"attempts.rename: {target} exists; {source} cannot carry its history there")
+                raise Held(
+                    cause_named(
+                        "attempts.rename",
+                        f"attempts.rename: {target} exists; {source} cannot carry its history there",
+                        owner="work.attempts",
+                        stage="work",
+                    )
+                )
             staged = project.work / f".{new}.staged"
             shutil.rmtree(staged, ignore_errors=True)
             carries.append(Carry(source, staged, target))
@@ -321,7 +839,7 @@ def stage_renames(project: Project, renamed: dict[str, str]) -> list[Carry]:
                 if not path.is_file() or path.suffix not in _TEXT:
                     continue
                 relative = Path(*(part.replace(old, new) for part in path.relative_to(source).parts))
-                atomic_files.text(staged / relative, word.sub(new, path.read_text(errors="replace")))
+                atomic.text(staged / relative, word.sub(new, path.read_text(errors="replace")))
             staged.mkdir(parents=True, exist_ok=True)
     except BaseException:
         discard(carries)
@@ -341,18 +859,338 @@ def discard(carries: list[Carry]) -> None:
         shutil.rmtree(carry.staged, ignore_errors=True)
 
 
-def renamed_summary(project: Project, renamed: dict[str, str]) -> bytes | None:
-    """attempts.json with renamed functions under their new names; None when it names none of them."""
-    table = _committed(project)
-    if not table.keys() & renamed.keys():
-        return None
-    return encode(
-        {
-            renamed.get(name, name): (
-                replace(summary, fuzzy={**summary.fuzzy, "score": None, "source_sha256": None})
-                if name in renamed and summary.fuzzy is not None
-                else summary
-            )
-            for name, summary in table.items()
+def dependency_changes(before: DependencySet, after: DependencySet) -> tuple[str, ...]:
+    def flatten(value: DependencySet) -> dict[str, Any]:
+        return {
+            **{pin.path.name: asdict(pin) for pin in value.files},
+            **{"value:" + k: v for k, v in value.values.items()},
+            **{"recipe:" + k: v for k, v in value.recipes.items()},
         }
+
+    old, new = flatten(before), flatten(after)
+    return tuple(sorted(k for k in old.keys() | new.keys() if k not in old or k not in new or old[k] != new[k]))
+
+
+def validate_event(event: Mapping[str, Any]) -> None:
+    def refuse(reason: str) -> None:
+        raise Held(cause_named("ledger.corrupt", reason, owner="work.attempts", stage="history"))
+
+    if (
+        not isinstance(event, dict)
+        or set(event) != FIELDS
+        or type(event.get("schema")) is not int
+        or event["schema"] != 2
+    ):
+        refuse("complete schema2 event required; preserve history and use offline migration")
+    for name in ("event_id", "operation_id", "project_id", "kind", "subject", "observed_at"):
+        if not isinstance(event[name], str) or not event[name]:
+            refuse("invalid ledger " + name)
+    if not re.fullmatch(r"[0-9a-f]{32}", event["event_id"]) or not re.fullmatch(r"[0-9a-f]{32}", event["operation_id"]):
+        refuse("invalid event/operation identity")
+    if not isinstance(event["parents"], (tuple, list)) or any(
+        not isinstance(p, str) or not re.fullmatch(r"[0-9a-f]{32}", p) for p in event["parents"]
+    ):
+        refuse("invalid parent identities")
+    for name in ("request", "dependencies", "result", "work"):
+        if not isinstance(event[name], dict):
+            refuse("invalid ledger " + name)
+    if any(not isinstance(k, str) or type(v) is not int or v < 0 for k, v in event["work"].items()):
+        refuse("work requires nonnegative integer counts")
+    try:
+        dependencies = dependency_record(event["dependencies"])
+        result = event["result"]
+        if (
+            set(result) != {"operation_id", "state", "value", "fault", "work", "proof_ids"}
+            or result["operation_id"] != event["operation_id"]
+            or result["state"] not in ("ok", "blocked", "committed")
+            or not isinstance(result["value"], dict)
+            or result["work"] != event["work"]
+        ):
+            refuse("invalid terminal outcome")
+        if result["fault"] is not None:
+            Fault.read(result["fault"])
+        if result["state"] == "blocked" and result["fault"] is None:
+            refuse("blocked outcome requires owning fault")
+        if not isinstance(result["proof_ids"], (tuple, list)) or any(
+            not isinstance(v, str) or not re.fullmatch(r"[0-9a-f]{64}", v) for v in result["proof_ids"]
+        ):
+            refuse("invalid proof identities")
+        if event["kind"] in ("publication.exact", "publication.fuzzy", "publication.original", "publication.prepared"):
+            validate_publication(result["value"]["publication"])
+        if event["kind"] == "history.imported":
+            Summary.read(result["value"]["summary"])
+        encoded(dependencies.document())
+    except (KeyError, TypeError, ValueError, AttributeError) as error:
+        refuse(f"invalid ledger outcome: {error}")
+
+
+class RetryScope:
+    """Coordinator boundary: record first refusal once, retry only watched dependencies."""
+
+    def __init__(
+        self, project: Project, kind: str, subject: str, request: Mapping[str, Any], dependencies: DependencySet
+    ) -> None:
+        self.ledger = ledger(project)
+        prior = self.ledger.latest(kind, subject)
+        self.operation = Operation(
+            prior["operation_id"] if prior and prior["request"] == dict(request) else uuid.uuid4().hex,
+            project.id,
+            kind,
+            subject,
+            request,
+            dependencies,
+        )
+        self.value: dict[str, Any] = {}
+        self.fault: Fault | None = None
+        self.scope: Any = None
+        self.before: dict[str, tuple[int, int]] = {}
+
+    def __enter__(self) -> RetryScope:
+        from unbake.process import cause_scope
+
+        decision = self.ledger.retry(self.operation, self.operation.dependencies)
+        if not decision.allowed:
+            previous = self.ledger.latest(self.operation.kind, self.operation.subject)
+            assert previous is not None
+            raise Held(
+                Fault.read(previous["result"]["fault"]),
+                data={
+                    **previous["result"]["value"],
+                    "reused": True,
+                    "retry_allowed": False,
+                    "changed_dependencies": [],
+                    "work": {"retries": 0, "native_calls": 0, "worker_calls": 0},
+                },
+            )
+        self.scope = cause_scope(
+            self.operation.subject,
+            self.operation.dependencies,
+            complete=not self.operation.dependencies.values.get("dependencies_unknown", False),
+        )
+        self.scope.__enter__()
+        from unbake import effort
+
+        self.before = effort.counted()
+        return self
+
+    def __exit__(self, kind: Any, error: Any, tb: Any) -> Literal[False]:
+        self.scope.__exit__(kind, error, tb)
+        if error is not None and not isinstance(error, Exception):
+            return False
+        if error is not None and not isinstance(error, Held):
+            from unbake.process import capture
+
+            error = Held(
+                capture(
+                    error,
+                    cause=cause_named(
+                        "operation.unexpected",
+                        f"{type(error).__name__}: {error}",
+                        owner=self.operation.kind,
+                        stage=self.operation.kind,
+                        subject=self.operation.subject,
+                        dependencies=DependencySet((), {"dependencies_unknown": True}, {}),
+                    ),
+                )
+            )
+        if error is not None and error.fault.cause.owner == "pool" and error.key == "worker.memory":
+            dependencies = self.operation.dependencies
+            watch = (
+                *tuple(p.path.name for p in dependencies.files),
+                "value:memory_worker_bytes",
+                *tuple("recipe:" + k for k in dependencies.recipes),
+            )
+            error.fault = replace(
+                error.fault,
+                cause=replace(error.fault.cause, dependency_set=dependencies, retry=RetryRule("dependencies", watch)),
+            )
+        if (
+            error is not None
+            and error.fault.cause.subject == "headers"
+            and error.fault.cause.owner in ("typemap.declarations", "cdecl")
+        ):
+            dependencies = error.fault.cause.dependency_set
+            pins = tuple(
+                pin for pin in dependencies.files if not (pin.path.root == "project" and pin.path.parts[:1] == ("src",))
+            )
+            bounded = replace(dependencies, files=pins)
+            watch = (
+                *tuple(p.path.name for p in pins),
+                *tuple("value:" + k for k in bounded.values),
+                *tuple("recipe:" + k for k in bounded.recipes),
+            )
+            error.fault = replace(
+                error.fault,
+                cause=replace(error.fault.cause, dependency_set=bounded, retry=RetryRule("dependencies", watch)),
+            )
+        from unbake import effort
+
+        work = {
+            name: counts[0] - self.before.get(name, (0, 0))[0]
+            for name, counts in effort.counted().items()
+            if counts[0] != self.before.get(name, (0, 0))[0]
+        }
+        outcome = Outcome(
+            self.operation.id,
+            "blocked" if error or self.fault else "ok",
+            error.data if error else self.value,
+            error.fault if error else self.fault,
+            work,
+        )
+        previous = self.ledger.latest(self.operation.kind, self.operation.subject)
+        self.ledger.record(self.operation, outcome, parents=(previous["event_id"],) if previous else ())
+        return False
+
+
+def portable_fault(project: Project, fault: Fault) -> Fault:
+    from unbake.config import relative_text
+    from unbake.process import Frame, NativeResult
+
+    raw = encoded(fault.document())
+    artifact = hashlib.sha256(raw).hexdigest()
+    destination = project.work / "faults" / (artifact + ".json")
+    if not destination.is_file():
+        atomic.write(destination, raw)
+
+    def text(value: str) -> str:
+        return relative_text(project.root, value)
+
+    def logical(value: str) -> str:
+        root = str(project.root) + "/"
+        return "project:" + value[len(root) :] if value.startswith(root) else text(value)
+
+    cause = replace(
+        fault.cause,
+        subject=text(fault.cause.subject),
+        reason=text(fault.cause.reason),
+        action=replace(
+            fault.cause.action,
+            argv=tuple(logical(word) for word in fault.cause.action.argv),
+            paths=tuple(logical(word) for word in fault.cause.action.paths),
+            reason=text(fault.cause.action.reason),
+        ),
+        evidence={
+            **{k: v for k, v in fault.cause.evidence.items() if v is None or type(v) in (bool, int, float)},
+            "signature": fault.cause.evidence.get("signature"),
+            "native_artifact": artifact,
+        },
     )
+    frames = tuple(
+        Frame(
+            "context",
+            cause.owner,
+            cause.stage,
+            "raw diagnostic artifact",
+            {"artifact": artifact, "native": isinstance(item, NativeResult)},
+        )
+        for item in fault.chain
+    )
+    return Fault(cause, frames)
+
+
+def retry_pending(project: Project, kind: str, subject: str, current: DependencySet) -> bool:
+    history = ledger(project)
+    previous = history.latest(kind, subject)
+    if previous is None:
+        return True
+    if previous["result"]["state"] != "blocked":
+        old = dependency_record(previous["dependencies"])
+        return bool(dependency_changes(old, current)) or bool(old.values.get("dependencies_unknown", False))
+    operation = Operation(previous["operation_id"], project.id, kind, subject, previous["request"], current)
+    return history.retry(operation, current).allowed
+
+
+def validate_publication(value: Mapping[str, Any]) -> None:
+    required = {
+        "kind",
+        "source",
+        "source_sha256",
+        "stored_source_sha256",
+        "compiler",
+        "versions",
+        "measurements",
+        "receipt",
+        "committed_source_sha256",
+        "origin",
+        "available",
+        "unavailable_reason",
+    }
+    if (
+        set(value) != required
+        or value["kind"] not in ("exact", "fuzzy", "original")
+        or value["origin"] not in ("native", "history.imported")
+        or type(value["available"]) is not bool
+    ):
+        raise ValueError("publication.schema: explicit current-publication record required")
+    for field in ("source_sha256", "stored_source_sha256", "committed_source_sha256"):
+        digest = value[field]
+        if digest is not None and (not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest)):
+            raise ValueError("publication.hash: invalid " + field)
+    if (
+        not isinstance(value["versions"], (tuple, list))
+        or not value["versions"]
+        or any(not isinstance(v, str) or not v for v in value["versions"])
+        or len(set(value["versions"])) != len(value["versions"])
+    ):
+        raise ValueError("publication.versions: explicit distinct versions required")
+    if set(value["measurements"]) != set(value["versions"]):
+        raise ValueError("publication.measurements: every version required")
+    if value["source"] is not None:
+        source = LogicalPath(value["source"]["root"], tuple(value["source"]["parts"]))
+        if source.root != "project" or not source.parts or source.parts[0] != "src":
+            raise ValueError("publication.source: owned source required")
+    for version, measured in value["measurements"].items():
+        if measured is not None and Measurement.read(measured).version != version:
+            raise ValueError("publication.measurement: version mismatch")
+    if value["kind"] == "fuzzy":
+        receipt = value["receipt"]
+        if (
+            set(receipt) != {"source_sha256", "compiler", "score", "versions"}
+            or receipt["source_sha256"] != value["stored_source_sha256"]
+            or receipt["compiler"] != value["compiler"]
+            or set(receipt["versions"]) != set(value["versions"])
+        ):
+            raise ValueError("publication.receipt: exact source/compiler/version binding required")
+        for percent in (receipt["score"], *receipt["versions"].values()):
+            if percent is not None and (
+                type(percent) not in (float, int) or not math.isfinite(percent) or not 0 <= percent <= 100
+            ):
+                raise ValueError("publication.score: unknown is null, measured is finite percent")
+
+
+_producer: ContextVar[Operation | None] = ContextVar("unbake_producer", default=None)
+
+
+@contextmanager
+def producing(operation: Operation) -> Any:
+    """Workers transport outcomes; only their coordinator appends authoritative history."""
+    from unbake.process import cause_scope
+
+    token = _producer.set(operation)
+    try:
+        with cause_scope(
+            operation.subject,
+            operation.dependencies,
+            complete=not operation.dependencies.values.get("dependencies_unknown", False),
+        ):
+            yield
+    finally:
+        _producer.reset(token)
+
+
+def producer_operation() -> Operation | None:
+    return _producer.get()
+
+
+def portable_value(project: Project, value: Any) -> Any:
+    from unbake.config import relative_text
+
+    if isinstance(value, Mapping):
+        if set(value) == {"schema", "cause", "chain"} and value["schema"] == 2:
+            return portable_fault(project, Fault.read(value)).document()
+        return {k: portable_value(project, v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [portable_value(project, v) for v in value]
+    if isinstance(value, str):
+        return relative_text(project.root, value)
+    return value

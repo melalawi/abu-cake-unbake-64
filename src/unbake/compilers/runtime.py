@@ -4,6 +4,7 @@ from pathlib import Path
 
 from unbake import cache as retention
 from unbake.config import Held, Project
+from unbake.process import named as cause_named
 
 
 def bindings(project: Project, version: str) -> dict[str, int]:
@@ -35,7 +36,14 @@ def bindings(project: Project, version: str) -> dict[str, int]:
                     matches.setdefault(helper.name, set()).add(address + offset)
         ambiguous = [name for name, addresses in matches.items() if len(addresses) != 1]
         if ambiguous:
-            raise Held("link", f"link.runtime_identity: nonunique native helpers: {', '.join(sorted(ambiguous))}")
+            raise Held(
+                cause_named(
+                    "link.runtime_identity",
+                    f"link.runtime_identity: nonunique native helpers: {', '.join(sorted(ambiguous))}",
+                    owner="compilers.runtime",
+                    stage="link",
+                )
+            )
         return {name: next(iter(addresses)) for name, addresses in matches.items()}
 
     return memo(

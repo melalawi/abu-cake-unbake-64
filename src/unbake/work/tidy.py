@@ -7,13 +7,21 @@ from pathlib import Path
 from unbake import atomic as atomic_files
 from unbake.config import Held, Host, Project
 from unbake.fold import apply
+from unbake.process import named as cause_named
 from unbake.work import compare
 
 
 def tidy(project: Project, host: Host, file: Path) -> list[str]:
     function = compare.function_of(file)
     if not file.resolve().is_relative_to(project.work.resolve()):
-        raise Held("tidy", f"tidy.file: {file}: expected a draft under {project.work}")
+        raise Held(
+            cause_named(
+                "tidy.file",
+                f"tidy.file: {file}: expected a draft under {project.work}",
+                owner="work.tidy",
+                stage="tidy",
+            )
+        )
     folded = apply.fold(project, host, function, file.read_text())
     root = project.work / function / "include"
     for name, text in folded.headers.items():

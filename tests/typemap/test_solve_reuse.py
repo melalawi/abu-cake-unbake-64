@@ -4,7 +4,7 @@ import io
 from unittest.mock import MagicMock, patch
 
 from tests.project_fixture import ProjectCase
-from unbake import inputs, pool, tui
+from unbake import inputs, pool, steps, tui
 from unbake.config import Held
 from unbake.typemap import declarations, facts, solver, types_db
 
@@ -33,7 +33,7 @@ class SolveReuseFixture(ProjectCase):
         self.published = MagicMock(side_effect=self.publish)
 
     def publish(self, project, result, previous, **named):
-        staged, _ = types_db.stage(self.database, types_db.encode(result), {}, {})
+        staged, _ = types_db.stage(self.database, types_db.encode(result), {})
         types_db.install(self.database, staged)
 
 
@@ -54,27 +54,29 @@ class SolveReuseTests(SolveReuseFixture):
             patch("unbake.typemap.database.publish", publish or self.published),
             patch("unbake.layout.header_step.missing", side_effect=lambda project: self.missing),
         ):
-            return solver.solve(self.project, None)
+            result = solver.solve(self.project, None)
+            steps.record(self.project, "types", result["post_input_key"])
+            return result
 
     def test_unchanged_snapshot_reuses_before_collect_or_evidence(self):
         self.solve()
         before = self.collect.call_count, self.evidence.call_count
         with patch("sys.stderr", io.StringIO()):
             again = self.solve()
-        self.assertEqual(again, {"changes": {}, "reused": True})
+        self.assertEqual((again["changes"], again["reused"]), ({}, True))
         self.assertEqual((self.collect.call_count, self.evidence.call_count), before)
         self.assertEqual(types_db.meta(self.database, "revision"), 1)
         tui.stop()
 
     def test_changed_source_advances_revision_and_retains_semantic_digest(self):
         self.solve()
-        first_key = solver.marker(self.project).read_text()
+        first_key = steps.recorded(self.project, "types")
         first_digest = types_db.meta(self.database, "solution_sha256")
         self.source.write_text("int alpha(void) { return 2; }\n")
         self.solve()
         self.assertEqual(types_db.meta(self.database, "revision"), 2)
         self.assertEqual(types_db.meta(self.database, "solution_sha256"), first_digest)
-        self.assertNotEqual(solver.marker(self.project).read_text(), first_key)
+        self.assertNotEqual(steps.recorded(self.project, "types"), first_key)
         self.assertEqual(self.published.call_count, 2)
 
     def test_missing_header_and_forced_marker_require_a_solve(self):
@@ -83,7 +85,7 @@ class SolveReuseTests(SolveReuseFixture):
         self.solve()
         self.assertEqual(types_db.meta(self.database, "revision"), 2)
         self.missing = []
-        solver.marker(self.project).unlink()
+        steps.forget(self.project, "types")
         self.solve()
         self.assertEqual(types_db.meta(self.database, "revision"), 3)
 
@@ -94,7 +96,7 @@ class SolveReuseTests(SolveReuseFixture):
         self.source.write_text("int alpha(void) { return 3; }\n")
         with self.assertRaises(RuntimeError):
             self.solve(MagicMock(side_effect=RuntimeError("install failed")))
-        self.assertFalse(solver.marker(self.project).exists())
+        self.assertEqual(types_db.meta(self.database, "revision"), 1)
 
 
 class FactReuseTests(SolveReuseFixture):
@@ -115,7 +117,9 @@ class FactReuseTests(SolveReuseFixture):
             patch("unbake.typemap.database.publish", publish or self.published),
             patch("unbake.layout.header_step.missing", side_effect=lambda project: self.missing),
         ):
-            return solver.solve(self.project, self.host)
+            result = solver.solve(self.project, self.host)
+            steps.record(self.project, "types", result["post_input_key"])
+            return result
 
     def test_header_feedback_without_new_facts_skips_inference_and_publication(self):
         self.solve()
@@ -143,7 +147,7 @@ class FactReuseTests(SolveReuseFixture):
         (self.project.root / "layout.toml").write_text("# owning groups changed\n")
         self.solve()
         self.assertEqual(self.published.call_count, 2)
-        solver.marker(self.project).unlink()
+        steps.forget(self.project, "types")
         self.solve()
         self.assertEqual(self.published.call_count, 3)
 

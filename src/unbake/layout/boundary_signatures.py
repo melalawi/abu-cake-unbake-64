@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from unbake.config import Held
+from unbake.process import capture
+from unbake.process import named as cause_named
 
 
 @dataclass(frozen=True)
@@ -85,13 +87,30 @@ def load(path: Path) -> tuple[Signature, ...]:
             raise ValueError("signatures: required nonempty SDK catalog")
         return tuple(result)
     except (OSError, ValueError, TypeError, KeyError, AttributeError) as error:
-        raise Held("boundary", f"SDK signatures {path}: {error}") from error
+        raise Held(
+            capture(
+                error,
+                cause=cause_named(
+                    "layout.boundary_signatures.load",
+                    f"SDK signatures {path}: {error}",
+                    owner="layout.boundary_signatures",
+                    stage="boundary",
+                ),
+            )
+        ) from error
 
 
 def configured() -> tuple[Signature, ...]:
     value = os.environ.get("UNBAKE_BOUNDARY_SIGNATURES")
     if not value:
-        raise Held("boundary", "UNBAKE_BOUNDARY_SIGNATURES: required offline SDK signature catalog")
+        raise Held(
+            cause_named(
+                "UNBAKE_BOUNDARY_SIGNATURES",
+                "UNBAKE_BOUNDARY_SIGNATURES: required offline SDK signature catalog",
+                owner="layout.boundary_signatures",
+                stage="boundary",
+            )
+        )
     return load(Path(value))
 
 

@@ -9,6 +9,7 @@ from types import SimpleNamespace
 
 from unbake.config import Held
 from unbake.layout import split, split_analysis, split_apply, split_create, split_edits
+from unbake.process import named
 
 
 class ProjectFixture:
@@ -40,7 +41,7 @@ class ProjectFixture:
 
     def version(self, v: str) -> SimpleNamespace:
         if v not in self.version_map:
-            raise Held("config", f"version {v}")
+            raise Held(named("fixture.refusal", f"version {v}", owner="fixture", stage="config"))
         return self.version_map[v]
 
     def build_link(self, v: str) -> Path:

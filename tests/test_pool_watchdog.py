@@ -15,6 +15,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from tests.kit import TempCase
+from tests.ledger_fixture import fault_evidence
 from unbake import effort, pool
 from unbake.typemap import declarations, facts
 
@@ -103,10 +104,10 @@ class MedianTests(TempCase):
         [(token, failure)] = dog.expired()
         self.assertEqual(token, "running")
         self.assertEqual(failure.failure, "worker.stuck")
-        self.assertEqual(failure.fault["identity"], pool.asdict(identity()))
-        self.assertEqual(failure.fault["phase_median_seconds"], 2)
-        self.assertEqual(failure.fault["threshold_seconds"], 8)
-        self.assertEqual(failure.fault["stage"], "version:us")
+        self.assertEqual(fault_evidence(failure.fault)["identity"], pool.asdict(identity()))
+        self.assertEqual(fault_evidence(failure.fault)["phase_median_seconds"], 2)
+        self.assertEqual(fault_evidence(failure.fault)["threshold_seconds"], 8)
+        self.assertEqual(fault_evidence(failure.fault)["stage"], "version:us")
         self.assertEqual(len(dog.samples["reading-c"]), 1)
         self.assertIsNone(dog.current["queued"].pid)
 
@@ -120,7 +121,7 @@ class MedianTests(TempCase):
         dog.update("batch", "start", 123, identity("second.c"), "item")
         clock.advance(8)
         [(_, failure)] = dog.expired()
-        self.assertEqual(failure.fault["identity"]["source"], "second.c")
+        self.assertEqual(fault_evidence(failure.fault)["identity"]["source"], "second.c")
         self.assertNotIn("first.c", failure.reason)
         self.assertNotIn("retry failed", failure.reason)
         # Sendback is still running until the actual future completes.
@@ -248,10 +249,10 @@ class NativeTests(TempCase):
                     next(results)
                 failure = raised.exception
                 self.assertEqual(failure.failure, "worker.stuck")
-                self.assertEqual(failure.fault["identity"], pool.asdict(identity()))
-                self.assertEqual(failure.fault["threshold_seconds"], 4)
-                self.assertEqual(failure.fault["phase_median_seconds"], 1)
-                self.assertEqual(failure.fault["stage"], "blocked")
+                self.assertEqual(fault_evidence(failure.fault)["identity"], pool.asdict(identity()))
+                self.assertEqual(fault_evidence(failure.fault)["threshold_seconds"], 4)
+                self.assertEqual(fault_evidence(failure.fault)["phase_median_seconds"], 1)
+                self.assertEqual(fault_evidence(failure.fault)["stage"], "blocked")
                 self.assertEqual((self.root / "blocked-starts").read_text(), "one unit body\n")
                 self.assertEqual(sum(state == "stuck" for state, _, _ in records), 1)
         finally:
@@ -332,7 +333,7 @@ class MoreNativeTests(TempCase):
                         ],
                     )
                 self.assertEqual(received.recv(), "unit body started")
-                self.assertEqual(raised.exception.fault["identity"], pool.asdict(identity()))
+                self.assertEqual(fault_evidence(raised.exception.fault)["identity"], pool.asdict(identity()))
                 self.assertNotIn("first.c", raised.exception.reason)
                 self.assertEqual(len(done), 1)
                 self.assertEqual((self.root / "blocked-starts").read_text(), "one unit body\n")
@@ -384,7 +385,7 @@ class MoreNativeTests(TempCase):
                 self.assertEqual(received.recv(), "unit body started")
                 with self.assertRaises(pool.TaskFailed) as raised:
                     bad.result()
-                self.assertEqual(raised.exception.fault["identity"], pool.asdict(identity()))
+                self.assertEqual(fault_evidence(raised.exception.fault)["identity"], pool.asdict(identity()))
                 self.assertEqual((self.root / "blocked-starts").read_text(), "one unit body\n")
         finally:
             for connection in (gate, waiter, received, sender):

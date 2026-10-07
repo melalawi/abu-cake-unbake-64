@@ -7,6 +7,7 @@ from pathlib import Path
 from unbake.config import Held, Unfinished
 from unbake.layout import redeclarations
 from unbake.layout.apply import _local_names
+from unbake.process import named
 from unbake.typemap.database import source_private
 
 
@@ -32,7 +33,10 @@ class LocalNamesTests(unittest.TestCase):
 
 class HeldPickleTests(unittest.TestCase):
     def test_refusals_cross_process_boundaries_intact(self) -> None:
-        for held in (Held("compile", "cc1 exited 1: x", next_action="fix"), Unfinished("solve", "types.thing")):
+        for held in (
+            Held(named("fixture.refusal", "cc1 exited 1: x", owner="fixture", stage="compile"), next_action="fix"),
+            Unfinished("solve", "types.thing"),
+        ):
             with self.subTest(type(held).__name__):
                 back = pickle.loads(pickle.dumps(held))
                 self.assertEqual(

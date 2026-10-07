@@ -8,6 +8,7 @@ from typing import cast
 from unbake import atomic as atomic_files
 from unbake.compilers.families.types import Allocation, Pseudo, RegisterDifference, Schedule
 from unbake.config import Held, Host, Project
+from unbake.process import named as cause_named
 
 
 def function_dump(text: str, function: str) -> str:
@@ -19,7 +20,14 @@ def function_dump(text: str, function: str) -> str:
         if m[1] == function
     ]
     if len(sections) != 1:
-        raise Held("explain", f"dumps.function.{function}: expected one section, found {len(sections)}")
+        raise Held(
+            cause_named(
+                f"dumps.function.{function}",
+                f"dumps.function.{function}: expected one section, found {len(sections)}",
+                owner="compilers.families.gcc.diagnostics",
+                stage="explain",
+            )
+        )
     return sections[0]
 
 
@@ -135,7 +143,11 @@ def collect_allocation(project: Project, policy: Host, source: Path, version: st
             dumps[suffix] = "\n".join(function_dump(p.read_text(), source.stem) for p in paths)
     result = family.allocation(dumps)
     if "lreg" not in dumps:
-        raise Held("explain", "dumps.lreg: missing value")
+        raise Held(
+            cause_named(
+                "dumps.lreg", "dumps.lreg: missing value", owner="compilers.families.gcc.diagnostics", stage="explain"
+            )
+        )
     return annotate(result, dumps["lreg"], source.read_text(), expanded)
 
 
@@ -163,6 +175,13 @@ def collect_schedule(project: Project, policy: Host, source: Path, version: str,
     for stage in ("sched2", "dbr"):
         paths = sorted(work.glob("*." + stage))
         if not paths:
-            raise Held("explain", f"dumps.{stage}: missing value")
+            raise Held(
+                cause_named(
+                    f"dumps.{stage}",
+                    f"dumps.{stage}: missing value",
+                    owner="compilers.families.gcc.diagnostics",
+                    stage="explain",
+                )
+            )
         dumps[stage] = "\n".join(function_dump(path.read_text(), source.stem) for path in paths)
     return family.schedule(dumps)

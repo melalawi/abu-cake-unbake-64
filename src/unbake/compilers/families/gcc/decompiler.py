@@ -3,6 +3,7 @@
 import re
 
 from unbake.config import Held
+from unbake.process import named as cause_named
 
 _ALIASES = {
     name: index
@@ -56,7 +57,14 @@ def register_pairs(assembly: str, flags: tuple[str, ...], function: str) -> str:
     """
     fp = [flag for flag in flags if flag.startswith("-mfp")]
     if any(flag not in ("-mfp32", "-mfp64") for flag in fp):
-        raise Held("m2c", f"{function}: effective flags: unsupported {fp}")
+        raise Held(
+            cause_named(
+                f"{function}",
+                f"{function}: effective flags: unsupported {fp}",
+                owner="compilers.families.gcc.decompiler",
+                stage="m2c",
+            )
+        )
     if not fp or fp[-1] != "-mfp64":
         return assembly
     token = re.compile(r"/\*.*?\*/|//[^\n]*|\$([A-Za-z0-9_]+)", re.S)

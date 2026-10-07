@@ -29,6 +29,7 @@ from unbake.decomp.gbi_source import (
     standard_shiftl,
     word_builder,
 )
+from unbake.process import named as cause_named
 
 OtherOptions: TypeAlias = list[str] | dict[int, str]
 
@@ -749,26 +750,51 @@ def microcode(project: Project) -> str | None:
         if re.search(r"(?:^|-D|\s)" + macro + r"(?:=|\s|$)", definitions)
     ]
     if len(variants) > 1:
-        raise Held("gbi", "conflicting microcode definitions: " + ", ".join(variants))
+        raise Held(
+            cause_named(
+                "decomp.gbi.microcode",
+                "conflicting microcode definitions: " + ", ".join(variants),
+                owner="decomp.gbi",
+                stage="gbi",
+            )
+        )
     return variants[0] if variants else None
 
 
 def install(project: Project) -> str:
     if not project.include:
-        raise Held("gbi", "paths.include: required include directory")
+        raise Held(
+            cause_named("paths.include", "paths.include: required include directory", owner="decomp.gbi", stage="gbi")
+        )
     destination = project.include[0] / "gbi.h"
     content = HEADER.read_text()
     if destination.is_symlink():
-        raise Held("gbi", f"{destination}: existing header differs from the open reconstruction")
+        raise Held(
+            cause_named(
+                f"{destination}",
+                f"{destination}: existing header differs from the open reconstruction",
+                owner="decomp.gbi",
+                stage="gbi",
+            )
+        )
     if destination.exists() and destination.read_text() != content:
         if sha256(destination.read_bytes()).hexdigest() != PREVIOUS_HEADER_SHA256:
-            raise Held("gbi", f"{destination}: existing header differs from the open reconstruction")
+            raise Held(
+                cause_named(
+                    f"{destination}",
+                    f"{destination}: existing header differs from the open reconstruction",
+                    owner="decomp.gbi",
+                    stage="gbi",
+                )
+            )
         atomic_files.text(destination, content)
     for root in project.include:
         sdk = root / "n64sdk.h"
         if sdk.is_file() and not re.search(r"^\s*#\s*(?:ifndef|pragma\s+once)\b", sdk.read_text(), re.M):
             if sdk.is_symlink():
-                raise Held("gbi", f"{sdk}: SDK type header must be regular")
+                raise Held(
+                    cause_named(f"{sdk}", f"{sdk}: SDK type header must be regular", owner="decomp.gbi", stage="gbi")
+                )
             atomic_files.text(
                 sdk, "#ifndef UNBAKE_N64SDK_H\n#define UNBAKE_N64SDK_H\n" + sdk.read_text() + "\n#endif\n"
             )
@@ -780,7 +806,9 @@ def install(project: Project) -> str:
 
 def install_audio(project: Project) -> str:
     if not project.include:
-        raise Held("gbi", "paths.include: required include directory")
+        raise Held(
+            cause_named("paths.include", "paths.include: required include directory", owner="decomp.gbi", stage="gbi")
+        )
     for template, name in (
         (gbi_audio.HEADER, "abi.h"),
         (gbi_audio.TYPE_HEADER, "acmd.h"),
@@ -789,7 +817,14 @@ def install_audio(project: Project) -> str:
         destination = project.include[0] / name
         content = template.read_text()
         if destination.is_symlink() or (destination.exists() and destination.read_text() != content):
-            raise Held("gbi", f"{destination}: existing header differs from the open reconstruction")
+            raise Held(
+                cause_named(
+                    f"{destination}",
+                    f"{destination}: existing header differs from the open reconstruction",
+                    owner="decomp.gbi",
+                    stage="gbi",
+                )
+            )
         destination.parent.mkdir(parents=True, exist_ok=True)
         if not destination.exists():
             atomic_files.text(destination, content)
@@ -840,7 +875,7 @@ def rewrite(project: Project, policy: Host, files: list[Path], *, all_files: boo
     from unbake.decomp.gbi_proof import preserve
 
     if bool(files) == all_files:
-        raise Held("gbi", "provide FILE... or --all")
+        raise Held(cause_named("decomp.gbi.rewrite", "provide FILE... or --all", owner="decomp.gbi", stage="gbi"))
     paths = sorted(project.src.rglob("*.c")) if all_files else files
     variant = microcode(project)
     counts: Counter[str] = Counter()
@@ -850,7 +885,11 @@ def rewrite(project: Project, policy: Host, files: list[Path], *, all_files: boo
     for path in paths:
         path = path if path.is_absolute() else project.root / path
         if path.is_symlink() or not path.is_file() or not path.resolve().is_relative_to(project.root):
-            raise Held("gbi", f"{path}: required project-local regular C file")
+            raise Held(
+                cause_named(
+                    f"{path}", f"{path}: required project-local regular C file", owner="decomp.gbi", stage="gbi"
+                )
+            )
         source = path.read_text()
         try:
             result = prepare(project, source, variant)

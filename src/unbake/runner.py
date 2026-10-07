@@ -19,6 +19,8 @@ from unbake import cache as retention
 from unbake.compilers import drivers
 from unbake.config import Held, Host, Project
 from unbake.layout import split
+from unbake.process import capture
+from unbake.process import named as cause_named
 
 
 def tools(host: Host) -> drivers.Tools:
@@ -56,7 +58,9 @@ def compile_unit(
     """Own one object lifetime; reuse the CAS by preprocessed text, commands and compiler."""
     file = Path(file).resolve()
     if not file.is_file():
-        raise Held("compile", f"compile.source: {file}: missing file")
+        raise Held(
+            cause_named("compile.source", f"compile.source: {file}: missing file", owner="runner", stage="compile")
+        )
     source = str(file.relative_to(project.root)) if file.is_relative_to(project.root) else str(file)
     commands = drivers.steps(project, version, unit, source, tools(host), non_matching=non_matching)
     try:
@@ -67,7 +71,17 @@ def compile_unit(
             context={"source": str(file), "function": unit, "version": version},
         )
     except Held as error:
-        raise Held("compile", f"compile.{Path(unit).name}: {source}: {error.reason}") from error
+        raise Held(
+            capture(
+                error,
+                cause=cause_named(
+                    f"compile.{Path(unit).name}",
+                    f"compile.{Path(unit).name}: {source}: {error.reason}",
+                    owner="runner",
+                    stage="compile",
+                ),
+            )
+        ) from error
     if verify_input is not None:
         verify_input(preprocessed)
     absolute_cc = str(project.compiler_for(unit).cc)
@@ -109,9 +123,26 @@ def compile_unit(
             cached = cache.Cache(project.cache).produce("object", content_key, make)
             atomic_files.copyfile(cached, output)
         except Held as error:
-            raise Held("compile", f"compile.{name}: {source}: {error.reason}") from error
+            raise Held(
+                capture(
+                    error,
+                    cause=cause_named(
+                        f"compile.{name}", f"compile.{name}: {source}: {error.reason}", owner="runner", stage="compile"
+                    ),
+                )
+            ) from error
         except OSError as error:
-            raise Held("compile", f"compile.object: {source}: object could not be materialized: {error}") from error
+            raise Held(
+                capture(
+                    error,
+                    cause=cause_named(
+                        "compile.object",
+                        f"compile.object: {source}: object could not be materialized: {error}",
+                        owner="runner",
+                        stage="compile",
+                    ),
+                )
+            ) from error
         yield output
 
 
@@ -124,7 +155,14 @@ def windows(project: Project, version: str) -> list[str]:
 def symbols_file(project: Project, version: str) -> Path:
     path = project.root / "versions" / version / "symbols.ld"
     if not path.is_file():
-        raise Held("compile", f"build.symbols: {path} is missing; run unbake recompute buildfiles")
+        raise Held(
+            cause_named(
+                "build.symbols",
+                f"build.symbols: {path} is missing; run unbake recompute buildfiles",
+                owner="runner",
+                stage="compile",
+            )
+        )
     return path
 
 
@@ -190,9 +228,15 @@ def derived_symbols(names: set[str], known: frozenset[str], version: str, source
     unknown = [name for name in missing if buildfiles.named_address(name) is None]
     if unknown:
         raise Held(
-            "link",
-            f"link.undefined: {source}: VERSION {version}: {', '.join(unknown)} "
-            f"in neither versions/{version}/symbols.ld nor an address name",
+            cause_named(
+                "link.undefined",
+                (
+                    f"link.undefined: {source}: VERSION {version}: {', '.join(unknown)} "
+                    f"in neither versions/{version}/symbols.ld nor an address name"
+                ),
+                owner="runner",
+                stage="link",
+            )
         )
     return [f"--defsym={name}=0x{buildfiles.named_address(name):08X}" for name in missing]
 
@@ -214,14 +258,28 @@ def link(
     binary = work / "unit.bin"
     script = project.root / "versions" / version / f"{project.name}.ld"
     if not script.is_file():
-        raise Held("compile", f"build.link_script: {script} is missing; run unbake recompute buildfiles")
+        raise Held(
+            cause_named(
+                "build.link_script",
+                f"build.link_script: {script} is missing; run unbake recompute buildfiles",
+                owner="runner",
+                stage="compile",
+            )
+        )
     from unbake.objects import rodata
     from unbake.objects.elf import Object
 
     sections = rodata.unresolved_sections(Object(placed))
     if sections:
         if not score:
-            raise Held("link", f"link.unproved: {source}: VERSION {version}: unplaced {', '.join(sections)}")
+            raise Held(
+                cause_named(
+                    "link.unproved",
+                    f"link.unproved: {source}: VERSION {version}: unplaced {', '.join(sections)}",
+                    owner="runner",
+                    stage="link",
+                )
+            )
         trial = work / "trial.ld"
         atomic_files.text(trial, rodata.insert_fragment(script.read_text(), rodata.trial_fragment(sections)))
         script = trial
@@ -250,7 +308,17 @@ def link(
             context={"source": str(source), "function": row.name, "version": version, "address": row.address},
         )
     except Held as error:
-        raise Held("link", f"link.failed: {source}: VERSION {version}: {error.reason}") from error
+        raise Held(
+            capture(
+                error,
+                cause=cause_named(
+                    "link.failed",
+                    f"link.failed: {source}: VERSION {version}: {error.reason}",
+                    owner="runner",
+                    stage="link",
+                ),
+            )
+        ) from error
     process.run_tool(
         [str(host.mips_objcopy), "-O", "binary", "-j", ".text", str(elf), str(binary)],
         project.root,
@@ -283,7 +351,14 @@ def build_unit(project: Project, host: Host, unit: str, version: str, *, source:
     """Strict mode (land): compile src/UNIT.c, prove every constant, link; refuse on any unproved constant."""
     rows = [row for row in split.functions(project, version) if Path(row.path).name == unit and row.kind == "c"]
     if len(rows) != 1:
-        raise Held("build", f"build.row: {unit}: expected one c row in VERSION {version}, found {len(rows)}")
+        raise Held(
+            cause_named(
+                "build.row",
+                f"build.row: {unit}: expected one c row in VERSION {version}, found {len(rows)}",
+                owner="runner",
+                stage="build",
+            )
+        )
     row = rows[0]
     file = project.src / f"{unit}.c" if source is None else source
     with (
@@ -295,7 +370,14 @@ def build_unit(project: Project, host: Host, unit: str, version: str, *, source:
         place(project, host, obj, version, row, placed, score=False)
         data = link(project, host, placed, version, row, work, file)
     if len(data) != row.end - row.start:
-        raise Held("build", f"build.size: {unit} {version}: 0x{len(data):X} bytes for a 0x{row.end - row.start:X} row")
+        raise Held(
+            cause_named(
+                "build.size",
+                f"build.size: {unit} {version}: 0x{len(data):X} bytes for a 0x{row.end - row.start:X} row",
+                owner="runner",
+                stage="build",
+            )
+        )
     return data
 
 
@@ -328,5 +410,12 @@ def dependencies(
         for name in family_for(project.compiler_for(unit)).dependency_paths(output)
     }
     if file.absolute() not in paths:
-        raise Held("compile", f"compile.dependencies: {unit} {version}: proved source missing from native rule")
+        raise Held(
+            cause_named(
+                "compile.dependencies",
+                f"compile.dependencies: {unit} {version}: proved source missing from native rule",
+                owner="runner",
+                stage="compile",
+            )
+        )
     return paths - {file.absolute()}

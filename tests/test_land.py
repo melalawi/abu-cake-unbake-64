@@ -9,6 +9,7 @@ from tests.project_fixture import ProjectCase
 from unbake import config, land
 from unbake.config import Held
 from unbake.fold.apply import Folded
+from unbake.process import named
 
 SOURCE = "int alpha(void) { return 1; }\n"
 
@@ -31,7 +32,7 @@ class LandTests(ProjectCase):
             if args[-1:] == ("HEAD",):
                 return "c0ffee\n"
             if "commit" in args and self.fail_commit:
-                raise Held("land", "git commit exited 1: hook refused")
+                raise Held(named("fixture.refusal", "git commit exited 1: hook refused", owner="fixture", stage="land"))
             return ""
 
         prove = (
@@ -68,7 +69,16 @@ class LandTests(ProjectCase):
 
     def test_mismatch_writes_nothing(self) -> None:
         with self.assertRaisesRegex(Held, "land.mismatch"):
-            self.run_land(Held("land", "land.mismatch: alpha eu: linked bytes differ from the ROM row"))
+            self.run_land(
+                Held(
+                    named(
+                        "land.mismatch",
+                        "land.mismatch: alpha eu: linked bytes differ from the ROM row",
+                        owner="fixture",
+                        stage="land",
+                    )
+                )
+            )
         self.assert_untouched()
         self.assertEqual(self.git, [])
         self.assertTrue(self.file.is_file())

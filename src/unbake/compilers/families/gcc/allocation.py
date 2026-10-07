@@ -8,6 +8,7 @@ from dataclasses import replace
 
 from unbake.compilers.families.types import Allocation, Pseudo
 from unbake.config import Held
+from unbake.process import named as cause_named
 
 
 def dump_flags() -> tuple[str, ...]:
@@ -17,7 +18,14 @@ def dump_flags() -> tuple[str, ...]:
 def global_priority(refs: int, live: int, words: int = 1) -> int:
     """GCC 2.x global allocno priority: floor_log2(refs) * refs / live * 10000 * words."""
     if refs < 1 or live < 1 or words < 1:
-        raise Held("explain", "priority.references/live_length: expected positive values")
+        raise Held(
+            cause_named(
+                "priority.references/live_length",
+                "priority.references/live_length: expected positive values",
+                owner="compilers.families.gcc.allocation",
+                stage="explain",
+            )
+        )
     return (refs.bit_length() - 1) * refs * 10000 * words // live
 
 
@@ -49,12 +57,26 @@ def flip(candidate: tuple[int, int], holder: tuple[int, int]) -> str:
 
 def _stream(dumps: Mapping[str, str], name: str) -> str:
     if name not in dumps or not isinstance(dumps[name], str) or not dumps[name].strip():
-        raise Held("explain", f"dumps.{name}: missing nonempty text")
+        raise Held(
+            cause_named(
+                f"dumps.{name}",
+                f"dumps.{name}: missing nonempty text",
+                owner="compilers.families.gcc.allocation",
+                stage="explain",
+            )
+        )
     return dumps[name]
 
 
 def _unknown(stream: str, line: str) -> Held:
-    return Held("explain", f"dumps.{stream}.unknown_line: unsupported allocator row {line!r}")
+    return Held(
+        cause_named(
+            f"dumps.{stream}.unknown_line",
+            f"dumps.{stream}.unknown_line: unsupported allocator row {line!r}",
+            owner="compilers.families.gcc.allocation",
+            stage="explain",
+        )
+    )
 
 
 def _row(pattern: str, line: str, stream: str) -> re.Match[str]:
@@ -99,10 +121,24 @@ def allocation(dumps: Mapping[str, str]) -> Allocation:
         match = _row(r"Register (\d+) used (\d+) times across (-?\d+) insns(?: in block \d+)?(?:;.*|\.)?", line, "lreg")
         number, refs, live = map(int, match.groups())
         if refs < 1 or live < -2:
-            raise Held("explain", f"dumps.lreg.pseudo.{number}.references/live_length: invalid values")
+            raise Held(
+                cause_named(
+                    f"dumps.lreg.pseudo.{number}.references/live_length",
+                    f"dumps.lreg.pseudo.{number}.references/live_length: invalid values",
+                    owner="compilers.families.gcc.allocation",
+                    stage="explain",
+                )
+            )
         usage[number] = (refs, live)
     if not re.search(r"^;; Register dispositions:", global_text, re.M):
-        raise Held("explain", "dumps.greg.dispositions: missing Register dispositions section")
+        raise Held(
+            cause_named(
+                "dumps.greg.dispositions",
+                "dumps.greg.dispositions: missing Register dispositions section",
+                owner="compilers.families.gcc.allocation",
+                stage="explain",
+            )
+        )
     dispositions = {}
     order: list[int] = []
     words: dict[int, int] = {}
@@ -140,7 +176,14 @@ def allocation(dumps: Mapping[str, str]) -> Allocation:
                 numbers = tuple(map(int, match[1].split("+")))
                 size = int(match[2]) if match[2] else 1
                 if size < 1:
-                    raise Held("explain", f"dumps.greg.pseudo.{numbers[0]}.words: expected positive value")
+                    raise Held(
+                        cause_named(
+                            f"dumps.greg.pseudo.{numbers[0]}.words",
+                            f"dumps.greg.pseudo.{numbers[0]}.words: expected positive value",
+                            owner="compilers.families.gcc.allocation",
+                            stage="explain",
+                        )
+                    )
                 for number in numbers:
                     words[number] = size
                     ranks[number] = len(groups)
@@ -148,7 +191,14 @@ def allocation(dumps: Mapping[str, str]) -> Allocation:
                 groups.append(numbers)
                 remainder = remainder[match.end() :]
             if have_order or len(groups) != int(ranked[1]) or len(set(order)) != len(order):
-                raise Held("explain", "dumps.greg.order: inconsistent pseudo count")
+                raise Held(
+                    cause_named(
+                        "dumps.greg.order",
+                        "dumps.greg.order: inconsistent pseudo count",
+                        owner="compilers.families.gcc.allocation",
+                        stage="explain",
+                    )
+                )
             have_order = True
         elif re.match(r";; .*conflicts:", line):
             match = _row(r";; (\d+) conflicts:(.*)", line, "greg")
@@ -169,17 +219,38 @@ def allocation(dumps: Mapping[str, str]) -> Allocation:
         elif line.strip() and not re.fullmatch(r";;(?:\s*| Function \S+(?: \(.*\))?)", line):
             raise _unknown("greg", line)
     if not have_dispositions:
-        raise Held("explain", "dumps.greg.dispositions: missing Register dispositions section")
+        raise Held(
+            cause_named(
+                "dumps.greg.dispositions",
+                "dumps.greg.dispositions: missing Register dispositions section",
+                owner="compilers.families.gcc.allocation",
+                stage="explain",
+            )
+        )
     if not have_order and (
         not {number for number, (_, live) in usage.items() if live > 0} <= dispositions.keys()
         or conflicts
         or re.search(r"^;; allocno \d+", dumps.get("galloc", ""), re.M)
     ):
-        raise Held("explain", "dumps.greg.order: missing regs to allocate")
+        raise Held(
+            cause_named(
+                "dumps.greg.order",
+                "dumps.greg.order: missing regs to allocate",
+                owner="compilers.families.gcc.allocation",
+                stage="explain",
+            )
+        )
     facts = {}
     for number in sorted(usage.keys() | dispositions.keys() | set(order)):
         if number not in usage:
-            raise Held("explain", f"dumps.lreg.pseudo.{number}.usage: missing value")
+            raise Held(
+                cause_named(
+                    f"dumps.lreg.pseudo.{number}.usage",
+                    f"dumps.lreg.pseudo.{number}.usage: missing value",
+                    owner="compilers.families.gcc.allocation",
+                    stage="explain",
+                )
+            )
         refs, live = usage[number]
         facts[number] = Pseudo(
             number,
@@ -214,15 +285,36 @@ def allocation(dumps: Mapping[str, str]) -> Allocation:
             line,
         ):
             if block is None:
-                raise Held("explain", "dumps.lalloc.block: missing value")
+                raise Held(
+                    cause_named(
+                        "dumps.lalloc.block",
+                        "dumps.lalloc.block: missing value",
+                        owner="compilers.families.gcc.allocation",
+                        stage="explain",
+                    )
+                )
             quantity_text, numbers_text, size_text, refs_text, birth, death, priority_text = match.groups()
             numbers = _numbers(numbers_text, "lalloc", line)
             if int(death) <= int(birth) or int(refs_text) < 1 or int(size_text) < 1:
-                raise Held("explain", f"dumps.lalloc.qty.{quantity_text}.life/references: invalid values")
+                raise Held(
+                    cause_named(
+                        f"dumps.lalloc.qty.{quantity_text}.life/references",
+                        f"dumps.lalloc.qty.{quantity_text}.life/references: invalid values",
+                        owner="compilers.families.gcc.allocation",
+                        stage="explain",
+                    )
+                )
             quantities[block, int(quantity_text)] = numbers
             for number in numbers:
                 if number not in facts:
-                    raise Held("explain", f"dumps.lreg.pseudo.{number}.usage: missing value")
+                    raise Held(
+                        cause_named(
+                            f"dumps.lreg.pseudo.{number}.usage",
+                            f"dumps.lreg.pseudo.{number}.usage: missing value",
+                            owner="compilers.families.gcc.allocation",
+                            stage="explain",
+                        )
+                    )
                 facts[number] = replace(
                     facts[number],
                     words=int(size_text),
@@ -234,19 +326,47 @@ def allocation(dumps: Mapping[str, str]) -> Allocation:
         elif match := re.match(r";; qty (\d+) wants ", line):
             current = quantities.get((block, int(match[1])))
             if current is None:
-                raise Held("explain", f"dumps.lalloc.qty.{match[1]}: missing quantity")
+                raise Held(
+                    cause_named(
+                        f"dumps.lalloc.qty.{match[1]}",
+                        f"dumps.lalloc.qty.{match[1]}: missing quantity",
+                        owner="compilers.families.gcc.allocation",
+                        stage="explain",
+                    )
+                )
         elif match := re.match(r";;\s+(\d+) rejected: (.*)", line):
             if current is None:
-                raise Held("explain", "dumps.lalloc.request: missing quantity request")
+                raise Held(
+                    cause_named(
+                        "dumps.lalloc.request",
+                        "dumps.lalloc.request: missing quantity request",
+                        owner="compilers.families.gcc.allocation",
+                        stage="explain",
+                    )
+                )
             for number in current:
                 p = facts[number]
                 facts[number] = replace(p, rejections=(*p.rejections, (int(match[1]), match[2])))
         elif match := re.match(r";; pseudo (\d+) in (\d+) \(qty (\d+), offset (-?\d+)\)$", line):
             number, hard, quantity, _offset = map(int, match.groups())
             if (block, quantity) not in quantities or number not in quantities[block, quantity]:
-                raise Held("explain", f"dumps.lalloc.pseudo.{number}.quantity: missing membership")
+                raise Held(
+                    cause_named(
+                        f"dumps.lalloc.pseudo.{number}.quantity",
+                        f"dumps.lalloc.pseudo.{number}.quantity: missing membership",
+                        owner="compilers.families.gcc.allocation",
+                        stage="explain",
+                    )
+                )
             if number not in order and facts[number].hard != hard:
-                raise Held("explain", f"dumps.lalloc.pseudo.{number}.hard: disagrees with final disposition")
+                raise Held(
+                    cause_named(
+                        f"dumps.lalloc.pseudo.{number}.hard",
+                        f"dumps.lalloc.pseudo.{number}.hard: disagrees with final disposition",
+                        owner="compilers.families.gcc.allocation",
+                        stage="explain",
+                    )
+                )
         elif line.strip() and not re.fullmatch(r";; Function \S+", line):
             raise _unknown("lalloc", line)
     allocnos: dict[int, tuple[int, ...]] = {}
@@ -260,7 +380,14 @@ def allocation(dumps: Mapping[str, str]) -> Allocation:
             allocnos[int(allocno_text)] = _numbers(numbers_text, "galloc", line)
             for number in allocnos[int(allocno_text)]:
                 if number not in facts or int(refs_text) < 1 or int(live_text) < -2 or int(size_text) < 1:
-                    raise Held("explain", f"dumps.galloc.pseudo.{number}.usage: missing or invalid value")
+                    raise Held(
+                        cause_named(
+                            f"dumps.galloc.pseudo.{number}.usage",
+                            f"dumps.galloc.pseudo.{number}.usage: missing or invalid value",
+                            owner="compilers.families.gcc.allocation",
+                            stage="explain",
+                        )
+                    )
                 facts[number] = replace(
                     facts[number],
                     references=int(refs_text),
@@ -273,20 +400,48 @@ def allocation(dumps: Mapping[str, str]) -> Allocation:
         elif match := re.match(r";; allocno (\d+) pseudo (\d+) live range runs from insn (\d+) to insn (\d+)$", line):
             _, number, birth, death = map(int, match.groups())
             if number not in facts or death < birth:
-                raise Held("explain", f"dumps.galloc.pseudo.{number}.live_range: invalid value")
+                raise Held(
+                    cause_named(
+                        f"dumps.galloc.pseudo.{number}.live_range",
+                        f"dumps.galloc.pseudo.{number}.live_range: invalid value",
+                        owner="compilers.families.gcc.allocation",
+                        stage="explain",
+                    )
+                )
             facts[number] = replace(facts[number], live_range=(birth, death))
         elif match := re.match(r";; allocno (\d+) priority .* = (-?\d+)$", line):
             if int(match[1]) not in allocnos:
-                raise Held("explain", f"dumps.galloc.allocno.{match[1]}: missing value")
+                raise Held(
+                    cause_named(
+                        f"dumps.galloc.allocno.{match[1]}",
+                        f"dumps.galloc.allocno.{match[1]}: missing value",
+                        owner="compilers.families.gcc.allocation",
+                        stage="explain",
+                    )
+                )
             for number in allocnos[int(match[1])]:
                 facts[number] = replace(facts[number], priority=int(match[2]))
         elif match := re.match(r";; allocno (\d+).*seeking ", line):
             current = allocnos.get(int(match[1]))
             if current is None:
-                raise Held("explain", f"dumps.galloc.allocno.{match[1]}: missing value")
+                raise Held(
+                    cause_named(
+                        f"dumps.galloc.allocno.{match[1]}",
+                        f"dumps.galloc.allocno.{match[1]}: missing value",
+                        owner="compilers.families.gcc.allocation",
+                        stage="explain",
+                    )
+                )
         elif match := re.match(r";;\s+(\d+) rejected: (.*)", line):
             if current is None:
-                raise Held("explain", "dumps.galloc.request: missing allocation request")
+                raise Held(
+                    cause_named(
+                        "dumps.galloc.request",
+                        "dumps.galloc.request: missing allocation request",
+                        owner="compilers.families.gcc.allocation",
+                        stage="explain",
+                    )
+                )
             for number in current:
                 p = facts[number]
                 facts[number] = replace(p, rejections=(*p.rejections, (int(match[1]), match[2])))

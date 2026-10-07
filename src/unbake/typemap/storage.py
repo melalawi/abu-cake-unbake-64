@@ -13,6 +13,8 @@ from unbake import atomic as atomic_files
 from unbake import cache as retention
 from unbake import inputs
 from unbake.config import Held, Project
+from unbake.process import capture
+from unbake.process import named as cause_named
 
 
 def encoded(value: object) -> bytes:
@@ -22,7 +24,14 @@ def encoded(value: object) -> bytes:
 def write(path: Path, content: bytes, *, durable: bool = True) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.is_symlink():
-        raise Held("solve", f"types.database: generated path is a symlink: {path}")
+        raise Held(
+            cause_named(
+                "types.database",
+                f"types.database: generated path is a symlink: {path}",
+                owner="typemap.storage",
+                stage="solve",
+            )
+        )
     atomic_files.write(path, content, durable=durable)
 
 
@@ -30,9 +39,13 @@ def read(path: Path, key: str) -> dict[str, Any]:
     try:
         value = json.loads(path.read_bytes())
     except (OSError, ValueError) as error:
-        raise Held("solve", f"{key}: {path}: {error}") from error
+        raise Held(
+            capture(
+                error, cause=cause_named(f"{key}", f"{key}: {path}: {error}", owner="typemap.storage", stage="solve")
+            )
+        ) from error
     if not isinstance(value, dict) or value.get("schema") != 1:
-        raise Held("solve", f"{key}: schema=1 object required")
+        raise Held(cause_named(f"{key}", f"{key}: schema=1 object required", owner="typemap.storage", stage="solve"))
     return value
 
 
@@ -46,7 +59,9 @@ def identity(project: Project) -> dict[str, Any]:
 
 def validate_identity(project: Project, value: dict[str, Any], key: str) -> None:
     if any(value.get(field) != expected for field, expected in identity(project).items()):
-        raise Held("solve", f"{key}: project/ROM identity changed")
+        raise Held(
+            cause_named(f"{key}", f"{key}: project/ROM identity changed", owner="typemap.storage", stage="solve")
+        )
 
 
 def map_inputs(project: Project) -> dict[str, str]:
@@ -55,7 +70,14 @@ def map_inputs(project: Project) -> dict[str, str]:
     for version in project.versions:
         configured = project.version(version)
         if not configured.baserom.is_file():
-            raise Held("map", f"map.rom_sha1.{version}: missing {configured.baserom}")
+            raise Held(
+                cause_named(
+                    f"map.rom_sha1.{version}",
+                    f"map.rom_sha1.{version}: missing {configured.baserom}",
+                    owner="typemap.storage",
+                    stage="map",
+                )
+            )
         paths.add(configured.baserom)
         for filename in ("splat_symbols.csv", "symbol-addresses.txt"):
             generated_symbols = project.build_link(version) / filename
@@ -65,7 +87,14 @@ def map_inputs(project: Project) -> dict[str, str]:
                 symbol_inputs[str(generated_symbols.relative_to(project.root))] = symbol_digest(generated_symbols)
         for key, path in (("split", configured.split), ("symbols", configured.symbols)):
             if not path.is_file():
-                raise Held("map", f"map.{key}.{version}: missing {path}")
+                raise Held(
+                    cause_named(
+                        f"map.{key}.{version}",
+                        f"map.{key}.{version}: missing {path}",
+                        owner="typemap.storage",
+                        stage="map",
+                    )
+                )
             paths.add(path)
     # Instruction facts come directly from the pinned ROM and split intervals.
     # Extracted assembly is a disposable rendering: make prunes obsolete C-unit
@@ -89,7 +118,14 @@ def symbol_digest(path: Path) -> str:
         try:
             symbols = discovered_symbols(path, {}) if path.name == "splat_symbols.csv" else read_symbol_table(path)
         except (OSError, ValueError, KeyError) as error:
-            raise Held("map", f"map.symbols: {path}: {error}") from error
+            raise Held(
+                capture(
+                    error,
+                    cause=cause_named(
+                        "map.symbols", f"map.symbols: {path}: {error}", owner="typemap.storage", stage="map"
+                    ),
+                )
+            ) from error
         return inputs.bytes_digest(encoded(symbols), algorithm="sha256")
 
     return retention.memo("symbol-digest", (path.name, content), parse, size=retention.memory_size, copy_out=str)
@@ -174,6 +210,10 @@ def install(path: Path, staged: Path) -> None:
 def verify_file(path: Path, expected: str, key: str) -> None:
     try:
         if inputs.digest(path, algorithm="sha256", reuse=retention.configured()) != expected:
-            raise Held("solve", f"{key}: content changed: {path}")
+            raise Held(cause_named(f"{key}", f"{key}: content changed: {path}", owner="typemap.storage", stage="solve"))
     except OSError as error:
-        raise Held("solve", f"{key}: {path}: {error}") from error
+        raise Held(
+            capture(
+                error, cause=cause_named(f"{key}", f"{key}: {path}: {error}", owner="typemap.storage", stage="solve")
+            )
+        ) from error

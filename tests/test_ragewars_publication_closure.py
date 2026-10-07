@@ -17,6 +17,7 @@ from unbake.fold import imports
 from unbake.fold.apply import Folded
 from unbake.layout import apply, header_loss, index
 from unbake.layout import map as ownership
+from unbake.process import named
 
 FIXTURE = Path(__file__).parent / "fixtures/publication_headers/ragewars"
 FUNCTION = "func_802B56E0_eu_x"
@@ -106,7 +107,7 @@ class RageWarsPublicationClosureTests(ProjectCase):
         )
         self.compiles.append(version)
         if compiled.returncode:
-            raise Held("compile", compiled.stderr)
+            raise Held(named("fixture.refusal", compiled.stderr, owner="fixture", stage="compile"))
         names = depfile.read_text().replace("\\\n", "").partition(":")[2].split()
         return {Path(os.path.abspath(n)) for n in names if Path(os.path.abspath(n)) != file}
 
@@ -141,7 +142,9 @@ class RageWarsPublicationClosureTests(ProjectCase):
             patch.object(
                 land,
                 "_commit",
-                side_effect=Held("land", "commit failure") if commit_error else None,
+                side_effect=Held(named("fixture.refusal", "commit failure", owner="fixture", stage="land"))
+                if commit_error
+                else None,
                 wraps=None if commit_error else land._commit,
             ),
         ):

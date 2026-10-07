@@ -12,6 +12,7 @@ from unbake.cache import Cache
 from unbake.config import Held
 from unbake.layout import apply, header_step, index
 from unbake.layout.header_context import Headers
+from unbake.process import named
 from unbake.typemap import database, regeneration, storage
 
 FIXTURE = Path(__file__).parent / "fixtures/battletanx_orphan"
@@ -135,7 +136,7 @@ class OrphanHeaderTests(ProjectCase):
 
         def refuse(project, outputs):
             install(project, outputs)
-            raise Held("headers", "headers.test: after orphan deletion")
+            raise Held(named("headers.test", "headers.test: after orphan deletion", owner="fixture", stage="headers"))
 
         with (
             patch.object(apply, "units"),

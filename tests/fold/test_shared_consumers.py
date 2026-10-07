@@ -14,6 +14,7 @@ from unbake.decomp import checks
 from unbake.fold import apply
 from unbake.layout import map as ownership
 from unbake.layout import split
+from unbake.process import named
 from unbake.work.tidy import tidy
 
 FUNCTION = "func_8007EC38"
@@ -128,7 +129,14 @@ class SharedConsumerTests(ProjectCase):
             text = replacements.get(source, source.read_text())
             local = set(re.findall(r"\b(?:struct|union)\s+(\w+)\s*\{", text))
             if local & promoted:
-                raise Held("structs", f"redefinition in {source.name}: {sorted(local & promoted)}")
+                raise Held(
+                    named(
+                        "fixture.refusal",
+                        f"redefinition in {source.name}: {sorted(local & promoted)}",
+                        owner="fixture",
+                        stage="structs",
+                    )
+                )
 
     def build_unit(self, project, host, unit, version, source=None):
         text = source.read_text()
@@ -148,7 +156,7 @@ class SharedConsumerTests(ProjectCase):
         if args == ("rev-parse", "HEAD"):
             return "c0ffee\n"
         if "commit" in args and self.fail_commit:
-            raise Held("land", "hook refused")
+            raise Held(named("fixture.refusal", "hook refused", owner="fixture", stage="land"))
         return ""
 
     def test_real_published_consumer_is_rewritten_in_the_promotion_commit(self):

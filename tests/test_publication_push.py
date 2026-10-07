@@ -14,6 +14,7 @@ from unbake.cli.args import Context
 from unbake.cli.main import make_parser
 from unbake.config import Held
 from unbake.layout import split
+from unbake.process import named
 
 
 class PublicationPushTests(ProjectCase):
@@ -161,13 +162,13 @@ class PublicationPushTests(ProjectCase):
                 return "base"
             if args[0] == "rebase" and args[1] == "FETCH_HEAD":
                 if conflict:
-                    raise Held("git", "git.rebase: conflict")
+                    raise Held(named("git.rebase", "git.rebase: conflict", owner="fixture", stage="git"))
                 if not docs_only:
                     self.header.write_text(original + "extern int added;\n")
             if args[0] == "reset":
                 self.header.write_text(original)
             if args[0] == "push" and fail_push:
-                raise Held("git", "git.push: transport refused")
+                raise Held(named("git.push", "git.push: transport refused", owner="fixture", stage="git"))
             return ""
 
         return git, calls

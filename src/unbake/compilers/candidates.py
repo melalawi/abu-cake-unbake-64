@@ -5,10 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from unbake import process
 from unbake.compilers import choice
 from unbake.compilers.ranking import measured_candidate_rank
 from unbake.config import Held, Host, Project
+from unbake.process import Fault, capture
+from unbake.process import named as cause_named
 
 
 @dataclass(frozen=True)
@@ -49,7 +50,12 @@ def resolve(
         raise configured  # a symbol no version provides fails the same under every compiler
     if isinstance(configured, Held):
         eliminated[own] = configured.reason.splitlines()[0]
-        faults[own] = process.fault(configured)
+        faults[own] = capture(
+            configured,
+            cause=cause_named(
+                "compilers.candidates.unexpected", str(configured), owner="compilers.candidates", stage="compilers"
+            ),
+        ).document()
     elif isinstance(configured, Compared):
         results[own] = configured
     for ident in choice.alternatives(project, function):
@@ -62,18 +68,18 @@ def resolve(
             )
         except Held as error:
             eliminated[ident] = error.reason.splitlines()[0]
-            faults[ident] = process.fault(error)
+            faults[ident] = capture(
+                error,
+                cause=cause_named(
+                    "compilers.candidates.unexpected", str(error), owner="compilers.candidates", stage="compilers"
+                ),
+            ).document()
     if not results:
         detail = "; ".join(f"{ident}: {reason}" for ident, reason in eliminated.items())
+        first = Fault.read(next(iter(faults.values())))
         raise Held(
-            "compare",
-            f"compiler.no_candidate: {file}: every configured compiler failed: {detail}",
-            fault={"compilers": faults},
+            first.framed("compilers.candidates", "compare", detail, {"compilers": faults}), data={"compilers": faults}
         )
-    exact = tuple(ident for ident, result in results.items() if required(result))
-    if exact:
-        winner, rule = choice.build_choice(project, function, list(exact))
-        return Choice(winner, rule, exact, eliminated), results[winner]
     best = min(rank(result) for result in results.values())
     ranked = [ident for ident, result in results.items() if rank(result) == best]
     winner = own if own in ranked else ranked[0]

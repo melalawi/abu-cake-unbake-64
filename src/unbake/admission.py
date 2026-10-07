@@ -25,6 +25,8 @@ from pathlib import Path
 from typing import Any
 
 from unbake.config import Held, Host
+from unbake.process import capture
+from unbake.process import named as cause_named
 
 
 @dataclass(frozen=True)
@@ -45,21 +47,56 @@ class Domain:
             data = path.read_bytes()
             values = tomllib.loads(data.decode())
         except (OSError, ValueError) as error:
-            raise Held("resources", f"resources.domain: {path}: {error}") from error
+            raise Held(
+                capture(
+                    error,
+                    cause=cause_named(
+                        "resources.domain", f"resources.domain: {path}: {error}", owner="admission", stage="resources"
+                    ),
+                )
+            ) from error
         paths = {"root", "control", "jobs"}
         integers = {"cores", "memory_bytes", "control_cores", "control_memory_bytes", "bypass_limit"}
         if set(values) != paths | integers:
-            raise Held("resources", f"resources.domain: expected exactly {', '.join(sorted(paths | integers))}")
+            raise Held(
+                cause_named(
+                    "resources.domain",
+                    f"resources.domain: expected exactly {', '.join(sorted(paths | integers))}",
+                    owner="admission",
+                    stage="resources",
+                )
+            )
         for name in integers:
             if type(values[name]) is not int or values[name] <= 0:
-                raise Held("resources", f"resources.{name}: expected positive integer")
+                raise Held(
+                    cause_named(
+                        f"resources.{name}",
+                        f"resources.{name}: expected positive integer",
+                        owner="admission",
+                        stage="resources",
+                    )
+                )
         for name in paths:
             if not isinstance(values[name], str) or not Path(values[name]).is_absolute():
-                raise Held("resources", f"resources.{name}: expected absolute path")
+                raise Held(
+                    cause_named(
+                        f"resources.{name}",
+                        f"resources.{name}: expected absolute path",
+                        owner="admission",
+                        stage="resources",
+                    )
+                )
             values[name] = Path(values[name]).resolve()
         domain = cls(**values, digest=hashlib.sha256(data).hexdigest())
         if domain.control_cores >= domain.cores or domain.control_memory_bytes >= domain.memory_bytes:
-            raise Held("resources", "resources.control: reservation must be smaller than aggregate capacity")
+            raise Held(
+                cause_named(
+                    "resources.control",
+                    "resources.control: reservation must be smaller than aggregate capacity",
+                    owner="admission",
+                    stage="resources",
+                )
+            )
         if (
             domain.control == domain.root
             or domain.jobs == domain.root
@@ -68,7 +105,14 @@ class Domain:
             or domain.control.is_relative_to(domain.jobs)
             or domain.jobs.is_relative_to(domain.control)
         ):
-            raise Held("resources", "resources.domain: control and jobs must be disjoint descendants of root")
+            raise Held(
+                cause_named(
+                    "resources.domain",
+                    "resources.domain: control and jobs must be disjoint descendants of root",
+                    owner="admission",
+                    stage="resources",
+                )
+            )
         return domain
 
     @property
@@ -84,7 +128,14 @@ class Domain:
             ("memory_total_bytes", memory, self.memory_bytes - self.control_memory_bytes),
         ):
             if type(value) is not int or not 0 < value <= maximum:
-                raise Held("resources", f"resources.{key}: request must be positive and at most {maximum}")
+                raise Held(
+                    cause_named(
+                        f"resources.{key}",
+                        f"resources.{key}: request must be positive and at most {maximum}",
+                        owner="admission",
+                        stage="resources",
+                    )
+                )
         return cores, memory
 
 
@@ -96,7 +147,14 @@ def _membership(pid: int) -> Path:
     for line in Path(f"/proc/{pid}/cgroup").read_text().splitlines():
         if line.startswith("0::"):
             return Path("/sys/fs/cgroup") / line[3:].lstrip("/")
-    raise Held("resources", "resources.cgroup: unified cgroup v2 membership required")
+    raise Held(
+        cause_named(
+            "resources.cgroup",
+            "resources.cgroup: unified cgroup v2 membership required",
+            owner="admission",
+            stage="resources",
+        )
+    )
 
 
 class Groups:
@@ -113,16 +171,44 @@ class Groups:
         ):
             quota, period = (root / "cpu.max").read_text().split()
             if quota == "max" or int(quota) != cores * int(period):
-                raise Held("resources", f"resources.cores: {root}/cpu.max disagrees with domain manifest")
+                raise Held(
+                    cause_named(
+                        "resources.cores",
+                        f"resources.cores: {root}/cpu.max disagrees with domain manifest",
+                        owner="admission",
+                        stage="resources",
+                    )
+                )
             if (root / "memory.max").read_text().strip() != str(memory):
-                raise Held("resources", f"resources.memory_bytes: {root}/memory.max disagrees with manifest")
+                raise Held(
+                    cause_named(
+                        "resources.memory_bytes",
+                        f"resources.memory_bytes: {root}/memory.max disagrees with manifest",
+                        owner="admission",
+                        stage="resources",
+                    )
+                )
             if (root / "memory.swap.max").read_text().strip() != "0":
-                raise Held("resources", f"resources.memory_bytes: {root}/memory.swap.max must be 0")
+                raise Held(
+                    cause_named(
+                        "resources.memory_bytes",
+                        f"resources.memory_bytes: {root}/memory.swap.max must be 0",
+                        owner="admission",
+                        stage="resources",
+                    )
+                )
         # The service starts in its own delegated group. Its main PID remains
         # systemd-owned after moving to control; KillMode=control-group still
         # cleans the service's job descendants when that PID exits.
         if _membership(os.getpid()) != domain.jobs.parent:
-            raise Held("resources", "resources.jobs: start the broker in the delegated parent of jobs")
+            raise Held(
+                cause_named(
+                    "resources.jobs",
+                    "resources.jobs: start the broker in the delegated parent of jobs",
+                    owner="admission",
+                    stage="resources",
+                )
+            )
         # A slice with controllers enabled cannot contain processes directly.
         # Keep the broker in a leaf alongside the launcher's command scopes.
         for previous in domain.control.glob("unbake-broker-*"):
@@ -136,7 +222,14 @@ class Groups:
         (domain.jobs / "cgroup.subtree_control").write_text("+cpu +memory")
         self.check_client(os.getpid())
         if any(path.is_dir() for path in domain.jobs.iterdir()):
-            raise Held("resources", "resources.jobs: retained job subgroups require deployment recovery")
+            raise Held(
+                cause_named(
+                    "resources.jobs",
+                    "resources.jobs: retained job subgroups require deployment recovery",
+                    owner="admission",
+                    stage="resources",
+                )
+            )
         # Initial broker allocations remain charged to its original group.
         # Reserve them as well as control, rather than assuming migration moved
         # old memory charges. No clients have yet been admitted to jobs.
@@ -144,9 +237,23 @@ class Groups:
 
     def check_client(self, pid: int) -> None:
         if not _membership(pid).is_relative_to(self.domain.control):
-            raise Held("resources", "resources.domain: command must start inside the domain control subtree")
+            raise Held(
+                cause_named(
+                    "resources.domain",
+                    "resources.domain: command must start inside the domain control subtree",
+                    owner="admission",
+                    stage="resources",
+                )
+            )
         if Path(f"/proc/{pid}/task/{pid}/children").read_text().strip():
-            raise Held("resources", "resources.domain: acquire before starting children or a forkserver")
+            raise Held(
+                cause_named(
+                    "resources.domain",
+                    "resources.domain: acquire before starting children or a forkserver",
+                    owner="admission",
+                    stage="resources",
+                )
+            )
 
     def create(self, token: str, cores: int, memory: int) -> Path:
         path = self.domain.jobs / token
@@ -226,7 +333,14 @@ class Broker:
             request = Request(connection, pid, pidfd, 0, 0, time.monotonic(), uuid.uuid4().hex)
             if uid != os.getuid() or any(row.pid == pid for row in self.requests):
                 os.close(pidfd)
-                raise Held("resources", "resources.client: wrong uid or duplicate command PID")
+                raise Held(
+                    cause_named(
+                        "resources.client",
+                        "resources.client: wrong uid or duplicate command PID",
+                        owner="admission",
+                        stage="resources",
+                    )
+                )
             self.requests.append(request)
             self._watch(connection.fileno(), "socket", request)
             self._watch(pidfd, "pid", request)
@@ -252,21 +366,53 @@ class Broker:
             return  # a granted claim remains charged until PID exit and subtree drain
         try:
             if len(packet) > 4096:
-                raise Held("resources", "resources.request: packet exceeds 4096 bytes")
+                raise Held(
+                    cause_named(
+                        "resources.request",
+                        "resources.request: packet exceeds 4096 bytes",
+                        owner="admission",
+                        stage="resources",
+                    )
+                )
             values = json.loads(packet)
             if not isinstance(values, dict):
-                raise Held("resources", "resources.request: expected object")
+                raise Held(
+                    cause_named(
+                        "resources.request", "resources.request: expected object", owner="admission", stage="resources"
+                    )
+                )
             if request.cores:
                 if values != {"measure": True} or request.group is None:
-                    raise Held("resources", "resources.request: already queued or granted")
+                    raise Held(
+                        cause_named(
+                            "resources.request",
+                            "resources.request: already queued or granted",
+                            owner="admission",
+                            stage="resources",
+                        )
+                    )
                 request.connection.send(json.dumps(self.groups.measure(request.group)).encode())
                 return
             if set(values) != {"domain", "cores", "memory_bytes"} or values["domain"] != self.domain.digest:
-                raise Held("resources", "resources.domain: request and server manifest must match exactly")
+                raise Held(
+                    cause_named(
+                        "resources.domain",
+                        "resources.domain: request and server manifest must match exactly",
+                        owner="admission",
+                        stage="resources",
+                    )
+                )
             request.cores, request.memory = self.domain.request(values["cores"], values["memory_bytes"])
             maximum = self.domain.memory_bytes - self.domain.control_memory_bytes - self.initial_memory_bytes
             if request.memory > maximum:
-                raise Held("resources", f"resources.memory_total_bytes: at most {maximum} after broker startup charges")
+                raise Held(
+                    cause_named(
+                        "resources.memory_total_bytes",
+                        f"resources.memory_total_bytes: at most {maximum} after broker startup charges",
+                        owner="admission",
+                        stage="resources",
+                    )
+                )
             self.groups.check_client(request.pid)
         except (Held, ValueError, TypeError, OSError) as error:
             if request.connection.fileno() >= 0:
@@ -425,7 +571,14 @@ def command(host: Host | None) -> Iterator[None]:
             connection.connect(domain.address)
             _pid, uid, _gid = struct.unpack("3i", connection.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
             if uid != os.getuid():
-                raise Held("resources", "resources.server: domain broker belongs to another uid")
+                raise Held(
+                    cause_named(
+                        "resources.server",
+                        "resources.server: domain broker belongs to another uid",
+                        owner="admission",
+                        stage="resources",
+                    )
+                )
             connection.send(
                 json.dumps(
                     {"domain": domain.digest, "cores": host.cores, "memory_bytes": host.memory_total_bytes}
@@ -433,14 +586,28 @@ def command(host: Host | None) -> Iterator[None]:
             )
             grant = json.loads(connection.recv(4096))
             if "held" in grant:
-                raise Held("resources", str(grant["held"]))
+                raise Held(cause_named("admission.command", str(grant["held"]), owner="admission", stage="resources"))
             group = Path(grant["group"])
             if group.parent != domain.jobs or grant["domain"] != domain.digest:
-                raise Held("resources", "resources.grant: wrong domain or job subgroup")
+                raise Held(
+                    cause_named(
+                        "resources.grant",
+                        "resources.grant: wrong domain or job subgroup",
+                        owner="admission",
+                        stage="resources",
+                    )
+                )
             (group / "cgroup.procs").write_text(str(os.getpid()))
             receipt.update(grant)
         except (OSError, ValueError, KeyError) as error:
-            raise Held("resources", f"resources.admission: {error}") from error
+            raise Held(
+                capture(
+                    error,
+                    cause=cause_named(
+                        "resources.admission", f"resources.admission: {error}", owner="admission", stage="resources"
+                    ),
+                )
+            ) from error
         failed = False
         try:
             yield
@@ -460,4 +627,14 @@ def command(host: Host | None) -> Iterator[None]:
             except (OSError, ValueError) as error:
                 receipt["measurement_error"] = str(error)
                 if not failed:
-                    raise Held("resources", f"resources.measurement: {error}") from error
+                    raise Held(
+                        capture(
+                            error,
+                            cause=cause_named(
+                                "resources.measurement",
+                                f"resources.measurement: {error}",
+                                owner="admission",
+                                stage="resources",
+                            ),
+                        )
+                    ) from error

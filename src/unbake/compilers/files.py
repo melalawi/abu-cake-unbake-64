@@ -16,6 +16,8 @@ from unbake import atomic as atomic_files
 from unbake import cache as retention
 from unbake import inputs
 from unbake.config import Held
+from unbake.process import capture
+from unbake.process import named as cause_named
 
 if TYPE_CHECKING:
     from unbake.compilers.registry import Download
@@ -30,7 +32,11 @@ def relative(name: str) -> str:
         or not path.parts
         or any(c.isspace() or c in "\\#" for c in name)
     ):
-        raise Held("setup", f"unsafe file name {name!r}")
+        raise Held(
+            cause_named(
+                "compilers.files.relative", f"unsafe file name {name!r}", owner="compilers.files", stage="setup"
+            )
+        )
     return name
 
 
@@ -52,7 +58,14 @@ def download(entry: Download, cache: Path) -> Path:
     if path.exists():
         actual = inputs.digest(path, algorithm="sha256", reuse=retention.configured())
         if actual != entry.sha256:
-            raise Held("setup", f"{path}: sha256 expected {entry.sha256}, found {actual}")
+            raise Held(
+                cause_named(
+                    f"{path}",
+                    f"{path}: sha256 expected {entry.sha256}, found {actual}",
+                    owner="compilers.files",
+                    stage="setup",
+                )
+            )
         return path
     path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(dir=path.parent, prefix=".download-", delete=False) as stream:
@@ -63,7 +76,14 @@ def download(entry: Download, cache: Path) -> Path:
             stream.close()
             actual = inputs.digest(temporary, algorithm="sha256", reuse=retention.configured())
             if actual != entry.sha256:
-                raise Held("setup", f"{entry.url}: archive sha256 expected {entry.sha256}, found {actual}")
+                raise Held(
+                    cause_named(
+                        f"{entry.url}",
+                        f"{entry.url}: archive sha256 expected {entry.sha256}, found {actual}",
+                        owner="compilers.files",
+                        stage="setup",
+                    )
+                )
             atomic_files.publish(temporary, path)
         finally:
             temporary.unlink(missing_ok=True)
@@ -79,7 +99,11 @@ def archive_files(path: Path, wanted: set[str]) -> dict[str, bytes]:
                 relative(member.filename)
                 mode = member.external_attr >> 16
                 if stat.S_ISLNK(mode):
-                    raise Held("setup", f"{path}: archive link {member.filename}")
+                    raise Held(
+                        cause_named(
+                            f"{path}", f"{path}: archive link {member.filename}", owner="compilers.files", stage="setup"
+                        )
+                    )
                 if not member.is_dir():
                     content = archive.read(member)
                     digest = hashlib.sha256(content).hexdigest()
@@ -90,11 +114,25 @@ def archive_files(path: Path, wanted: set[str]) -> dict[str, bytes]:
             for tar_member in archive:
                 relative(tar_member.name)
                 if not tar_member.isdir() and not tar_member.isfile():
-                    raise Held("setup", f"{path}: unsupported archive entry {tar_member.name}")
+                    raise Held(
+                        cause_named(
+                            f"{path}",
+                            f"{path}: unsupported archive entry {tar_member.name}",
+                            owner="compilers.files",
+                            stage="setup",
+                        )
+                    )
                 if tar_member.isfile():
                     extracted = archive.extractfile(tar_member)
                     if extracted is None:
-                        raise Held("setup", f"{path}: missing archive content {tar_member.name}")
+                        raise Held(
+                            cause_named(
+                                f"{path}",
+                                f"{path}: missing archive content {tar_member.name}",
+                                owner="compilers.files",
+                                stage="setup",
+                            )
+                        )
                     with extracted as stream:
                         content = stream.read()
                     digest = hashlib.sha256(content).hexdigest()
@@ -106,7 +144,14 @@ def archive_files(path: Path, wanted: set[str]) -> dict[str, bytes]:
 def directory_paths(source: Path, wanted: set[str], algorithm: str) -> dict[str, Path]:
     """Find supplied inputs by content digest, independently of their filenames."""
     if not source.is_dir():
-        raise Held("setup", f"supply {source}: missing directory")
+        raise Held(
+            cause_named(
+                "compilers.files.directory_paths",
+                f"supply {source}: missing directory",
+                owner="compilers.files",
+                stage="setup",
+            )
+        )
     found = {}
     for candidate in sorted(source.rglob("*")):
         if candidate.is_file():
@@ -118,7 +163,17 @@ def directory_paths(source: Path, wanted: set[str], algorithm: str) -> dict[str,
                     if found.keys() >= wanted:
                         break
             except OSError as error:
-                raise Held("setup", f"supply {candidate}: {error}") from error
+                raise Held(
+                    capture(
+                        error,
+                        cause=cause_named(
+                            "compilers.files.directory_paths",
+                            f"supply {candidate}: {error}",
+                            owner="compilers.files",
+                            stage="setup",
+                        ),
+                    )
+                ) from error
     return found
 
 
@@ -132,4 +187,11 @@ def supplied_files(source: Path, wanted: set[str]) -> dict[str, bytes]:
         return directory_files(source, wanted, "sha256")
     if source.is_file():
         return archive_files(source, wanted)
-    raise Held("setup", f"compiler supply {source}: missing archive/directory")
+    raise Held(
+        cause_named(
+            "compilers.files.supplied_files",
+            f"compiler supply {source}: missing archive/directory",
+            owner="compilers.files",
+            stage="setup",
+        )
+    )

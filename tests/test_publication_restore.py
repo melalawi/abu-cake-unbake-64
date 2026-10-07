@@ -10,6 +10,7 @@ from unbake import atomic, land
 from unbake.cli import publish
 from unbake.cli.args import Context
 from unbake.config import Held
+from unbake.process import named
 
 FIXTURE = Path(__file__).parent / "fold/fixtures/shared_provider/func_80204C34_de_closed.h"
 
@@ -21,7 +22,10 @@ class PublicationRestoreTests(ProjectCase):
         from unbake.journal import Journal
         from unbake.layout import modules
 
-        for rejection in (Held("fold", "fold.fixture_hold: rejected"), KeyboardInterrupt()):
+        for rejection in (
+            Held(named("fold.fixture_hold", "fold.fixture_hold: rejected", owner="fixture", stage="fold")),
+            KeyboardInterrupt(),
+        ):
             with self.subTest(rejection=type(rejection).__name__):
                 case = PublicMembershipTests()
                 case.setUp()
@@ -73,7 +77,11 @@ class PublicationRestoreTests(ProjectCase):
             atomic.write(header, old + b"/* second staged write */\n")
             atomic.write(fresh, old)
             atomic.remove(deleted)
-            raise Held("publish", "publish.fixture_hold: consumer refused")
+            raise Held(
+                named(
+                    "publish.fixture_hold", "publish.fixture_hold: consumer refused", owner="fixture", stage="publish"
+                )
+            )
         self.assertEqual(journal.call_count, 3)
         self.assertEqual({args.args[1][0] for args in journal.call_args_list}, {header, fresh, deleted})
         scan.assert_not_called()
@@ -117,7 +125,11 @@ class PublicationRestoreTests(ProjectCase):
                 return "accepted"
             atomic.write(shared, b"/* unlanded replacement */\n")
             atomic.write(fresh, FIXTURE.read_bytes())
-            raise Held("headers", "headers.fixture_hold: duplicate provider")
+            raise Held(
+                named(
+                    "headers.fixture_hold", "headers.fixture_hold: duplicate provider", owner="fixture", stage="headers"
+                )
+            )
 
         args = argparse.Namespace(files=files, original=[], require_version=None, events=False, fuzzy=False)
         context = Context("publish", args, self.project.root, None, io.StringIO(), self.host)
@@ -140,7 +152,9 @@ class PublicationRestoreTests(ProjectCase):
 
         def maintenance(*args, **kwargs):
             atomic.write(header, old + b"/* rejected maintenance */\n")
-            raise Held("merge", "merge.fixture_hold: maintenance refused")
+            raise Held(
+                named("merge.fixture_hold", "merge.fixture_hold: maintenance refused", owner="fixture", stage="merge")
+            )
 
         with (
             patch.object(land, "land", return_value="accepted"),

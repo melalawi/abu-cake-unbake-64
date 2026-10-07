@@ -5,6 +5,7 @@ from unittest.mock import patch
 from tests.project_fixture import ProjectCase
 from unbake.config import Held
 from unbake.layout import header_step
+from unbake.process import named
 
 
 class HeaderPlanTests(ProjectCase):
@@ -103,7 +104,7 @@ class HeaderRunTests(ProjectCase):
 
         def install(project: object, outputs: dict, *, check=None) -> None:
             header.write_text("int moved(void);\n")  # one file written, then the process holds
-            raise Held("headers", "headers.declaration: refused")
+            raise Held(named("headers.declaration", "headers.declaration: refused", owner="fixture", stage="headers"))
 
         outputs = {header: b"int moved(void);\n", new: b"int foo(void);\n"}
         with (

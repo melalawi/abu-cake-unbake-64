@@ -7,6 +7,7 @@ from pathlib import Path
 
 from unbake.config import Held, Project
 from unbake.layout import split
+from unbake.process import named as cause_named
 
 
 @dataclass(frozen=True)
@@ -25,17 +26,28 @@ class Row:
 
 def _text(value: object, name: str) -> str:
     if not isinstance(value, str) or not value.strip():
-        raise Held("plan", f"{name}: required nonempty value")
+        raise Held(cause_named(f"{name}", f"{name}: required nonempty value", owner="work.inventory", stage="plan"))
     return value
 
 
 def inventory(project: Project) -> tuple[str, list[split.Function], dict[tuple[str, str], bytes]]:
     versions = getattr(project, "versions", None)
     if not isinstance(versions, tuple) or not versions or len(set(versions)) != len(versions):
-        raise Held("plan", "project.versions: required distinct VERSIONs")
+        raise Held(
+            cause_named(
+                "project.versions", "project.versions: required distinct VERSIONs", owner="work.inventory", stage="plan"
+            )
+        )
     reference = _text(getattr(project, "names_from", None), "project.names_from")
     if reference not in versions:
-        raise Held("plan", f"project.names_from {reference}: unknown VERSION")
+        raise Held(
+            cause_named(
+                "work.inventory.inventory",
+                f"project.names_from {reference}: unknown VERSION",
+                owner="work.inventory",
+                stage="plan",
+            )
+        )
     inventory = [item for version in versions for item in split.functions(project, version)]
     bodies = {(item.version, item.name): split.words(project, item) for item in inventory}
     return reference, inventory, bodies
@@ -80,5 +92,12 @@ def groups(inventory: list[split.Function], bodies: dict[tuple[str, str], bytes]
         groups.setdefault(root(index), []).append(item)
     for items in groups.values():
         if len({item.version for item in items}) != len(items):
-            raise Held("plan", f"function {items[0].name}: ambiguous VERSION identity")
+            raise Held(
+                cause_named(
+                    "work.inventory.groups",
+                    f"function {items[0].name}: ambiguous VERSION identity",
+                    owner="work.inventory",
+                    stage="plan",
+                )
+            )
     return list(groups.values())

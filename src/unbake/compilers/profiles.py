@@ -9,6 +9,8 @@ from typing import Any
 
 from unbake.compilers import registry as toolchain
 from unbake.config import Held
+from unbake.process import capture
+from unbake.process import named as cause_named
 
 
 @dataclass(frozen=True)
@@ -57,45 +59,122 @@ def read() -> tuple[dict[str, Profile], dict[str, Any]]:
     data = toolchain._read(toolchain.REGISTRY_PATH)
     rules = data.get("fingerprint_policy")
     if not isinstance(rules, dict) or rules.get("schema") != 1:
-        raise Held("setup", "setup.compiler_profile: fingerprint_policy.schema: expected 1")
+        raise Held(
+            cause_named(
+                "setup.compiler_profile",
+                "setup.compiler_profile: fingerprint_policy.schema: expected 1",
+                owner="compilers.profiles",
+                stage="setup",
+            )
+        )
     for key in ("minimum_moves", "agreement_numerator", "agreement_denominator"):
         if type(rules.get(key)) is not int or rules[key] <= 0:
-            raise Held("setup", f"setup.compiler_profile: fingerprint_policy.{key}: expected positive integer")
+            raise Held(
+                cause_named(
+                    "setup.compiler_profile",
+                    f"setup.compiler_profile: fingerprint_policy.{key}: expected positive integer",
+                    owner="compilers.profiles",
+                    stage="setup",
+                )
+            )
     if rules["agreement_numerator"] > rules["agreement_denominator"]:
-        raise Held("setup", "setup.compiler_profile: fingerprint_policy.agreement_numerator: exceeds denominator")
+        raise Held(
+            cause_named(
+                "setup.compiler_profile",
+                "setup.compiler_profile: fingerprint_policy.agreement_numerator: exceeds denominator",
+                owner="compilers.profiles",
+                stage="setup",
+            )
+        )
     if rules.get("rank") != [
         "exclusive_exemplars",
         "matching_exemplars",
         "feature_agreement",
         "negative_contradictions",
     ]:
-        raise Held("setup", "setup.compiler_profile: fingerprint_policy.rank: unsupported ordering")
+        raise Held(
+            cause_named(
+                "setup.compiler_profile",
+                "setup.compiler_profile: fingerprint_policy.rank: unsupported ordering",
+                owner="compilers.profiles",
+                stage="setup",
+            )
+        )
     specs = toolchain.registry()
     output = {}
     tables = data.get("fingerprints", {})
     if not isinstance(tables, dict):
-        raise Held("setup", "setup.compiler_profile: fingerprints: expected table")
+        raise Held(
+            cause_named(
+                "setup.compiler_profile",
+                "setup.compiler_profile: fingerprints: expected table",
+                owner="compilers.profiles",
+                stage="setup",
+            )
+        )
     for ident, table in tables.items():
         label = f"setup.compiler_profile: {ident}"
         if ident not in specs or not isinstance(table, dict):
-            raise Held("setup", f"{label}: unknown registry ID or invalid profile")
+            raise Held(
+                cause_named(
+                    f"{label}",
+                    f"{label}: unknown registry ID or invalid profile",
+                    owner="compilers.profiles",
+                    stage="setup",
+                )
+            )
         if table.get("abi") != "gp32":
-            raise Held("setup", f"{label}.abi: supported ABI must be gp32")
+            raise Held(
+                cause_named(
+                    f"{label}.abi",
+                    f"{label}.abi: supported ABI must be gp32",
+                    owner="compilers.profiles",
+                    stage="setup",
+                )
+            )
         spec = specs[ident]
         if table.get("compiler_sha256") != spec.pins[spec.cc] or table.get("calibration_cflags") != list(spec.cflags):
-            raise Held("setup", f"{label}.compiler_sha256: calibration pins/flags differ from registry")
+            raise Held(
+                cause_named(
+                    f"{label}.compiler_sha256",
+                    f"{label}.compiler_sha256: calibration pins/flags differ from registry",
+                    owner="compilers.profiles",
+                    stage="setup",
+                )
+            )
         source = table.get("calibration_source")
         if not isinstance(source, str) or hashlib.sha256(source.encode()).hexdigest() != table.get(
             "calibration_source_sha256"
         ):
-            raise Held("setup", f"{label}.calibration_source_sha256: source digest differs")
+            raise Held(
+                cause_named(
+                    f"{label}.calibration_source_sha256",
+                    f"{label}.calibration_source_sha256: source digest differs",
+                    owner="compilers.profiles",
+                    stage="setup",
+                )
+            )
         features = table.get("features")
         if not isinstance(features, list) or not features or any(feature not in FEATURES for feature in features):
-            raise Held("setup", f"{label}.features: missing or unsupported features")
+            raise Held(
+                cause_named(
+                    f"{label}.features",
+                    f"{label}.features: missing or unsupported features",
+                    owner="compilers.profiles",
+                    stage="setup",
+                )
+            )
         exemplars = []
         entries = table.get("exemplars")
         if not isinstance(entries, list) or not entries:
-            raise Held("setup", f"{label}.exemplars: expected nonempty array")
+            raise Held(
+                cause_named(
+                    f"{label}.exemplars",
+                    f"{label}.exemplars: expected nonempty array",
+                    owner="compilers.profiles",
+                    stage="setup",
+                )
+            )
         for entry in entries:
             try:
                 name = entry["name"]
@@ -111,7 +190,17 @@ def read() -> tuple[dict[str, Profile], dict[str, Any]]:
                 ):
                     raise ValueError("invalid instruction or relocation mask")
             except (KeyError, TypeError, ValueError) as error:
-                raise Held("setup", f"{label}.exemplars: {error}") from error
+                raise Held(
+                    capture(
+                        error,
+                        cause=cause_named(
+                            f"{label}.exemplars",
+                            f"{label}.exemplars: {error}",
+                            owner="compilers.profiles",
+                            stage="setup",
+                        ),
+                    )
+                ) from error
             exemplars.append(Exemplar(name, words, masks))
         output[ident] = Profile(ident, table["abi"], tuple(features), tuple(exemplars))
     return output, rules
@@ -119,7 +208,14 @@ def read() -> tuple[dict[str, Profile], dict[str, Any]]:
 
 def measure(data: bytes) -> dict[str, int]:
     if len(data) % 4:
-        raise Held("setup", "setup.compiler_proposal: partial instruction word")
+        raise Held(
+            cause_named(
+                "setup.compiler_proposal",
+                "setup.compiler_proposal: partial instruction word",
+                owner="compilers.profiles",
+                stage="setup",
+            )
+        )
     words = tuple(word for (word,) in struct.iter_unpack(">I", data))
     measured = dict.fromkeys(FEATURES, 0)
     for index, word in enumerate(words):

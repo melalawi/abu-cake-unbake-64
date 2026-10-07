@@ -13,6 +13,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from unbake.config import Held
+from unbake.process import named
 from unbake.typemap import abi_declarations, abi_facts, evidence
 
 try:
@@ -44,7 +45,7 @@ class Reader:
     def table_span(self, address, size):
         self.spans.append((address, size))
         if address != TABLE["address"] or size > len(self.data):
-            raise Held("try", "table range is incomplete")
+            raise Held(named("fixture.refusal", "table range is incomplete", owner="fixture", stage="try"))
         return SimpleNamespace(table_entry_bias=TABLE["bias"])
 
     def __call__(self, address, size):

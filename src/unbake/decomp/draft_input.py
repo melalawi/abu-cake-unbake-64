@@ -13,17 +13,33 @@ from unbake.compilers.families import family_for
 from unbake.config import Held, Project
 from unbake.extract import discovered_symbols
 from unbake.layout import split
+from unbake.process import capture
+from unbake.process import named as cause_named
 
 
 def assembly_source(project: Project, version: str, function: str, extracted: Path) -> tuple[str, int]:
     """The function's split row assembly from the extraction, and its address."""
     rows = [row for row in split.functions(project, version) if function in row.aliases]
     if len(rows) != 1:
-        raise Held("m2c", f"{function}: expected one function row in VERSION {version}, found {len(rows)}")
+        raise Held(
+            cause_named(
+                f"{function}",
+                f"{function}: expected one function row in VERSION {version}, found {len(rows)}",
+                owner="decomp.draft_input",
+                stage="m2c",
+            )
+        )
     row = rows[0]
     path = extracted / "asm" / (row.path + ".s")
     if not path.is_file():
-        raise Held("m2c", f"{function}: extraction has no assembly for row {row.path} in VERSION {version}")
+        raise Held(
+            cause_named(
+                f"{function}",
+                f"{function}: extraction has no assembly for row {row.path} in VERSION {version}",
+                owner="decomp.draft_input",
+                stage="m2c",
+            )
+        )
     return path.read_text(), row.address
 
 
@@ -35,15 +51,36 @@ def canonical_entry(
     if function in labels or re.search(rf"^\s*{re.escape(function)}:\s*$", assembly, re.M):
         return assembly
     if generation is None:
-        raise Held("m2c", f"{function}: extraction directory required")
+        raise Held(
+            cause_named(
+                f"{function}", f"{function}: extraction directory required", owner="decomp.draft_input", stage="m2c"
+            )
+        )
     dump = generation / "splat_symbols.csv"
     try:
         values = discovered_symbols(dump, {})
     except (OSError, ValueError, KeyError) as error:
-        raise Held("m2c", f"{dump}: entry correspondence for {function}: {error}") from error
+        raise Held(
+            capture(
+                error,
+                cause=cause_named(
+                    f"{dump}",
+                    f"{dump}: entry correspondence for {function}: {error}",
+                    owner="decomp.draft_input",
+                    stage="m2c",
+                ),
+            )
+        ) from error
     entries = [name for name in labels if values.get(name) == address]
     if len(entries) != 1:
-        raise Held("m2c", f"{function}: expected one entry label at 0x{address:08X}, found {len(entries)}")
+        raise Held(
+            cause_named(
+                f"{function}",
+                f"{function}: expected one entry label at 0x{address:08X}, found {len(entries)}",
+                owner="decomp.draft_input",
+                stage="m2c",
+            )
+        )
     return re.sub(rf"(?<![\w.$]){re.escape(entries[0])}(?![\w.$])", function, assembly)
 
 
@@ -51,7 +88,14 @@ def version_for(project: Project, version: str | None, phase: str) -> str:
     """Infer only a uniquely configured VERSION; name ambiguous choices."""
     if version is None:
         if len(project.versions) != 1:
-            raise Held(phase, f"--version is ambiguous; choose from {', '.join(project.versions)}")
+            raise Held(
+                cause_named(
+                    "decomp.draft_input.version_for",
+                    f"--version is ambiguous; choose from {', '.join(project.versions)}",
+                    owner="decomp.draft_input",
+                    stage=phase,
+                )
+            )
         version = project.versions[0]
     project.version(version)
     return version
@@ -110,7 +154,14 @@ def jump_tables(project: Project, version: str, function: str, assembly: str) ->
     values = symbol_values(configured.symbols)
     span = function_span(configured, function, values)
     if span is None:
-        raise Held("m2c", f"{function}: missing split placement in VERSION {version}")
+        raise Held(
+            cause_named(
+                f"{function}",
+                f"{function}: missing split placement in VERSION {version}",
+                owner="decomp.draft_input",
+                stage="m2c",
+            )
+        )
     read_memory = project_reader(project, version)
     addresses = {}
     for name in names:
@@ -118,7 +169,11 @@ def jump_tables(project: Project, version: str, function: str, assembly: str) ->
         if address is None:
             generated = re.fullmatch(r"jtbl_([0-9A-Fa-f]{8})", name)
             if generated is None:
-                raise Held("m2c", f"{name}: jump table address is missing")
+                raise Held(
+                    cause_named(
+                        f"{name}", f"{name}: jump table address is missing", owner="decomp.draft_input", stage="m2c"
+                    )
+                )
             address = int(generated[1], 16)
         addresses[name] = address
     # A table ends where the next table begins, not only at an out-of-span word.
@@ -141,7 +196,14 @@ def jump_tables(project: Project, version: str, function: str, assembly: str) ->
             entries.append(f".word .L{target:08X}")
             targets.add(target)
         if not entries:
-            raise Held("m2c", f"{name}: no local jump table entries at 0x{address:08X}")
+            raise Held(
+                cause_named(
+                    f"{name}",
+                    f"{name}: no local jump table entries at 0x{address:08X}",
+                    owner="decomp.draft_input",
+                    stage="m2c",
+                )
+            )
         tables.append(f"glabel {name}\n" + "\n".join(entries))
     lines = assembly.split("\n")
     instructions = instruction_indexes(lines, function)
@@ -152,7 +214,14 @@ def jump_tables(project: Project, version: str, function: str, assembly: str) ->
             continue
         index = (target - span.address) // 4
         if index >= len(instructions):
-            raise Held("m2c", f"{function}: jump table target 0x{target:08X} is past the function's last instruction")
+            raise Held(
+                cause_named(
+                    f"{function}",
+                    f"{function}: jump table target 0x{target:08X} is past the function's last instruction",
+                    owner="decomp.draft_input",
+                    stage="m2c",
+                )
+            )
         inserts[instructions[index]] = label + ":"
     for number in sorted(inserts, reverse=True):
         lines.insert(number, inserts[number])
@@ -178,7 +247,11 @@ def private_constants(
 
         values = symbol_values(configured.symbols)
         if generation is None:
-            raise Held("m2c", f"{function}: extraction directory required")
+            raise Held(
+                cause_named(
+                    f"{function}", f"{function}: extraction directory required", owner="decomp.draft_input", stage="m2c"
+                )
+            )
         build = generation
         symbols = build / "splat_symbols.csv"
         if symbols.is_file():
@@ -236,7 +309,17 @@ def private_constants(
                     directive = "." + kind + " " + ", ".join(repr(number) for number in numbers)
                 additions.append("\n".join("glabel " + name for name in names) + "\n" + directive)
     except (OSError, ValueError, KeyError, TypeError) as error:
-        raise Held("m2c", f"draft.private_constants: {manifest}: {error}") from error
+        raise Held(
+            capture(
+                error,
+                cause=cause_named(
+                    "draft.private_constants",
+                    f"draft.private_constants: {manifest}: {error}",
+                    owner="decomp.draft_input",
+                    stage="m2c",
+                ),
+            )
+        ) from error
     return assembly + (
         "\n.section " + family_for(project.compiler_for(function)).m2c_section() + "\n" + "\n".join(additions) + "\n"
         if additions
@@ -266,7 +349,14 @@ def stack_locals(output: str, context: str, function: str, assembly: str = "") -
     output = output[:start] + output[end:]
     entry = re.search(rf"\b{re.escape(function)}\s*\([^;{{}}]*\)\s*{{", output)
     if entry is None:
-        raise Held("m2c", f"{function}: missing body for inferred stack declarations")
+        raise Held(
+            cause_named(
+                f"{function}",
+                f"{function}: missing body for inferred stack declarations",
+                owner="decomp.draft_input",
+                stage="m2c",
+            )
+        )
     body = output[entry.end() :]
     locals_text = body.split("\n\n", 1)[0]
     declared = set(
@@ -297,12 +387,23 @@ def canonical_aliases(project: Project, version: str, assembly: str, generation:
 
     values = symbol_values(project.version(version).symbols)
     if generation is None:
-        raise Held("m2c", "canonical aliases: extraction directory required")
+        raise Held(
+            cause_named(
+                "decomp.draft_input.canonical_aliases",
+                "canonical aliases: extraction directory required",
+                owner="decomp.draft_input",
+                stage="m2c",
+            )
+        )
     build = generation
     dump = build / "splat_symbols.csv"
     if dump.is_file():
         for name, value in discovered_symbols(dump, {}).items():
             if name in values and values[name] != value:
-                raise Held("m2c", f"{name}: conflicting symbol addresses")
+                raise Held(
+                    cause_named(
+                        f"{name}", f"{name}: conflicting symbol addresses", owner="decomp.draft_input", stage="m2c"
+                    )
+                )
             values[name] = value
     return address_aliases(assembly, values)
