@@ -24,13 +24,14 @@ import pickle
 import re
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any, NamedTuple
 
 from unbake import atomic as atomic_files
 from unbake import inputs, tui
 from unbake.cache import Cache, key, memo
 from unbake.config import Held, Host, Project
-from unbake.typemap import declarations, layers, storage
+from unbake.typemap import declarations, facts_decode, layers, storage
 from unbake.typemap.closure import load as closure_load
 
 FACTS = "facts"
@@ -1004,8 +1005,8 @@ def _bundle_key(
     return key(*parts)
 
 
-def _decode_job(rows: list[tuple[int, bytes]]) -> list[tuple[int, list[dict[str, Any]]]]:
-    return [(index, json.loads(data)) for index, data in rows]
+def _decode_job(rows: facts_decode.Batch) -> facts_decode.Batch:
+    return facts_decode.decode(rows)
 
 
 def published(project: Project, policy: Host | None, output: Store, keys: list[str]) -> list[dict[str, Any]]:
@@ -1094,10 +1095,10 @@ def published(project: Project, policy: Host | None, output: Store, keys: list[s
 
     effort.count("facts", counts["sources"], len(groups))
     seeds: list[dict[str, Any]] = []
-    rows_ = [(index, encoded[index]) for index in range(len(tasks))]
-    jobs_ = [rows_[start : start + 256] for start in range(0, len(rows_), 256)]
-    decoded = pool.run(policy, _decode_job, jobs_) if policy is not None else [_decode_job(job) for job in jobs_]
-    for decoded_batch in decoded:
-        for _, seed_rows in decoded_batch:
-            seeds.extend(output.decode(row) for row in seed_rows)
+    with TemporaryDirectory(prefix="unbake-facts-") as directory:
+        jobs_ = facts_decode.jobs(encoded, len(tasks), Path(directory))
+        decoded = pool.run(policy, _decode_job, jobs_) if policy is not None else [_decode_job(job) for job in jobs_]
+        for decoded_batch in decoded:
+            for _, payload in decoded_batch:
+                seeds.extend(output.decode(row) for row in facts_decode.read(payload))
     return seeds
