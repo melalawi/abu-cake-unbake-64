@@ -465,6 +465,7 @@ def _source_drops(shared: _Drops, item: tuple[Path, str]) -> tuple[set[str], set
     retained contracts it disagrees with (paths to drop). Mutates nothing."""
     from unbake.cdecl import declaration_source
     from unbake.layout import redeclarations
+    from unbake.typemap.declarations import _declaration_unit
 
     source_path, text = item
     source_typedefs: set[str] = set()
@@ -478,7 +479,10 @@ def _source_drops(shared: _Drops, item: tuple[Path, str]) -> tuple[set[str], set
             for name in parsed.declared | parsed.typedefs:
                 local.setdefault(name, []).append(variant)
     definitions = set()
-    for match in _SIGNATURE.finditer(declaration_source(text)):
+    # A version-selected call can look like a signature after directives are
+    # blanked. Read only file-scope signatures, using the same body scan as
+    # declaration extraction, before deciding which contracts a source owns.
+    for match in _SIGNATURE.finditer(_declaration_unit(declaration_source(text))):
         definitions.add(match["name"])
         local.setdefault(match["name"], []).append(match["prototype"].strip() + ";")
     local_aliases = {**shared.typedefs, **shared.replacements, **redeclarations.aliases([text])}
