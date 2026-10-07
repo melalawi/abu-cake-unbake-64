@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import atexit
 import contextlib
+import json
 import multiprocessing
 import multiprocessing.connection
 import os
@@ -25,16 +26,18 @@ import resource
 import select
 import shutil
 import signal
+import statistics
 import sys
 import tempfile
 import threading
 import time
 import traceback
 import uuid
+from collections import deque
 from collections.abc import Callable, Iterator, Sequence
 from concurrent.futures import Future, ProcessPoolExecutor
 from concurrent.futures.process import BrokenProcessPool
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from types import FrameType
 from typing import Any, TypeVar, cast
@@ -72,8 +75,154 @@ class TaskFailed(Held):
         functions = ", ".join(identity.get("functions", ()))
         versions = ", ".join(identity.get("versions", ()))
         where = fault.get("allocation", fault.get("cause", "worker exited"))
-        super().__init__("pool", f"{key}: {source} {functions} ({versions}): {where}; retry failed", fault=fault)
+        suffix = "; retry failed" if fault.get("retry_exhausted", True) else ""
+        super().__init__("pool", f"{key}: {source} {functions} ({versions}): {where}{suffix}", fault=fault)
         self.failure = key
+        self.completed: list[tuple[TaskIdentity, Any]] = []
+
+
+@dataclass
+class _Current:
+    identity: TaskIdentity
+    phase: str
+    pid: int | None = None
+    started: float = 0.0
+    last: float = 0.0
+    stage: str = "queued"
+
+
+class Watchdog:
+    """Only worker start/progress events advance a running task; queued work has no deadline.
+
+    Use eight times the phase's recent completed-unit median, with a five-second
+    stabilization floor. Before the first completion allow sixty seconds. The
+    clock is supplied explicitly so tests can advance work without waiting.
+    """
+
+    def __init__(
+        self,
+        *,
+        multiplier: float = 8,
+        minimum: float = 5,
+        bootstrap: float = 60,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        if multiplier <= 0 or minimum < 0 or bootstrap <= 0:
+            raise ValueError("pool.watchdog: positive multiplier/bootstrap and nonnegative minimum required")
+        self.multiplier, self.minimum, self.bootstrap, self.clock = multiplier, minimum, bootstrap, clock
+        self.current: dict[str, _Current] = {}
+        self.samples: dict[str, deque[float]] = {}
+
+    def queued(self, token: str, identity: TaskIdentity, phase: str) -> None:
+        self.current[token] = _Current(identity, phase)
+
+    def update(self, token: str, state: str, pid: int, identity: TaskIdentity | None, stage: str) -> None:
+        current = self.current.get(token)
+        if current is None:
+            return
+        now = self.clock()
+        if identity is not None:
+            current.identity = identity
+        if state == "start":
+            current.started = now
+        elif state == "item-done":
+            self.samples.setdefault(current.phase, deque(maxlen=64)).append(max(0, now - current.started))
+        current.pid, current.last, current.stage = pid, now, stage
+
+    def finished(self, token: str) -> _Current | None:
+        return self.current.pop(token, None)
+
+    def expired(self) -> list[tuple[str, TaskFailed]]:
+        found = []
+        now = self.clock()
+        for token, current in self.current.items():
+            if current.pid is None:
+                continue
+            samples = self.samples.get(current.phase)
+            median = statistics.median(samples) if samples else None
+            limit = self.bootstrap if median is None else self.multiplier * max(self.minimum, median)
+            idle = now - current.last
+            if idle < limit:
+                continue
+            found.append(
+                (
+                    token,
+                    TaskFailed(
+                        "worker.stuck",
+                        {
+                            "action": current.identity.action,
+                            "identity": asdict(current.identity),
+                            "category": "worker-stuck",
+                            "cause": "no task progress",
+                            "retry_exhausted": False,
+                            "worker_pid": current.pid,
+                            "stage": current.stage,
+                            "phase": current.phase,
+                            "no_progress_seconds": idle,
+                            "threshold_seconds": limit,
+                            "phase_median_seconds": median,
+                            "multiplier": self.multiplier,
+                            "minimum_seconds": self.minimum,
+                            "cpu_seconds": None,
+                            "peak_rss_bytes": None,
+                            "counts": None,
+                        },
+                    ),
+                )
+            )
+        return found
+
+
+@dataclass(frozen=True)
+class _Submission:
+    # This token routes events to the existing future; TaskIdentity is the input identity.
+    fn: Any
+    token: str
+    identity: TaskIdentity
+
+
+_events: Any = None
+_progress_root: str | None = None
+_token: str | None = None
+_identity: TaskIdentity | None = None
+
+
+def current_identity() -> TaskIdentity | None:
+    return _identity if _token is not None else None
+
+
+def _notify(state: str, stage: str, identity: TaskIdentity | None = None) -> None:
+    global _identity
+    if _token is None or _events is None:
+        return
+    if identity is not None:
+        _identity = identity
+    payload = pickle.dumps((_token, state, os.getpid(), identity, stage), protocol=pickle.HIGHEST_PROTOCOL)
+    # A killed writer must not leave a partial shared-pipe message that blocks
+    # the watchdog itself. Large identities use the same explicit scratch transport.
+    if len(payload) > 3000:
+        if _progress_root is None:
+            raise Held("pool", "pool.progress: explicit scratch required for a large TaskIdentity")
+        path = Path(_progress_root) / (uuid.uuid4().hex + ".pickle")
+        atomic_files.fresh(path, payload)
+        payload = pickle.dumps(("file", str(path)))
+    _events.put(payload)
+
+
+def progress(identity: TaskIdentity | None = None, *, step: str = "work") -> None:
+    """Report actual work boundaries, never an automatic heartbeat for a stuck computation."""
+    _notify("progress", step, identity)
+
+
+def _identify(fn: Any, shared: Any, item: Any) -> TaskIdentity:
+    from unbake import effort
+
+    identify = getattr(fn, "_pool_identity", None)
+    return (
+        identify(shared, item)
+        if identify is not None
+        else TaskIdentity(effort.name_of(fn), None, (), (), None, None, ())
+    )
 
 
 def admitted(workers: int, memory_total_bytes: int, memory_parent_bytes: int, memory_worker_bytes: int) -> int:
@@ -110,10 +259,18 @@ def _orphaned(descriptor: int | None, server: int) -> None:
         os.killpg(0, signal.SIGKILL)
 
 
-def _cap(memory_worker_bytes: int, directory: str, cache_memory_bytes: int | None) -> None:
+def _cap(
+    memory_worker_bytes: int,
+    directory: str,
+    cache_memory_bytes: int | None,
+    events: Any = None,
+    progress_root: str | None = None,
+) -> None:
     """Worker start: lead a new process group, die with the pool's owner, cap the data segment."""
     from unbake import cache
 
+    global _events, _progress_root
+    _events, _progress_root = events, progress_root
     if cache_memory_bytes is not None:
         cache.configure(memory_bytes=cache_memory_bytes)
     os.setpgid(0, 0)
@@ -179,6 +336,8 @@ def _executor(
     work_per_job: int,
     scratch: Path | None = None,
     cache_memory_bytes: int | None = None,
+    events: Any = None,
+    progress_root: str | None = None,
 ) -> ProcessPoolExecutor:
     if scratch is None:
         raise Held("pool", "pool.scratch: cache.machine_root is required for worker transport")
@@ -187,7 +346,8 @@ def _executor(
         max_workers=size,
         mp_context=multiprocessing.get_context("forkserver"),
         initializer=_cap,
-        initargs=(memory_worker_bytes, directory, cache_memory_bytes),
+        initargs=(memory_worker_bytes, directory, cache_memory_bytes)
+        + (() if events is None else (events, progress_root)),
         max_tasks_per_child=max(1, RECYCLE_AFTER // work_per_job),
     )
 
@@ -271,7 +431,11 @@ def _measured(
     """Return effort at the action boundary, even when its result is a fault."""
     from unbake import effort
 
+    global _token, _identity
     fn, item = task
+    if isinstance(fn, _Submission):
+        _token, _identity, fn = fn.token, fn.identity, fn.fn
+        _notify("start", "load-shared" if fn is _batch else "item", _identity)
     start, before, wall = _cpu(), effort.counted(), time.monotonic()
     result, error = None, None
     try:
@@ -298,6 +462,11 @@ def _measured(
 
         chain = fault(error)
         error.fault = {**(error.fault or {}), **chain, **measured}
+    if fn is not _batch and error is None:
+        _notify("item-done", "sendback")
+    else:
+        progress(step="sendback")
+    _token, _identity = None, None
     return result, seconds, rss, added, error
 
 
@@ -328,12 +497,16 @@ def _shared_value(path: str) -> Any:
     return _loaded[1]
 
 
-def _batch(job: tuple[Callable[..., R], Sequence[T], str | None]) -> list[R]:
-    fn, chunk, path = job
-    if path is None:
-        return [_named(fn, item) for item in chunk]
-    shared = _shared_value(path)
-    return [_named(fn, shared, item) for item in chunk]
+def _batch(job: Any) -> list[Any]:
+    fn, chunk, path = job[:3]
+    identities = job[3] if len(job) == 4 else [None] * len(chunk)
+    shared = None if path is None else _shared_value(path)
+    result = []
+    for item, identity in zip(chunk, identities, strict=True):
+        _notify("start", "item", identity)
+        result.append(_named(fn, item) if path is None else _named(fn, shared, item))
+        _notify("item-done", "sendback")
+    return result
 
 
 def width(count: int, workers: int, per_worker: int = JOBS_PER_WORKER) -> int:
@@ -362,6 +535,7 @@ class Pool:
         scratch: Path | None = None,
         *,
         cache_memory_bytes: int | None = None,
+        watchdog: Watchdog | None = None,
     ):
         self.size = admitted(workers, memory_total_bytes, memory_parent_bytes, memory_worker_bytes)
         self.cache_memory_bytes = cache_memory_bytes
@@ -372,6 +546,18 @@ class Pool:
         self._handlers: dict[int, Any] = {}
         self.killed = False
         self._work_per_job = 1
+        self.watchdog = watchdog if watchdog is not None else Watchdog()
+        self._events: Any = None
+        self._progress_directory: Path | None = None
+        self._monitor: threading.Thread | None = None
+        self._stop = threading.Event()
+        self._lock = threading.RLock()
+        self._tokens: dict[Future[Any], str] = {}
+        self._faults: dict[str, TaskFailed] = {}
+        self._identities: dict[str, TaskIdentity] = {}
+        self._completed: set[str] = set()
+        self._retired: set[str] = set()
+        self._phase = "pool"
 
     @classmethod
     def from_host(cls, host: Host) -> Pool:
@@ -386,12 +572,26 @@ class Pool:
         )
 
     def __enter__(self) -> Pool:
+        if self.scratch is not None:
+            self.scratch.mkdir(parents=True, exist_ok=True)
+            self._progress_directory = Path(tempfile.mkdtemp(prefix="progress-", dir=self.scratch))
+            self._events = multiprocessing.get_context("forkserver").SimpleQueue()
+        self._stop.clear()
         self._executor = _executor(
-            self.size, self.memory_worker_bytes, self._work_per_job, self.scratch, self.cache_memory_bytes
+            self.size,
+            self.memory_worker_bytes,
+            self._work_per_job,
+            self.scratch,
+            self.cache_memory_bytes,
+            self._events,
+            None if self._progress_directory is None else str(self._progress_directory),
         )
         if threading.current_thread() is threading.main_thread():
             self._handlers = {number: signal.signal(number, self._signalled) for number in SIGNALS}
         atexit.register(self.kill)
+        if self._events is not None:
+            self._monitor = threading.Thread(target=self._observe, name="pool-progress", daemon=True)
+            self._monitor.start()
         return self
 
     def __exit__(self, kind: type[BaseException] | None, *exc: object) -> None:
@@ -401,11 +601,105 @@ class Pool:
             elif self._executor is not None:
                 self._executor.shutdown(cancel_futures=True)
         finally:
+            self._stop.set()
+            if self._monitor is not None:
+                self._monitor.join()
+                self._monitor = None
+            if self._events is not None:
+                self._events.close()
+                self._events = None
+            if self._progress_directory is not None:
+                shutil.rmtree(self._progress_directory)
+                self._progress_directory = None
+            with self._lock:
+                self.watchdog.current.clear()
+                self._tokens.clear()
+                self._identities.clear()
+                self._faults.clear()
+                self._completed.clear()
+                self._retired.clear()
             self._executor = None
             atexit.unregister(self.kill)
             for number, previous in self._handlers.items():
                 signal.signal(number, previous)
             self._handlers = {}
+
+    def _report(self, token: str, state: str, current: _Current) -> None:
+        record = {
+            "event": "pool.progress",
+            "state": state,
+            "pid": current.pid,
+            "identity": asdict(current.identity),
+            "stage": current.stage,
+            "queued": sum(row.pid is None for row in self.watchdog.current.values()),
+            "running": sum(row.pid is not None for row in self.watchdog.current.values()),
+        }
+        with contextlib.suppress(OSError, ValueError):
+            sys.stderr.write(json.dumps(record) + "\n")
+            sys.stderr.flush()
+
+    def _observe(self) -> None:
+        while not self._stop.is_set():
+            if self._events._reader.poll(0.05):
+                payload = pickle.loads(self._events.get())
+                if payload[0] == "file":
+                    path = Path(payload[1])
+                    payload = pickle.loads(path.read_bytes())
+                    path.unlink()
+                token, state, pid, identity, stage = payload
+                with self._lock:
+                    if state == "finished":
+                        current = self.watchdog.finished(token)
+                        if current is not None:
+                            self._identities[token] = current.identity
+                            self._report(token, state, current)
+                        if token in self._retired:
+                            self._retired.discard(token)
+                            self._completed.discard(token)
+                            self._identities.pop(token, None)
+                            self._faults.pop(token, None)
+                    else:
+                        self.watchdog.update(token, state, pid, identity, stage)
+                        current = self.watchdog.current.get(token)
+                        if current is not None:
+                            self._identities[token] = current.identity
+                            self._report(token, "running" if state == "start" else state, current)
+            with self._lock:
+                for token, fault in self.watchdog.expired():
+                    if token in self._faults or token in self._completed:
+                        continue
+                    self._faults[token] = fault
+                    assert fault.fault is not None
+                    fault.fault["configured_cap_bytes"] = self.memory_worker_bytes
+                    current = self.watchdog.current[token]
+                    self._report(token, "stuck", current)
+                    kill_groups([cast(int, current.pid)])
+
+    def _failure(self, future: Future[Any], error: BaseException | None = None) -> TaskFailed | None:
+        with self._lock:
+            token = self._tokens.get(future)
+            if token is None:
+                return None
+            stuck = self._faults.get(token)
+            identity = self._identities.get(token)
+            if stuck is None and identity is not None:
+                if isinstance(error, WorkerMemory):
+                    if not error.args[0].get("identity"):
+                        error.args[0]["identity"] = asdict(identity)
+                elif isinstance(error, Held) and not (error.fault or {}).get("identity"):
+                    error.fault = {**(error.fault or {}), "identity": asdict(identity)}
+            return stuck
+
+    def _forget(self, future: Future[Any]) -> None:
+        with self._lock:
+            token = self._tokens.pop(future, None)
+            if token is not None:
+                if token in self.watchdog.current:
+                    self._retired.add(token)
+                else:
+                    self._identities.pop(token, None)
+                    self._faults.pop(token, None)
+                    self._completed.discard(token)
 
     def kill(self) -> None:
         """Kill every worker group now; queued and running tasks are dropped."""
@@ -430,7 +724,13 @@ class Pool:
             # Recycling after an allocation failure must retain queued siblings.
             self._executor.shutdown()
         self._executor = _executor(
-            self.size, self.memory_worker_bytes, self._work_per_job, self.scratch, self.cache_memory_bytes
+            self.size,
+            self.memory_worker_bytes,
+            self._work_per_job,
+            self.scratch,
+            self.cache_memory_bytes,
+            self._events,
+            None if self._progress_directory is None else str(self._progress_directory),
         )
         return self._executor
 
@@ -438,16 +738,40 @@ class Pool:
         if self._executor is None:
             raise Held("pool", "pool: use Pool as a context manager")
         executor = self._executor
+        token: str | None = None
+        if fn is _measured and self._events is not None:
+            action, argument = cast(tuple[Any, Any], item)
+            identity = argument[3][0] if action is _batch and len(argument) == 4 else _identify(action, None, argument)
+            token = uuid.uuid4().hex
+            with self._lock:
+                self.watchdog.queued(token, identity, self._phase)
+                self._identities[token] = identity
+                self._report(token, "queued", self.watchdog.current[token])
+            item = cast(T, (_Submission(action, token, identity), argument))
         try:
-            return executor.submit(fn, item)
+            future = executor.submit(fn, item)
         except BrokenProcessPool:
-            return self._fresh(executor).submit(fn, item)
+            future = self._fresh(executor).submit(fn, item)
+        if token is not None:
+            with self._lock:
+                self._tokens[future] = token
+
+            def finished(done: Future[Any]) -> None:
+                with self._lock:
+                    self._completed.add(token)
+                if not self._stop.is_set() and self._events is not None:
+                    with contextlib.suppress(OSError, ValueError):
+                        self._events.put(pickle.dumps((token, "finished", 0, None, "finished")))
+
+            future.add_done_callback(finished)
+        return future
 
     def submit(self, fn: Callable[[T], R], item: T) -> Future[R]:
         """One task; a broken pool is replaced first. The caller retries a crashed task at most once. Its CPU is
         charged to fn (effort); cancelling the returned future cancels the task."""
         from unbake import effort
 
+        self._phase = effort.name_of(fn)
         started = time.monotonic()
         inner = self._submit(_measured, (fn, item))
         outer: Future[R] = _Outer(inner)
@@ -456,9 +780,16 @@ class Pool:
             done: Future[tuple[R | None, float, int, dict[str, tuple[int, int]], BaseException | None]],
         ) -> None:
             if done.cancelled():
+                self._forget(done)
                 outer.cancel()
                 return
             error = done.exception()
+            stuck = self._failure(done, error)
+            if stuck is not None:
+                effort.count("worker.stuck", 1, 1)
+                self._forget(done)
+                outer.set_exception(stuck)
+                return
             if error is not None:
                 effort.count("worker.crash", 1, 1)
                 failed = Held(
@@ -477,9 +808,13 @@ class Pool:
                     },
                 )
                 failed.__cause__ = error
+                self._failure(done, failed)
+                self._forget(done)
                 outer.set_exception(failed)
                 return
             result, seconds, rss, counts, fault = done.result()
+            self._failure(done, fault)
+            self._forget(done)
             effort.charge(effort.name_of(fn) + (".failed" if fault is not None else ""), seconds, rss, counts)
             if isinstance(fault, MemoryError):
                 effort.count("worker.memory", 1, 1)
@@ -511,7 +846,12 @@ class Pool:
             atomic_files.fresh(path, pickle.dumps(shared, protocol=pickle.HIGHEST_PROTOCOL))
         try:
             jobs = [
-                (fn, items[start : start + size], None if path is None else str(path))
+                (
+                    fn,
+                    items[start : start + size],
+                    None if path is None else str(path),
+                    tuple(_identify(fn, shared, item) for item in items[start : start + size]),
+                )
                 for start in range(0, len(items), size)
             ]
             return [result for batch in self.map(_batch, jobs, charge=effort.name_of(fn)) for result in batch]
@@ -534,6 +874,9 @@ class Pool:
         from unbake import effort
 
         name = charge or effort.name_of(fn)
+        self._phase = name + ":" + uuid.uuid4().hex
+        with self._lock:
+            self.watchdog.samples.clear()
         completed: queue.SimpleQueue[tuple[int, Future[Any]]] = queue.SimpleQueue()
         pending: dict[int, tuple[T, Future[Any], int, ProcessPoolExecutor | None]] = {}
         ready: dict[int, tuple[R | None, Exception | None]] = {}
@@ -556,16 +899,58 @@ class Pool:
                     return
                 submit(index, item, 0)
 
+        def retain(failure: TaskFailed, index: int, item: T, result: Any) -> None:
+            if fn is _batch and len(cast(Any, item)) == 4:
+                failure.completed.extend(zip(cast(Any, item)[3], result, strict=True))
+            else:
+                failure.completed.append((_identify(fn, None, item), result))
+
         fill()
         while pending:
             index, future = completed.get()
             item, _, attempt, executor = pending.pop(index)
+            # A watchdog is a terminal refusal, not an ordered worker crash.
+            # Waiting for an earlier live task could otherwise hide it forever.
+            fatal = next(
+                (
+                    stuck_failure
+                    for candidate in (future, *(row[1] for row in pending.values()))
+                    if (stuck_failure := self._failure(candidate)) is not None
+                ),
+                None,
+            )
+            if fatal is not None:
+                effort.count("worker.stuck", 1, 1)
+                for ready_index, (ready_result, ready_error) in ready.items():
+                    if ready_error is None:
+                        retain(fatal, ready_index, items[ready_index], ready_result)
+                for completed_index, (completed_item, completed_future) in [
+                    (index, (item, future)),
+                    *((position, (row[0], row[1])) for position, row in pending.items()),
+                ]:
+                    if (
+                        completed_future.done()
+                        and not completed_future.cancelled()
+                        and completed_future.exception() is None
+                    ):
+                        value, seconds, rss, counts, fault = completed_future.result()
+                        effort.charge(name + (".failed" if fault is not None else ""), seconds, rss, counts)
+                        if fault is None:
+                            retain(fatal, completed_index, completed_item, value)
+                    self._forget(completed_future)
+                raise fatal
             try:
+                stuck = self._failure(future)
+                if stuck is not None:
+                    effort.count("worker.stuck", 1, 1)
+                    raise stuck
                 result, seconds, rss, counts, fault = future.result()
+                self._failure(future, fault)
                 effort.charge(name + (".failed" if fault is not None else ""), seconds, rss, counts)
                 if fault is not None:
                     raise fault
             except (BrokenProcessPool, MemoryError) as error:
+                self._failure(future, error)
                 failure = "worker.memory" if isinstance(error, MemoryError) else "worker.crash"
                 effort.count(failure, 1, 1)
                 if attempt:
@@ -593,10 +978,12 @@ class Pool:
                     self._fresh(executor)
                     submit(index, item, 1)
             except Exception as error:
+                self._failure(future, error)
                 ready[index] = None, error
                 refused = True
             else:
                 ready[index] = result, None
+            self._forget(future)
             fill()
             while next_result in ready:
                 result, refused_error = ready.pop(next_result)

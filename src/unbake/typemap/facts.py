@@ -538,10 +538,13 @@ def _unit_seeds(text: str, provenance: dict[str, Any], source: Path) -> tuple[di
     expanded_bytes = len(text) if text.isascii() else len(text.encode())
     try:
         contract = declarations.published(text, provenance, source, contracts=True, compact=True)
+        pool.progress(step="contracts-parsed")
         consumed = declarations.consumed_contracts(contract, source.read_text())
+        pool.progress(step="contracts-selected")
         # The definition owns the function contract; imported prototypes are
         # dependencies, and cannot override a ROM-proven definition elsewhere.
         definition = declarations.published(text, {**provenance, "kind": "proven"}, source, compact=True)
+        pool.progress(step="definitions-parsed")
         return consumed, definition
     except MemoryError as error:
         raise WorkerMemory(memory_fault(error, expanded_bytes=expanded_bytes)) from error
@@ -867,12 +870,14 @@ def _unit_work(
     snapshot = Snapshot(project)
     whole: list[tuple[int, str, Task]] = []
     for group in versions:
+        pool.progress(step="version:" + group[0][2][2])
         found = _source_tasks(project, host, output, parts, contexts, group, counts, sharing, snapshot, generated)
         if found is None:
             whole.extend(group)
         else:
             result.extend(found)
     if whole:
+        pool.progress(step="whole-source")
         result.extend(_whole_tasks(project, host, output, whole, counts))
     output.written.clear()
     from unbake import cache, prefixes
@@ -884,18 +889,11 @@ def _unit_work(
     return result, counts
 
 
-@pool.cpu
-def _unit_job(
-    shared: Shared, versions: list[list[tuple[int, str, Task]]]
-) -> tuple[list[tuple[int, bytes]], dict[str, int]]:
-    from dataclasses import asdict
-
-    from unbake.pool import TaskIdentity, WorkerMemory, memory_fault
-
+def _unit_identity(shared: Shared, versions: list[list[tuple[int, str, Task]]]) -> pool.TaskIdentity:
     project = shared[0]
     tasks = [task for group in versions for _, _, task in group]
     source = tasks[0][1]
-    identity = TaskIdentity(
+    return pool.TaskIdentity(
         "types",
         storage.relative(project, source),
         tuple(dict.fromkeys(task[0] for task in tasks)),
@@ -904,6 +902,24 @@ def _unit_job(
         inputs.digest(source, algorithm="sha256", reuse=retention.configured()),
         tuple(content for group in versions for _, content, _ in group),
     )
+
+
+@pool.cpu
+def _unit_job(
+    shared: Shared, versions: list[list[tuple[int, str, Task]]]
+) -> tuple[list[tuple[int, bytes]], dict[str, int]]:
+    from dataclasses import asdict
+
+    from unbake.pool import WorkerMemory, memory_fault
+
+    current = pool.current_identity()
+    source = versions[0][0][2][1]
+    identity = (
+        current
+        if current is not None and current.action == "types" and current.source == storage.relative(shared[0], source)
+        else _unit_identity(shared, versions)
+    )
+    pool.progress(identity, step="source")
     try:
         return _unit_work(shared, versions)
     except MemoryError as error:
@@ -922,6 +938,9 @@ def _unit_job(
 
         fault = {**cause_fault(error), "action": "types", "identity": asdict(identity)}
         raise Held("solve", f"types.source: {identity.source}: {type(error).__name__}: {error}", fault=fault) from error
+
+
+_unit_job._pool_identity = _unit_identity  # type: ignore[attr-defined]
 
 
 @pool.cpu

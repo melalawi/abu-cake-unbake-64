@@ -937,15 +937,40 @@ def rooted(project: Project, text: str) -> str:
     return text.replace(f'"{project.root}/', '"').replace(f'"{project.root.resolve()}/', '"')
 
 
+def _declared_identity(shared: Any, job: tuple[Project, Host, str, dict[str, Any], set[Path]]) -> pool.TaskIdentity:
+    from unbake.typemap import facts
+
+    project, _, text, provenance, authored = job
+    digest = provenance.get("sha256") or hashlib.sha256(text.encode()).hexdigest()
+    content = facts.text_key(
+        rooted(project, text), provenance, sorted(storage.relative(project, path) for path in authored)
+    )
+    return pool.TaskIdentity(
+        "types",
+        provenance.get("source", "headers"),
+        (),
+        (provenance["version"],) if "version" in provenance else (),
+        len(text.encode()),
+        digest,
+        (content,),
+    )
+
+
 @pool.cpu
 def _declared_job(job: tuple[Project, Host, str, dict[str, Any], set[Path]]) -> None:
     """Pool worker: one version's declared header facts, extracted into the shared store."""
     from unbake.typemap import facts
 
     project, policy, text, provenance, authored = job
+    current = pool.current_identity()
+    identity = current if current is not None and current.action == "types" else _declared_identity(None, job)
+    pool.progress(identity, step="declarations")
     facts.store(project, policy).text(
         text, provenance, authored, lambda: extract(text, provenance, authored_headers=authored)
     )
+
+
+_declared_job._pool_identity = _declared_identity  # type: ignore[attr-defined]
 
 
 @pool.cpu
