@@ -19,7 +19,7 @@ from unbake.typemap.closure import Constraints
 from unbake.typemap.mapping import refresh_map
 
 # Bump when this step's output changes for the same inputs. Keys never digest the tool's code.
-SCHEMA = 10
+SCHEMA = 11
 # The value formats of the two cached evidence kinds (the input key above names the solve itself).
 ABI_SCHEMA = 7
 MACHINE_SCHEMA = 6
@@ -468,7 +468,14 @@ def infer(
             authority = origin
             while authority.startswith("field:"):
                 authority = authority.removeprefix("field:").rsplit(":", 1)[0]
-            if authority.startswith(("param:", "result:")):
+            if authority.startswith("param:"):
+                _, owner, register = authority.split(":")
+                # Entry reads prove this particular argument independently of the other arguments and return ABI.
+                # Machine registers contain only callee reads (including evidenced forwarding), not caller leftovers.
+                if register not in signatures.get(owner, {}).get("registers", ()):
+                    unresolved("common-base parameter register is not read by its owner")
+                    continue
+            elif authority.startswith("result:"):
                 owner = authority.split(":")[1]
                 abi = signatures.get(owner, {})
                 if not abi.get("arity_known") or not abi.get("return_known"):
