@@ -187,10 +187,11 @@ def measure(
     rule_lines = [checks.plain(finding) for finding in broken]
     results: dict[str, Measurement] = {}
     faults: dict[str, dict[str, Any]] = {}
-    from unbake.fold import provider_reuse
+    from unbake.fold import provider_reuse, self_prototype
     from unbake.typemap import namespace
 
     with (
+        self_prototype.view(view, host, file, content.decode()) as view,
         provider_reuse.view(view, host, tuple(selected)) as view,
         namespace.comparison_view(view, host, file, content.decode()) as (view, candidate),
     ):

@@ -16,7 +16,7 @@ from pathlib import Path
 from unbake import atomic as atomic_files
 from unbake.config import Held, Host, Project, draft_view
 from unbake.decomp import checks, gbi
-from unbake.fold import declarations, notes
+from unbake.fold import declarations, notes, self_prototype
 from unbake.layout import map as layout_map
 from unbake.layout import split
 from unbake.layout.split import Edit
@@ -32,6 +32,7 @@ class Folded:
     split_edits: tuple[Edit, ...]
     notes: tuple[str, ...] = field(default=())
     source_edits: tuple[Edit, ...] = field(default=())
+    contract: self_prototype.Contract | None = None
 
 
 def view(project: Project, function: str) -> Project:
@@ -113,8 +114,6 @@ def fold(
     *,
     versions: tuple[str, ...] | None = None,
     exact_entry: Attempt | None = None,
-    owning_source: str | None = None,
-    owning_evidence: dict[str, object] | None = None,
 ) -> Folded:
     """Lower GBI, fold shared types and plan the publication edits, without writing project files."""
     drafted = view(project, function)
@@ -134,8 +133,6 @@ def fold(
             versions,
             prove_headers=False,
             exact_entry=exact_entry,
-            owning_source=owning_source,
-            owning_evidence=owning_evidence,
         )
     headers: dict[str, str] = {}
     split_edits = []
@@ -173,7 +170,8 @@ def fold(
 
     effective = {**private_headers(project, function), **headers}
     source_edits = shared_consumers.plan(project, host, function, effective)
-    if owning_evidence is not None:
+    contract = edits.contract
+    if contract is not None:
         from unbake.layout import redeclarations
 
         # Include-only reachability cannot find a source-local extern or a
@@ -255,7 +253,7 @@ def fold(
             **{edit.path: edit.after.encode() for edit in source_edits},
         },
     )
-    return Folded(function, folded, headers, tuple(split_edits), tuple(learned), source_edits)
+    return Folded(function, folded, headers, tuple(split_edits), tuple(learned), source_edits, contract)
 
 
 def private_headers(project: Project, function: str) -> dict[str, str]:

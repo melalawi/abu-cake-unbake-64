@@ -154,6 +154,7 @@ class Folded:
     source: str
     headers: list[Edit]
     removed_rows: dict[str, tuple[str, ...]]
+    contract: self_prototype.Contract | None = None
 
 
 def _local_typedefs(
@@ -220,8 +221,6 @@ def fold_source(
     prove_headers: bool = True,
     source_path: Path | None = None,
     exact_entry: Attempt | None = None,
-    owning_source: str | None = None,
-    owning_evidence: dict[str, object] | None = None,
 ) -> Folded:
     """Plan aggregate promotion against a shared header context; the context is not changed."""
     from unbake.fold import callee_contracts
@@ -230,27 +229,10 @@ def fold_source(
     authored = text
     from unbake.layout import redeclarations
 
-    if owning_evidence is None:
-        self_prototype.retain_known(headers.texts, text, function, redeclarations.aliases(list(headers.texts.values())))
-    owning_edits: list[Edit] = []
-    if owning_evidence is not None:
-        from unbake.layout import index as layout_index
-        from unbake.layout import redeclarations
-
-        manifest = set(layout_index.load(project)["headers"])
-        generated = frozenset(
-            path
-            for path in headers.texts
-            if any(
-                path.is_relative_to(root)
-                and (path.relative_to(root).as_posix() in manifest or layout_index.marked(path, root))
-                for root in project.include
-            )
-        )
-        aliases = redeclarations.aliases(list(headers.texts.values()))
-        owning_edits = self_prototype.owned(
-            headers.texts, generated, text, function, aliases, versions, exact_entry, owning_source, owning_evidence
-        )
+    contract = self_prototype.plan(project, headers.texts, text, function, versions)
+    owning_edits = list(contract.edits) if contract is not None else []
+    if contract is not None:
+        self_prototype.require_complete(exact_entry, text, function, versions)
         headers = Headers({**headers.texts, **{edit.path: edit.after for edit in owning_edits}}, root=headers.root)
     contracts = namespace.project_declarations(project, headers.texts, texts=(text,))
     identity_edits = [
@@ -413,6 +395,11 @@ def fold_source(
         removed[version] = tuple(lines[row.line] for segment in segments for row in segment.rows if row.path in paths)
     from unbake.layout import apply
 
+    # A source rewrite always imports its mapped owner. A fold that edits only
+    # an existing external provider must still materialize that owner header.
+    if edits and destination not in {**headers.texts, **{edit.path: edit.after for edit in edits}}:
+        guard = header_guard(headers, destination)
+        edits.append(Edit(destination, "", f"#ifndef {guard}\n#define {guard}\n\n#endif\n", versions))
     if edits or destination in headers.texts:
         final = apply.source(project, final, function, {edit.path: edit.after.encode() for edit in edits})
     else:
@@ -424,7 +411,15 @@ def fold_source(
     header_loss.check(
         project, {project.src / f"{function}.c": final.encode(), **{edit.path: edit.after.encode() for edit in edits}}
     )
-    return Folded(function, final, edits, removed)
+    return Folded(function, final, edits, removed, contract)
+
+
+class Edits(list[Edit]):
+    """Folded edits with the owning-contract identity that their proof must preserve."""
+
+    def __init__(self, edits: Iterable[Edit], contract: self_prototype.Contract | None) -> None:
+        super().__init__(edits)
+        self.contract = contract
 
 
 def folded_edits(
@@ -436,9 +431,7 @@ def folded_edits(
     *,
     prove_headers: bool = True,
     exact_entry: Attempt | None = None,
-    owning_source: str | None = None,
-    owning_evidence: dict[str, object] | None = None,
-) -> list[Edit]:
+) -> Edits:
     """The folded source, the header edits and the split rows the fold absorbed (land converts F's own row)."""
     from unbake.fold import provider_reuse
 
@@ -455,8 +448,6 @@ def folded_edits(
         versions,
         prove_headers=False,
         exact_entry=exact_entry,
-        owning_source=owning_source,
-        owning_evidence=owning_evidence,
     )
     # A later fold edit can extend a reconciled private header. Publication must
     # still compare against its original bytes, and write each provider once.
@@ -483,7 +474,7 @@ def folded_edits(
         after = _remove_rows(before, removed)
         if after != before:
             edits.append(Edit(split_path, before, after, (version,)))
-    return [*by_path.values(), *edits]
+    return Edits([*by_path.values(), *edits], folded.contract)
 
 
 def _remove_rows(text: str, removed: Iterable[str]) -> str:

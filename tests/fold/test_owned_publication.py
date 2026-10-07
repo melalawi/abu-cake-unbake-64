@@ -5,6 +5,7 @@ import json
 import shutil
 import subprocess
 from contextlib import contextmanager
+from dataclasses import replace
 from unittest.mock import patch
 
 from tests.fold.test_owned_contract import BE, FIXTURE
@@ -16,6 +17,7 @@ from unbake.layout import map as ownership
 from unbake.layout import split
 from unbake.process import named as cause_named
 from unbake.typemap import database, regeneration
+from unbake.work import compare
 from unbake.work.attempts import Attempt
 
 CALLER = "func_802BD974_de"
@@ -212,9 +214,7 @@ class OwningPublicationTests(ProjectCase):
             return original(path, data)
 
         with self.boundaries(), patch.object(land.atomic_files, "write", side_effect=write):
-            commit = land.land(
-                self.project, self.host, self.file, replace_own_contract=True, on_commit=self.events.append
-            )
+            commit = land.land(self.project, self.host, self.file, on_commit=self.events.append)
         self.assertEqual(commit, "c0ffee")
         self.assertEqual(self.work, {"target": 5, "consumer": 5, "syntax": 10, "place": 5, "link": 5, "commit": 1})
         self.assertEqual(writes, [self.old_path, self.consumer, self.header, self.project.root / "config.toml"])
@@ -236,11 +236,22 @@ class OwningPublicationTests(ProjectCase):
         for version in self.versions:
             self.assertEqual(next(row.kind for row in split.functions(self.project, version) if row.name == BE), "c")
 
-    def test_ordinary_publish_refuses_retained_known_change_before_native_or_shared_write(self):
-        with self.boundaries(), self.assertRaisesRegex(Held, "explicit owning-source replacement"):
-            land.land(self.project, self.host, self.file)
-        self.assert_authority_unchanged()
-        self.assertEqual(self.work["target"], 0)
+    def test_incomplete_forged_or_wrong_receipts_refuse_before_native_or_shared_write(self):
+        original = self.attempt
+        for bad in (
+            None,
+            replace(original, exact=False),
+            replace(original, sha256="0" * 64),
+            replace(original, function="caller"),
+            replace(original, versions={}),
+            replace(original, versions={**original.versions, self.versions[0]: {"exact": False}}),
+            replace(original, versions={**original.versions, self.versions[0]: {"exact": True, "fault": "cc1"}}),
+        ):
+            self.attempt = bad
+            with self.boundaries(), self.assertRaisesRegex(Held, "complete exact comparison"):
+                land.land(self.project, self.host, self.file)
+            self.assert_authority_unchanged()
+            self.assertEqual(self.work["target"], 0)
 
     def test_current_conflicting_extern_and_native_consumer_change_refuse_without_mutation(self):
         for conflicting in (False, True):
@@ -254,48 +265,54 @@ class OwningPublicationTests(ProjectCase):
                     )
                 self.consumer.write_text(self.original_consumer)
                 with self.boundaries(), self.assertRaises(Held):
-                    land.land(self.project, self.host, self.file, replace_own_contract=True)
+                    land.land(self.project, self.host, self.file)
                 self.assert_authority_unchanged()
                 self.assertEqual(self.work["target"], 5)
 
     def test_existing_owner_mutation_after_proof_cannot_commit_replacement(self):
         self.change_owner = True
         with self.boundaries(), self.assertRaisesRegex(Held, "owning source changed since proof"):
-            land.land(self.project, self.host, self.file, replace_own_contract=True)
+            land.land(self.project, self.host, self.file)
         self.assertEqual(self.header.read_text(), self.before)
         self.assertEqual(self.consumer.read_text(), self.original_consumer)
         self.assertEqual(self.old_path.read_text(), self.previous + "\n/* changed after proof */\n")
         self.assertEqual(self.work["commit"], 0)
 
-    def test_explicit_comparison_is_private_and_creates_no_fabricated_exact_receipt(self):
-        seen = []
+    @contextmanager
+    def comparison_boundaries(self):
+        def linked(project, host, obj, version, row, file):
+            return bytes.fromhex(PROGRAMS[BE][version]["hex"]), []
 
-        def compare(view, host, file):
-            seen.append(view)
-            text = (view.work_include[0] / "span_1000/owner.h").read_text()
-            self.assertIn("unsigned char unused_code", text)
-            self.assert_authority_unchanged()
-            self.assertEqual(file.read_text(), self.source)
+        with patch.object(runner, "link_function", side_effect=linked), patch("unbake.work.compare_facts.attach"):
+            yield
 
-        with self.boundaries(), patch.object(land.compare, "compare", side_effect=compare) as calls:
-            land._compare_own_contract(self.project, self.host, self.file)
-        self.assertEqual(calls.call_count, 1)
-        self.assertEqual(len(seen), 1)
+    def test_normal_comparison_is_private_and_creates_only_a_real_comparison_receipt(self):
+        with self.boundaries(), self.comparison_boundaries():
+            measured = compare.compare(self.project, self.host, self.file)
+        self.assertTrue(measured.exact, measured.lines())
+        self.assertEqual(self.work["target"], 5)
         self.assert_authority_unchanged()
+        self.assertEqual(self.file.read_text(), self.source)
+
+    def test_normal_public_compare_then_publish_requires_target_and_current_consumers(self):
+        with (
+            self.boundaries(),
+            self.comparison_boundaries(),
+            patch.object(self_prototype, "plan", wraps=self_prototype.plan) as plans,
+            patch.object(self_prototype, "previous_source", wraps=self_prototype.previous_source) as source_reads,
+        ):
+            result = land.publish(
+                self.project, self.host, [self.file], compare_first=True, on_commit=self.events.append
+            )
+        self.assertEqual(result.failed, {})
+        self.assertEqual(result.landed, [BE])
+        self.assertEqual(self.work, {"target": 10, "consumer": 5, "syntax": 15, "place": 5, "link": 5, "commit": 1})
+        self.assertEqual(len(self.events), 1)
+        self.assertEqual((plans.call_count, source_reads.call_count), (2, 2))
 
     def test_existing_render_retires_old_stored_copy_by_installed_name_without_database_or_schema_patch(self):
         self.header.write_text(
-            self_prototype.owned(
-                {self.header: self.before},
-                frozenset({self.header}),
-                self.source,
-                BE,
-                {},
-                self.versions,
-                self.attempt,
-                self.previous,
-                self_prototype.measure_owned(self.project, BE),
-            )[0].after
+            self_prototype.plan(self.project, {self.header: self.before}, self.source, BE, self.versions).edits[0].after
         )
         self.old_path.write_text(self.source)
         self.consumer.unlink()
@@ -313,10 +330,30 @@ class OwningPublicationTests(ProjectCase):
         self.assertNotIn(".published_old.h", value["published_declarations"])
         self.assertFalse((self.project.build / "types.sqlite").exists())
 
-    def test_flag_rejects_fuzzy_partial_multiple_or_original_publication_without_work(self):
-        for options in ({"fuzzy": True}, {"required_versions": (self.versions[0],)}, {"originals": (BE,)}):
-            with self.subTest(options=options), self.assertRaisesRegex(Held, "publish.own_contract"):
-                land.publish(self.project, self.host, [self.file], replace_own_contract=True, **options)
-        with self.assertRaisesRegex(Held, "publish.own_contract"):
-            land.publish(self.project, self.host, [self.file, self.file], replace_own_contract=True)
-        self.assert_authority_unchanged()
+    def test_unsupported_transport_remains_a_default_public_refusal_without_native_or_writes(self):
+        for signature in (
+            "float value",
+            "double value",
+            "long long value",
+            "int a, int b, int c, int d, int e",
+            "int a, ...",
+        ):
+            self.file.write_text(f"void {BE}({signature}) {{}}\n")
+            with self.boundaries():
+                result = land.publish(self.project, self.host, [self.file], compare_first=True)
+            self.assertIn(BE, result.failed)
+            self.assertEqual(result.failed[BE]["key"], "land.own_contract")
+            self.assert_authority_unchanged()
+            self.assertEqual(self.work["target"], 0)
+
+    def test_changed_contract_without_exact_receipt_cannot_be_retained_as_fuzzy(self):
+        self.old_path.unlink()
+        for version in self.versions:
+            path = self.project.version(version).split
+            path.write_text(path.read_text().replace("c, " + BE, "asm, " + BE))
+        with self.boundaries():
+            result = land.publish(self.project, self.host, [self.file], fuzzy=True)
+        self.assertIn(BE, result.failed)
+        self.assertEqual(result.failed[BE]["key"], "land.own_contract")
+        self.assertEqual(self.header.read_text(), self.before)
+        self.assertEqual(self.work["target"], 0)

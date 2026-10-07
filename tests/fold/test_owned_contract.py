@@ -7,14 +7,13 @@ import struct
 import subprocess
 import types
 import unittest
-from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
 from unbake.config import Held
 from unbake.fold import self_prototype
-from unbake.layout import redeclarations
+from unbake.layout import index, redeclarations, split
 from unbake.typemap import declaration_evidence, evidence
 from unbake.typemap.mips import Analysis
 from unbake.work.attempts import Attempt
@@ -74,21 +73,38 @@ class OwnedContractTests(unittest.TestCase):
             "gcc-2.8.1-sn64",
         )
 
-    def plan(
-        self, *, name=BE, text=None, previous="default", measured=None, attempt="default", header=None, generated=True
-    ):
+    def plan(self, *, name=BE, text=None, previous="default", measured=None, header=None, generated=True):
         text = self.source if text is None else text
-        return self_prototype.owned(
-            {self.path: self.before if header is None else header},
-            frozenset({self.path}) if generated else frozenset(),
-            text,
-            name,
-            ALIASES,
-            self.versions,
-            self.attempt(name, text) if attempt == "default" else attempt,
-            self.previous if previous == "default" else previous,
-            self.measured[name] if measured is None else measured,
+        project = SimpleNamespace(
+            root=Path("/project"),
+            cache=None,
+            include=(self.path.parent.parent,),
+            src=Path("/project/src"),
+            versions=self.versions,
         )
+        contents = {
+            self.path: self.before if header is None else header,
+            project.include[0] / "types.h": "typedef int s32; typedef short s16;",
+        }
+        with (
+            patch.object(
+                index,
+                "load",
+                return_value={
+                    "headers": {self.path.relative_to(project.include[0]).as_posix(): ""} if generated else {}
+                },
+            ),
+            patch.object(index, "marked", return_value=False),
+            patch.object(split, "holding_versions", return_value=self.versions),
+            patch.object(
+                self_prototype, "previous_source", return_value=self.previous if previous == "default" else previous
+            ),
+            patch.object(
+                self_prototype, "measure_owned", return_value=self.measured[name] if measured is None else measured
+            ),
+        ):
+            contract = self_prototype.plan(project, contents, text, name, self.versions)
+        return list(contract.edits) if contract is not None else []
 
     def test_red_on_baseline_and_ordinary_snapshot_still_keeps_old_owned_authority(self):
         baseline = types.ModuleType("baseline_self_prototype")
@@ -115,8 +131,7 @@ class OwnedContractTests(unittest.TestCase):
         )
         self.assertEqual(len(snapshot), 1)
         self.assertIn("(void);", next(iter(snapshot.values())))
-        with self.assertRaisesRegex(Held, "explicit owning-source replacement"):
-            self_prototype.retain_known({self.path: self.before}, self.source, BE, ALIASES)
+        self.assertEqual(len(self.plan()), 1)
         self.assertEqual(self.before, self.records["BE0C0_old_header"])
 
     def test_explicit_real_empty_owner_stages_one_row_without_writes_and_updates_retention(self):
@@ -142,7 +157,7 @@ class OwnedContractTests(unittest.TestCase):
         )
         self.assertEqual(len(snapshot), 1)
         self.assertNotIn("(void);", next(iter(snapshot.values())))
-        self_prototype.retain_known({self.path: edits[0].after}, self.source, BE, ALIASES)
+        self.assertEqual(self.plan(header=edits[0].after), [])
 
     def test_real_short_formals_and_defined_index_replace_published_caller_contract_without_old_definition(self):
         text = (FIXTURE / (FIVE + ".c")).read_text()
@@ -157,22 +172,6 @@ class OwnedContractTests(unittest.TestCase):
         bad["abi"]["return_known"] = False
         with self.assertRaisesRegex(Held, "word result is not defined"):
             self.plan(name=FIVE, text=text, previous=None, header=self.records["5B920_old_header"], measured=bad)
-
-    def test_incomplete_forged_or_wrong_receipts_fail_without_mutation(self):
-        original = self.attempt()
-        bads = [
-            None,
-            replace(original, exact=False),
-            replace(original, sha256="0" * 64),
-            replace(original, function="caller"),
-            replace(original, versions={}),
-            replace(original, versions={**original.versions, self.versions[0]: {"exact": False}}),
-            replace(original, versions={**original.versions, self.versions[0]: {"exact": True, "fault": "cc1"}}),
-        ]
-        for attempt in bads:
-            with self.subTest(attempt=attempt), self.assertRaisesRegex(Held, "complete exact comparison"):
-                self.plan(attempt=attempt)
-        self.assertEqual(self.before, self.records["BE0C0_old_header"])
 
     def test_fp_pair_stack_variadic_consumed_and_unknown_evidence_remain_guards(self):
         for text in (
@@ -205,16 +204,30 @@ class OwnedContractTests(unittest.TestCase):
                 self.plan(measured=bad)
 
     def test_independent_or_conflicting_provider_and_caller_only_changes_refuse(self):
+        self.assertEqual(self.plan(header=self.before.replace("published declaration", "unowned"), previous=None), [])
         for header, generated in (
             (self.before, False),
             (self.before.replace("published declaration", "declaration evidence"), True),
             (self.before + f"extern int {BE}(void);\n", True),
-            (self.before.replace("published declaration", "unowned"), True),
         ):
             with self.subTest(header=header), self.assertRaises(Held):
                 self.plan(header=header, generated=generated, previous=None)
         with self.assertRaisesRegex(Held, "requested public owning function"):
             self.plan(text=f"extern void {BE}(void *, unsigned char); void caller(void) {{}}")
+
+    def test_default_plan_reads_each_definition_once_and_stages_one_row_without_native_work(self):
+        with (
+            patch.object(
+                self_prototype, "definition_prototypes", wraps=self_prototype.definition_prototypes
+            ) as definitions,
+            patch.object(
+                declaration_evidence, "replace_owned_contract", wraps=declaration_evidence.replace_owned_contract
+            ) as rows,
+            patch("unbake.runner.compile_unit", side_effect=AssertionError("native work during planning")) as native,
+            patch.object(Path, "write_text", side_effect=AssertionError("write during planning")),
+        ):
+            edits = self.plan()
+        self.assertEqual((definitions.call_count, rows.call_count, native.call_count, len(edits)), (2, 1, 0, 1))
 
     def test_real_instruction_work_is_bounded_and_caller_argument_work_is_preserved(self):
         run = Analysis.run

@@ -1,65 +1,26 @@
-"""Retire obsolete volatile qualifiers from a republished function's own prototype."""
+"""Plan owning-definition views and reconcile their shared prototypes."""
 
 from __future__ import annotations
 
 import hashlib
 import re
 from collections import Counter
+from collections.abc import Iterator
+from contextlib import contextmanager
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
 from pycparser import c_ast, c_generator  # type: ignore[import-untyped]
 
 from unbake import cdecl
+from unbake.config import Held, Host, Project
 from unbake.layout import redeclarations
 from unbake.layout.split import Edit
 from unbake.process import named as cause_named
 from unbake.typemap import declarations, evidence, o32
 from unbake.typemap.declarations import _declaration_unit
 from unbake.work.attempts import Attempt
-
-
-def retain_known(contents: dict[Path, str], text: str, function: str, aliases: dict[str, str]) -> None:
-    """An ordinary draft cannot change marked authority through its own definition."""
-    from unbake.config import Held
-
-    marked = []
-    for before in contents.values():
-        for start, end in redeclarations.spans(before):
-            old = before[start:end]
-            if cdecl.declarations(old).declared == {function} and re.search(
-                r"/\* unbake (?:published declaration|declaration evidence):[^*]*\*/\s*$", before[:start]
-            ):
-                marked.append(old)
-    if not marked:
-        return
-    try:
-        unit = _declaration_unit(cdecl.declaration_source(text))
-        names = cdecl.declarations(unit)
-        tree = cdecl.parse(unit, typedefs=names.uses | names.typedefs | aliases.keys())
-        definitions = [node.decl for node in tree.ext if isinstance(node, c_ast.FuncDef) and node.decl.name == function]
-    except (Held, cdecl.ParseError) as error:
-        raise Held(
-            cause_named(
-                "land.own_contract",
-                f"land.own_contract: {function}: owning signature is unavailable",
-                owner="fold",
-                stage="land",
-            )
-        ) from error
-    if len(definitions) != 1 or any(
-        not redeclarations.equivalent(old, c_generator.CGenerator().visit(definitions[0]) + ";", aliases)
-        for old in marked
-    ):
-        raise Held(
-            cause_named(
-                "land.own_contract",
-                f"land.own_contract: {function}: marked contract differs; "
-                "explicit owning-source replacement is required",
-                owner="fold",
-                stage="land",
-            )
-        )
 
 
 def measure_owned(project: Any, function: str) -> dict[str, Any]:
@@ -101,20 +62,18 @@ def measure_owned(project: Any, function: str) -> dict[str, Any]:
     return {"versions": bodies, "abi": evidence.abi({function: {"versions": bodies}})[function]}
 
 
-def owned(
+def _change(
     contents: dict[Path, str],
     generated: frozenset[Path],
     text: str,
     function: str,
     aliases: dict[str, str],
     versions: tuple[str, ...],
-    attempt: Attempt | None,
     previous_source: str | None,
     measured: dict[str, Any],
-    *,
-    provisional: bool = False,
+    proposed: str,
 ) -> list[Edit]:
-    """Explicit owning-source transition, provisional until native consumer proof.
+    """Validate a proposed owning definition before the transaction proves its consumers.
 
     An existing definition remains the old semantic authority. Without one, only
     a marked published contract may yield to the actual complete owning source;
@@ -131,31 +90,21 @@ def owned(
             cause_named("land.own_contract", f"land.own_contract: {function}: {reason}", owner="fold", stage="land")
         )
 
-    if not provisional and (
-        attempt is None
-        or attempt.function != function
-        or attempt.sha256 != hashlib.sha256(text.encode()).hexdigest()
-        or not attempt.exact
-        or not versions
-        or set(attempt.versions) != set(versions)
-        or any(row.get("exact") is not True or row.get("fault") for row in attempt.versions.values())
-    ):
-        refuse("complete exact comparison of the proposed owning source is required")
-
     def definition(source: str) -> tuple[str, bool]:
         if re.search(r"^\s*#\s*(?:if|ifdef|ifndef|elif|define|undef)\b", source, re.M):
             refuse("conditional or macro-owned definitions are not supported")
-        try:
-            tree = cdecl.parse(cdecl.declaration_source(source), typedefs=aliases)
-        except (cdecl.ParseError, Held) as error:
-            refuse(f"owning definition unavailable: {error}")
-            raise AssertionError("unreachable") from error
-        definitions = [node for node in tree.ext if isinstance(node, c_ast.FuncDef)]
-        if len(definitions) != 1 or definitions[0].decl.name != function or "static" in definitions[0].decl.storage:
+        definitions = definition_prototypes(source, aliases)
+        if set(definitions) != {function}:
             refuse("the source must define exactly the requested public owning function")
-        return c_generator.CGenerator().visit(definitions[0].decl) + ";", not definitions[0].body.block_items
+        empty = bool(
+            re.search(r"\b" + re.escape(function) + r"\s*\([^;{}]*\)\s*\{\s*\}", cdecl.declaration_source(source))
+        )
+        return definitions[function], empty
 
-    proposed, empty = definition(text)
+    # The proposed signature is the already shared definition projection.
+    if re.search(r"^\s*#\s*(?:if|ifdef|ifndef|elif|define|undef)\b", text, re.M):
+        refuse("conditional or macro-owned definitions are not supported")
+    empty = bool(re.search(r"\b" + re.escape(function) + r"\s*\([^;{}]*\)\s*\{\s*\}", cdecl.declaration_source(text)))
     old_empty = False
     if previous_source is not None:
         previous, old_empty = definition(previous_source)
@@ -235,6 +184,158 @@ def owned(
     ):
         refuse("void replacement needs the old owning definition, without consumed results")
     return replace_owned_contract(contents, generated, function, previous, proposed, aliases, versions)
+
+
+@dataclass(frozen=True)
+class Contract:
+    """A changed owning definition and its pinned prior source, still awaiting native adoption."""
+
+    edits: tuple[Edit, ...]
+    previous_source: str | None
+
+
+def previous_source(project: Project, function: str) -> str | None:
+    """Pin actual old C ownership; a marked caller contract is not an old definition."""
+    from unbake import land
+    from unbake.layout import split
+    from unbake.work import compare
+
+    holding = split.holding_versions(project, function)
+    path = project.src / f"{function}.c"
+
+    def refuse(reason: str) -> None:
+        raise Held(
+            cause_named("land.own_contract", f"land.own_contract: {function}: {reason}", owner="fold", stage="land")
+        )
+
+    if not holding:
+        refuse("current native owner is missing")
+    if path.is_file():
+        if any(compare.row_of(project, function, version).kind != "c" for version in holding):
+            refuse("an existing C owner must be exact in every holder")
+        source = path.read_text()
+        if source != land._git(project, "show", f"HEAD:src/{function}.c"):
+            refuse("owning source differs from its committed identity")
+        return source
+    if any(compare.row_of(project, function, version).kind != "asm" for version in holding):
+        refuse("published owning source is missing")
+    return None
+
+
+def plan(
+    project: Project, contents: dict[Path, str], text: str, function: str, versions: tuple[str, ...]
+) -> Contract | None:
+    """The default owning-definition rule shared by comparison and folding.
+
+    Only an actual owning definition can propose a changed published entry.
+    Unmarked inference continues through the existing exact fold reconciliation.
+    """
+    from unbake.layout import index, split
+
+    marked = [
+        old
+        for before in contents.values()
+        for start, end in redeclarations.spans(before)
+        if cdecl.declarations(old := before[start:end]).declared == {function}
+        and re.search(r"/\* unbake (?:published declaration|declaration evidence):[^*]*\*/\s*$", before[:start])
+    ]
+    if not marked:
+        return None
+    aliases = {**redeclarations.aliases(list(contents.values())), **redeclarations.aliases([text])}
+    definitions = definition_prototypes(text, aliases)
+    proposed = definitions.get(function)
+    if proposed is None:
+        raise Held(
+            cause_named(
+                "land.own_contract",
+                f"land.own_contract: {function}: owning definition unavailable; "
+                "the source must define the requested public owning function",
+                owner="fold",
+                stage="land",
+            )
+        )
+    if all(redeclarations.equivalent(old, proposed, aliases) for old in marked):
+        return None
+    if set(definitions) != {function}:
+        raise Held(
+            cause_named(
+                "land.own_contract",
+                f"land.own_contract: {function}: exactly the requested public owning function is required",
+                owner="fold",
+                stage="land",
+            )
+        )
+    holding = split.holding_versions(project, function)
+    if set(versions) != set(holding):
+        raise Held(
+            cause_named(
+                "land.own_contract",
+                f"land.own_contract: {function}: complete all-holder owning proof is required",
+                owner="fold",
+                stage="land",
+            )
+        )
+    manifest = set(index.load(project)["headers"])
+    generated = frozenset(
+        path
+        for path in contents
+        if any(
+            path.is_relative_to(root) and (path.relative_to(root).as_posix() in manifest or index.marked(path, root))
+            for root in project.include
+        )
+    )
+    previous = previous_source(project, function)
+    edits = _change(
+        contents, generated, text, function, aliases, holding, previous, measure_owned(project, function), proposed
+    )
+    from unbake.fold import imports
+    from unbake.layout.header_context import Headers
+
+    context = Headers({**contents, **{edit.path: edit.after for edit in edits}}, root=project.root)
+    edits = [replace(edit, after=imports.resolve(project, context, edit.after, edits=tuple(edits))) for edit in edits]
+    return Contract(tuple(edits), previous) if edits else None
+
+
+def require_complete(attempt: Attempt | None, text: str, function: str, versions: tuple[str, ...]) -> None:
+    """Folding a changed contract requires a real complete candidate comparison."""
+    if (
+        attempt is None
+        or attempt.function != function
+        or attempt.sha256 != hashlib.sha256(text.encode()).hexdigest()
+        or not attempt.exact
+        or not versions
+        or set(attempt.versions) != set(versions)
+        or any(row.get("exact") is not True or row.get("fault") for row in attempt.versions.values())
+    ):
+        raise Held(
+            cause_named(
+                "land.own_contract",
+                f"land.own_contract: {function}: complete exact comparison of the proposed owning source is required",
+                owner="fold",
+                stage="land",
+            )
+        )
+
+
+@contextmanager
+def view(project: Project, host: Host, file: Path, text: str) -> Iterator[Project]:
+    """Compare the proposed definition through the same private header plan folding uses."""
+    from unbake import scratch
+    from unbake.fold import source_views
+    from unbake.layout import split
+    from unbake.layout.header_context import Headers
+    from unbake.work import compare
+
+    function = compare.function_of(file)
+    headers = Headers.read(project)
+    contract = plan(project, headers.texts, text, function, split.holding_versions(project, function))
+    if contract is None:
+        yield project
+        return
+    proposed = Headers({**headers.texts, **{edit.path: edit.after for edit in contract.edits}}, root=headers.root)
+    with scratch.temporary(host, project, "fold", prefix="definition-compare-") as temporary:
+        roots = source_views.header_includes(project, proposed, Path(temporary))
+        yield replace(project, work_include=roots)
 
 
 def definition_prototypes(text: str, aliases: dict[str, str]) -> dict[str, str]:
