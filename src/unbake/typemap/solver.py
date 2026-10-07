@@ -268,45 +268,46 @@ def infer(
             return sorted(inventory.get(name, {}).get("versions", {}))
         return list(mapped.get(name, {}).get("versions", {}))
 
-    declared = Constraints()
-    aliases = {name: type_ for values in _alias_maps(seeds) for name, type_ in values.items()}
-    functions = _merge_records(seeds, "functions", declared)
-    globals_ = _merge_records(seeds, "globals", declared)
-    structs = _merge_records(seeds, "structs", declared)
-    arrays = _merge_records(seeds, "arrays", declared)
-    addresses = _addresses(facts)
-    # canonical() under the one solve-wide alias map, once per spelling: thousands of seeds repeat each type.
-    resolve = _Canonical().bound(aliases)
-    for seed in seeds:
-        for name, signature in seed["functions"].items():
-            for param, reg in zip(signature["params"], signature["registers"], strict=True):
-                if reg is not None:
-                    declared.use(f"param:{name}:{reg}", name)
-                    if not declarations.unknown(param["type"]):
-                        declared.seed(
-                            f"param:{name}:{reg}",
-                            resolve(param["type"]),
-                            signature["provenance"],
-                        )
-            type_ = resolve(signature["return"])
-            register = "f0" if type_ in ("float", "double") else "r2"
-            declared.use(f"result:{name}:{register}", name)
-            if type_ != "void" and not declarations.unknown(signature["return"]):
-                declared.seed(f"result:{name}:{register}", type_, signature["provenance"])
-        for name, record in seed["globals"].items():
-            type_ = resolve(record["type"])
-            declared.use("global:" + name)
-            if not declarations.unknown(record["type"]):
-                declared.seed("global:" + name, type_, record["provenance"])
-                declared.seed("address:" + name, type_ + " *", record["provenance"])
-    declared_returns = {
-        name: "f0" if resolve(record["return"]) in ("float", "double") else "r2"
-        for name, record in functions.items()
-        if record["return"] != "void"
-        and not declarations.unknown(record["return"])
-        and not record.get("declaration_conflict")
-    }
-    map_parts = _map_parts(facts, inventory) if cache is not None else []
+    with tui.task("Merging declared type facts"):
+        declared = Constraints()
+        aliases = {name: type_ for values in _alias_maps(seeds) for name, type_ in values.items()}
+        functions = _merge_records(seeds, "functions", declared)
+        globals_ = _merge_records(seeds, "globals", declared)
+        structs = _merge_records(seeds, "structs", declared)
+        arrays = _merge_records(seeds, "arrays", declared)
+        addresses = _addresses(facts)
+        # canonical() under the one solve-wide alias map, once per spelling: thousands of seeds repeat each type.
+        resolve = _Canonical().bound(aliases)
+        for seed in seeds:
+            for name, signature in seed["functions"].items():
+                for param, reg in zip(signature["params"], signature["registers"], strict=True):
+                    if reg is not None:
+                        declared.use(f"param:{name}:{reg}", name)
+                        if not declarations.unknown(param["type"]):
+                            declared.seed(
+                                f"param:{name}:{reg}",
+                                resolve(param["type"]),
+                                signature["provenance"],
+                            )
+                type_ = resolve(signature["return"])
+                register = "f0" if type_ in ("float", "double") else "r2"
+                declared.use(f"result:{name}:{register}", name)
+                if type_ != "void" and not declarations.unknown(signature["return"]):
+                    declared.seed(f"result:{name}:{register}", type_, signature["provenance"])
+            for name, record in seed["globals"].items():
+                type_ = resolve(record["type"])
+                declared.use("global:" + name)
+                if not declarations.unknown(record["type"]):
+                    declared.seed("global:" + name, type_, record["provenance"])
+                    declared.seed("address:" + name, type_ + " *", record["provenance"])
+        declared_returns = {
+            name: "f0" if resolve(record["return"]) in ("float", "double") else "r2"
+            for name, record in functions.items()
+            if record["return"] != "void"
+            and not declarations.unknown(record["return"])
+            and not record.get("declaration_conflict")
+        }
+        map_parts = _map_parts(facts, inventory) if cache is not None else []
     signatures = closure.cached(
         cache,
         "types-abi",
@@ -352,512 +353,528 @@ def infer(
     )
     with tui.task("Choosing one type for each value"):
         graph = closure.Closure(machine, declared)
-        graph.close()
-    neighbours = machine.neighbours
-    fields = machine.fields
-    shared_fields = machine.shared_fields
-    # Authored layouts override machine storage observations.
-    layout_index = {name: record for name, record in structs.items()}
-    for _name, record in structs.items():
-        for alias in record["aliases"]:
-            layout_index[alias] = record
-    for origin, offsets in shared_fields.items():
-        base_type = graph.resolved.get(origin, {}).get("type")
-        if not base_type or not base_type.endswith(" *"):
-            continue
-        base = base_type[:-2].removeprefix("struct ").removeprefix("union ")
-        record = layout_index.get(base)
-        if record is None or record.get("declaration_conflict"):
-            continue
-        for offset, accesses in offsets.items():
-            members = [f for f in record["fields"] if f["offset"] == offset]
-            if (
-                len(members) == 1
-                and not members[0].get("extent")
-                and all(a["width"] == members[0]["size"] and not a["partial"] for a in accesses)
-            ):
-                graph.seed(
-                    f"field:{origin}:{offset}",
-                    resolve(members[0]["type"]),
-                    record["provenance"],
-                )
-    graph.close()
-    # Storage types alone cannot select a C prototype with the wrong O32
-    # register convention (for example, float bits carried by leading a0).
-    for name, abi in signatures.items():
-        if name in functions:
-            continue
-        abi["machine_return_known"] = abi["return_known"]
-        abi["machine_arity_known"] = abi["arity_known"]
-        types = {reg: graph.resolved.get(f"param:{name}:{reg}", {}).get("type") for reg in abi["registers"]}
-        ordered = evidence.parameters(abi["registers"], types)
-        if ordered is None:
-            abi["arity_known"] = False
-        elif all(types[reg] is not None for reg in ordered):
-            expected = declarations.parameter_registers([{"type": types[reg]} for reg in ordered], aliases)
-            if expected != ordered:
-                abi["arity_known"] = False
-                abi["conflicts"].append("parameter ABI disagrees with observed scalar representations")
-        register = abi["return_register"]
-        returned_representation = graph.resolved.get(f"result:{name}:{register}", {}).get("type")
-        if (
-            returned_representation is not None
-            and not abi["void"]
-            and (register == "f0") != (returned_representation in ("float", "double"))
-        ):
-            abi["return_known"] = False
-            abi["conflicts"].append("return ABI disagrees with observed scalar representation")
-    inferred_structs: dict[str, Any] = {}
-    authored_structs = {
-        name
-        for seed in seeds
-        for name in seed.get(
-            "authored_structs",
-            {
-                name
-                for name, record in seed["structs"].items()
-                if record["provenance"].get("kind") not in ("proven", "published")
-            },
-        )
-    }
-    # Partial layouts describe only the observed prefix, never the full object extent.
-    # Inferred layouts are named after their first user; ordered origins break ties.
-    readable: dict[str, str] = {}
-    taken: dict[str, int] = {}
-    for origin in sorted(shared_fields):
-        users = sorted({access["function"] for accesses in shared_fields[origin].values() for access in accesses})
-        if len(users) >= 2:
-            base = "Shape_" + users[0]
-            taken[base] = taken.get(base, 0) + 1
-            readable[origin] = base if taken[base] == 1 else f"{base}_{taken[base]}"
-    for origin, offsets in shared_fields.items():
-        users = sorted({access["function"] for accesses in offsets.values() for access in accesses})
-        base_type = graph.resolved.get(origin, {}).get("type")
-        if len(users) < 2:
-            continue
-        name = readable[origin]
-
-        def unresolved(
-            reason: str,
-            name: str = name,
-            origin: str = origin,
-            users: list[str] = users,
-            offsets: dict[int, list[dict[str, Any]]] = offsets,
-        ) -> None:
-            inferred_structs[name] = {
-                "state": "unknown",
-                "type": None,
-                "partial": True,
-                "common_base": origin,
-                "users": users,
-                "size": None,
-                "declaration": None,
-                "reason": reason,
-                "observed_offsets": sorted(offsets),
-            }
-
-        # A storage layout is supported by dereferences of this common source,
-        # independently of scalar spellings in its value-flow component. Reuse
-        # an authored aggregate when present; never overwrite its declaration.
-        if base_type and base_type.endswith(" *"):
+        graph.close(policy)
+    with tui.task("Rendering solved type records"):
+        neighbours = machine.neighbours
+        fields = machine.fields
+        shared_fields = machine.shared_fields
+        # Authored layouts override machine storage observations.
+        layout_index = {name: record for name, record in structs.items()}
+        for _name, record in structs.items():
+            for alias in record["aliases"]:
+                layout_index[alias] = record
+        for origin, offsets in shared_fields.items():
+            base_type = graph.resolved.get(origin, {}).get("type")
+            if not base_type or not base_type.endswith(" *"):
+                continue
             base = base_type[:-2].removeprefix("struct ").removeprefix("union ")
-            if base in layout_index and (base != name or name in authored_structs):
+            record = layout_index.get(base)
+            if record is None or record.get("declaration_conflict"):
                 continue
-        authority = origin
-        while authority.startswith("field:"):
-            authority = authority.removeprefix("field:").rsplit(":", 1)[0]
-        if authority.startswith(("param:", "result:")):
-            owner = authority.split(":")[1]
-            abi = signatures.get(owner, {})
-            if not abi.get("arity_known") or not abi.get("return_known"):
-                unresolved("common-base owner ABI is incomplete or conflicting")
+            for offset, accesses in offsets.items():
+                members = [f for f in record["fields"] if f["offset"] == offset]
+                if (
+                    len(members) == 1
+                    and not members[0].get("extent")
+                    and all(a["width"] == members[0]["size"] and not a["partial"] for a in accesses)
+                ):
+                    graph.seed(
+                        f"field:{origin}:{offset}",
+                        resolve(members[0]["type"]),
+                        record["provenance"],
+                    )
+        graph.close(policy)
+        # Storage types alone cannot select a C prototype with the wrong O32
+        # register convention (for example, float bits carried by leading a0).
+        for name, abi in signatures.items():
+            if name in functions:
                 continue
-            if any(graph.resolved.get(f"param:{owner}:{reg}", {}).get("state") != "known" for reg in abi["registers"]):
-                unresolved("common-base owner parameter types are incomplete or conflicting")
-                continue
+            abi["machine_return_known"] = abi["return_known"]
+            abi["machine_arity_known"] = abi["arity_known"]
+            types = {reg: graph.resolved.get(f"param:{name}:{reg}", {}).get("type") for reg in abi["registers"]}
+            ordered = evidence.parameters(abi["registers"], types)
+            if ordered is None:
+                abi["arity_known"] = False
+            elif all(types[reg] is not None for reg in ordered):
+                expected = declarations.parameter_registers([{"type": types[reg]} for reg in ordered], aliases)
+                if expected != ordered:
+                    abi["arity_known"] = False
+                    abi["conflicts"].append("parameter ABI disagrees with observed scalar representations")
+            register = abi["return_register"]
+            returned_representation = graph.resolved.get(f"result:{name}:{register}", {}).get("type")
             if (
-                not abi["void"]
-                and graph.resolved.get(f"result:{owner}:{abi['return_register']}", {}).get("state") != "known"
+                returned_representation is not None
+                and not abi["void"]
+                and (register == "f0") != (returned_representation in ("float", "double"))
             ):
-                unresolved("common-base owner return type is incomplete or conflicting")
-                continue
-        elif authority.startswith("return:"):
-            _, caller, version, index, _reg = authority.split(":")
-            body = mapped[caller]["versions"][version]
-            callee = next(
-                (
-                    call["callee"]
-                    for call in body["calls"]
-                    if (call["instruction"] - body["address"]) // 4 == int(index)
-                ),
-                None,
-            )
-            if not signatures.get(str(callee), {}).get("arity_known") or not signatures.get(str(callee), {}).get(
-                "return_known"
-            ):
-                unresolved("common-base callee ABI is incomplete or conflicting")
-                continue
-        elif not authority.startswith(("address:", "global:")):
-            unresolved("common base is not a global or a known-signature parameter/return")
-            continue
-        inferred_structs[name] = layouts.observed(name, origin, offsets, graph.resolved, users)
-        inferred_structs[name]["base_nodes"] = sorted(
-            {origin} | {node for node in fields if machine.bases[node] == origin}
-        )
-    shape_components: dict[int, list[dict[str, Any]]] = defaultdict(list)
-    for record in inferred_structs.values():
-        if record["state"] == "known" and graph.resolved.get(record["common_base"], {}).get("type") == "void *":
-            shape_components[id(graph.resolved[record["common_base"]])].append(record)
-    for records in shape_components.values():
-        # Equality of value types does not establish object identity. Multiple
-        # common sources in one type component cannot pick one shared layout.
-        if len(records) == 1:
-            record = records[0]
-            graph.seed(
-                record["common_base"], record["type"] + " *", {"kind": "machine", "common_base": record["common_base"]}
-            )
-    conflicts = graph.close()
-    # Closure owns the surviving evidence. Discarded lower-confidence seeds
-    # are no longer needed during rendering/publication.
-    graph.seeds.clear()
-    conflicts.extend(
-        {"key": "types.conflict:" + fact["entity"], **fact}
-        for fact in declared.facts
-        if fact["kind"] == "declaration_conflict"
-    )
-    component_names: dict[int, str] = {}
-    components: dict[str, dict[str, Any]] = {}
-    nodes: dict[str, dict[str, Any]] = {}
-    for node, state in sorted(graph.resolved.items()):
-        identity = id(state)
-        component = component_names.setdefault(identity, node)
-        components.setdefault(component, state)
-        nodes[node] = {"state": state["state"], "type": state["type"], "component": component}
-
-    def view(node: str, fallback: dict[str, Any]) -> dict[str, Any]:
-        state = graph.resolved.get(node)
-        if state is None:
-            return fallback
-        return {
-            **nodes[node],
-            "provenance": [{"component": nodes[node]["component"]}],
-            "users": sorted(graph.users.get(node, ())),
-            "alternatives": state["alternatives"],
-        }
-
-    unknown = [row for seed in seeds for row in seed.get("unknown", [])]
-    output_functions: dict[str, Any] = {}
-    for name in sorted(set(inventory) | set(functions)):
-        signature = functions.get(name)
-        params = []
-        returned: dict[str, Any]
-        if signature is not None:
-            for param, reg in zip(signature["params"], signature["registers"], strict=True):
-                node = f"param:{name}:{reg}"
-                state = view(
-                    node,
-                    {"state": "known", "type": param["type"], "provenance": [signature["provenance"]], "users": [name]},
-                )
-                params.append({"name": param["name"], "register": reg, "node": node, **state})
-            register = "f0" if resolve(signature["return"]) in ("float", "double") else "r2"
-            returned = (
-                {"state": "known", "type": "void", "provenance": [signature["provenance"]], "users": [name]}
-                if signature["return"] == "void"
-                else view(f"result:{name}:{register}", {})
-            )
-            known = (
-                signature["arity_known"]
-                and not signature.get("declaration_conflict")
-                and returned["state"] == "known"
-                and all(p["state"] == "known" for p in params)
-            )
-        else:
-            abi = signatures[name]
-            observed = abi["registers"]
-            types = {reg: graph.resolved.get(f"param:{name}:{reg}", {}).get("type") for reg in observed}
-            ordered = evidence.parameters(observed, types)
-            for reg in ordered if ordered is not None else observed:
-                node = f"param:{name}:{reg}"
-                params.append(
-                    {
-                        "name": f"arg{len(params)}",
-                        "register": reg,
-                        "node": node,
-                        **view(node, {"state": "unknown", "type": None}),
-                    }
-                )
-            returned = (
-                {"state": "known", "type": "void", "provenance": [], "users": [name]}
-                if abi["void"]
-                else view(
-                    f"result:{name}:{abi['return_register']}",
-                    {"state": "unknown", "type": None, "provenance": [], "users": [name]},
-                )
-            )
-            if returned.get("type") and returned["type"].rstrip().endswith("]"):
-                # A declaration of array storage describes the object, not a C
-                # scalar return value. Keep the constraint, but do not publish
-                # an impossible array-return prototype through value flow.
-                returned = {**returned, "state": "unknown", "type": None, "reason": "array storage is not a C return"}
-            known = (
-                abi["arity_known"]
-                and not abi["conflicts"]
-                and abi["return_known"]
-                and ordered is not None
-                and returned["state"] == "known"
-                and all(p["state"] == "known" for p in params)
-            )
-            if returned.get("type") in ("float", "double") and abi["return_register"] != "f0":
-                known = False
-            for reason in abi["conflicts"]:
-                conflicts.append({"key": f"types.conflict:abi:{name}", "reason": reason, "provenance": abi})
-        prototype = (
-            signature["prototype"]
-            if known and signature is not None
-            else (
-                declarations.declarator(
-                    returned["type"],
+                abi["return_known"] = False
+                abi["conflicts"].append("return ABI disagrees with observed scalar representation")
+        inferred_structs: dict[str, Any] = {}
+        authored_structs = {
+            name
+            for seed in seeds
+            for name in seed.get(
+                "authored_structs",
+                {
                     name
-                    + "("
-                    + (", ".join(declarations.declarator(p["type"], p["name"]) for p in params) or "void")
-                    + ")",
-                )
-                + ";"
-                if known
-                else None
+                    for name, record in seed["structs"].items()
+                    if record["provenance"].get("kind") not in ("proven", "published")
+                },
             )
+        }
+        # Partial layouts describe only the observed prefix, never the full object extent.
+        # Inferred layouts are named after their first user; ordered origins break ties.
+        readable: dict[str, str] = {}
+        taken: dict[str, int] = {}
+        for origin in sorted(shared_fields):
+            users = sorted({access["function"] for accesses in shared_fields[origin].values() for access in accesses})
+            if len(users) >= 2:
+                base = "Shape_" + users[0]
+                taken[base] = taken.get(base, 0) + 1
+                readable[origin] = base if taken[base] == 1 else f"{base}_{taken[base]}"
+        for origin, offsets in shared_fields.items():
+            users = sorted({access["function"] for accesses in offsets.values() for access in accesses})
+            base_type = graph.resolved.get(origin, {}).get("type")
+            if len(users) < 2:
+                continue
+            name = readable[origin]
+
+            def unresolved(
+                reason: str,
+                name: str = name,
+                origin: str = origin,
+                users: list[str] = users,
+                offsets: dict[int, list[dict[str, Any]]] = offsets,
+            ) -> None:
+                inferred_structs[name] = {
+                    "state": "unknown",
+                    "type": None,
+                    "partial": True,
+                    "common_base": origin,
+                    "users": users,
+                    "size": None,
+                    "declaration": None,
+                    "reason": reason,
+                    "observed_offsets": sorted(offsets),
+                }
+
+            # A storage layout is supported by dereferences of this common source,
+            # independently of scalar spellings in its value-flow component. Reuse
+            # an authored aggregate when present; never overwrite its declaration.
+            if base_type and base_type.endswith(" *"):
+                base = base_type[:-2].removeprefix("struct ").removeprefix("union ")
+                if base in layout_index and (base != name or name in authored_structs):
+                    continue
+            authority = origin
+            while authority.startswith("field:"):
+                authority = authority.removeprefix("field:").rsplit(":", 1)[0]
+            if authority.startswith(("param:", "result:")):
+                owner = authority.split(":")[1]
+                abi = signatures.get(owner, {})
+                if not abi.get("arity_known") or not abi.get("return_known"):
+                    unresolved("common-base owner ABI is incomplete or conflicting")
+                    continue
+                if any(
+                    graph.resolved.get(f"param:{owner}:{reg}", {}).get("state") != "known" for reg in abi["registers"]
+                ):
+                    unresolved("common-base owner parameter types are incomplete or conflicting")
+                    continue
+                if (
+                    not abi["void"]
+                    and graph.resolved.get(f"result:{owner}:{abi['return_register']}", {}).get("state") != "known"
+                ):
+                    unresolved("common-base owner return type is incomplete or conflicting")
+                    continue
+            elif authority.startswith("return:"):
+                _, caller, version, index, _reg = authority.split(":")
+                body = mapped[caller]["versions"][version]
+                callee = next(
+                    (
+                        call["callee"]
+                        for call in body["calls"]
+                        if (call["instruction"] - body["address"]) // 4 == int(index)
+                    ),
+                    None,
+                )
+                if not signatures.get(str(callee), {}).get("arity_known") or not signatures.get(str(callee), {}).get(
+                    "return_known"
+                ):
+                    unresolved("common-base callee ABI is incomplete or conflicting")
+                    continue
+            elif not authority.startswith(("address:", "global:")):
+                unresolved("common base is not a global or a known-signature parameter/return")
+                continue
+            inferred_structs[name] = layouts.observed(name, origin, offsets, graph.resolved, users)
+            inferred_structs[name]["base_nodes"] = sorted(
+                {origin} | {node for node in fields if machine.bases[node] == origin}
+            )
+        shape_components: dict[int, list[dict[str, Any]]] = defaultdict(list)
+        for record in inferred_structs.values():
+            if record["state"] == "known" and graph.resolved.get(record["common_base"], {}).get("type") == "void *":
+                shape_components[id(graph.resolved[record["common_base"]])].append(record)
+        for records in shape_components.values():
+            # Equality of value types does not establish object identity. Multiple
+            # common sources in one type component cannot pick one shared layout.
+            if len(records) == 1:
+                record = records[0]
+                graph.seed(
+                    record["common_base"],
+                    record["type"] + " *",
+                    {"kind": "machine", "common_base": record["common_base"]},
+                )
+        conflicts = graph.close(policy)
+        # Closure owns the surviving evidence. Discarded lower-confidence seeds
+        # are no longer needed during rendering/publication.
+        graph.seeds.clear()
+        conflicts.extend(
+            {"key": "types.conflict:" + fact["entity"], **fact}
+            for fact in declared.facts
+            if fact["kind"] == "declaration_conflict"
         )
-        output_functions[name] = {
-            "state": "known"
-            if known
-            else "conflict"
-            if (signature and signature.get("declaration_conflict"))
-            or any(p["state"] == "conflict" for p in params)
-            or returned["state"] == "conflict"
-            or (not signature and signatures[name]["conflicts"])
-            else "unknown",
-            "type": prototype,
-            "return": returned,
-            "params": params,
-            "arity": len(params)
-            if (signature and signature["arity_known"])
-            or (not signature and signatures[name]["arity_known"] and ordered is not None)
-            else None,
-            "abi": signatures.get(name),
-            "versions": versions(name),
-            "provenance": [signature["provenance"]] if signature else [],
-            "prototype": prototype,
-        }
-        if signature is None:
-            # A complete register signature need not have a unique C spelling:
-            # leading floating words in GPRs can belong to by-value aggregates.
-            # Preserve slot semantics; never invent aggregate boundaries.
-            slot_known = (
-                abi["machine_arity_known"]
-                and abi["machine_return_known"]
-                and ordered is not None
-                and returned["state"] == "known"
-                and all(p["state"] == "known" for p in params)
-                and not abi["missing"]
-                and all(
-                    reason == "parameter ABI disagrees with observed scalar representations"
-                    for reason in abi["conflicts"]
+        component_names: dict[int, str] = {}
+        components: dict[str, dict[str, Any]] = {}
+        nodes: dict[str, dict[str, Any]] = {}
+        for node, state in sorted(graph.resolved.items()):
+            identity = id(state)
+            component = component_names.setdefault(identity, node)
+            components.setdefault(component, state)
+            nodes[node] = {"state": state["state"], "type": state["type"], "component": component}
+
+        def view(node: str, fallback: dict[str, Any]) -> dict[str, Any]:
+            state = graph.resolved.get(node)
+            if state is None:
+                return fallback
+            return {
+                **nodes[node],
+                "provenance": [{"component": nodes[node]["component"]}],
+                "users": sorted(graph.users.get(node, ())),
+                "alternatives": state["alternatives"],
+            }
+
+        unknown = [row for seed in seeds for row in seed.get("unknown", [])]
+        output_functions: dict[str, Any] = {}
+        for name in sorted(set(inventory) | set(functions)):
+            signature = functions.get(name)
+            params = []
+            returned: dict[str, Any]
+            if signature is not None:
+                for param, reg in zip(signature["params"], signature["registers"], strict=True):
+                    node = f"param:{name}:{reg}"
+                    state = view(
+                        node,
+                        {
+                            "state": "known",
+                            "type": param["type"],
+                            "provenance": [signature["provenance"]],
+                            "users": [name],
+                        },
+                    )
+                    params.append({"name": param["name"], "register": reg, "node": node, **state})
+                register = "f0" if resolve(signature["return"]) in ("float", "double") else "r2"
+                returned = (
+                    {"state": "known", "type": "void", "provenance": [signature["provenance"]], "users": [name]}
+                    if signature["return"] == "void"
+                    else view(f"result:{name}:{register}", {})
+                )
+                known = (
+                    signature["arity_known"]
+                    and not signature.get("declaration_conflict")
+                    and returned["state"] == "known"
+                    and all(p["state"] == "known" for p in params)
+                )
+            else:
+                abi = signatures[name]
+                observed = abi["registers"]
+                types = {reg: graph.resolved.get(f"param:{name}:{reg}", {}).get("type") for reg in observed}
+                ordered = evidence.parameters(observed, types)
+                for reg in ordered if ordered is not None else observed:
+                    node = f"param:{name}:{reg}"
+                    params.append(
+                        {
+                            "name": f"arg{len(params)}",
+                            "register": reg,
+                            "node": node,
+                            **view(node, {"state": "unknown", "type": None}),
+                        }
+                    )
+                returned = (
+                    {"state": "known", "type": "void", "provenance": [], "users": [name]}
+                    if abi["void"]
+                    else view(
+                        f"result:{name}:{abi['return_register']}",
+                        {"state": "unknown", "type": None, "provenance": [], "users": [name]},
+                    )
+                )
+                if returned.get("type") and returned["type"].rstrip().endswith("]"):
+                    # A declaration of array storage describes the object, not a C
+                    # scalar return value. Keep the constraint, but do not publish
+                    # an impossible array-return prototype through value flow.
+                    returned = {
+                        **returned,
+                        "state": "unknown",
+                        "type": None,
+                        "reason": "array storage is not a C return",
+                    }
+                known = (
+                    abi["arity_known"]
+                    and not abi["conflicts"]
+                    and abi["return_known"]
+                    and ordered is not None
+                    and returned["state"] == "known"
+                    and all(p["state"] == "known" for p in params)
+                )
+                if returned.get("type") in ("float", "double") and abi["return_register"] != "f0":
+                    known = False
+                for reason in abi["conflicts"]:
+                    conflicts.append({"key": f"types.conflict:abi:{name}", "reason": reason, "provenance": abi})
+            prototype = (
+                signature["prototype"]
+                if known and signature is not None
+                else (
+                    declarations.declarator(
+                        returned["type"],
+                        name
+                        + "("
+                        + (", ".join(declarations.declarator(p["type"], p["name"]) for p in params) or "void")
+                        + ")",
+                    )
+                    + ";"
+                    if known
+                    else None
                 )
             )
-            output_functions[name]["machine_signature"] = {
-                "state": "known" if slot_known else "unknown",
-                "params": [{"register": p["register"], "type": p["type"]} for p in params],
-                "return": {"register": abi["return_register"], "type": returned.get("type")},
+            output_functions[name] = {
+                "state": "known"
+                if known
+                else "conflict"
+                if (signature and signature.get("declaration_conflict"))
+                or any(p["state"] == "conflict" for p in params)
+                or returned["state"] == "conflict"
+                or (not signature and signatures[name]["conflicts"])
+                else "unknown",
+                "type": prototype,
+                "return": returned,
+                "params": params,
+                "arity": len(params)
+                if (signature and signature["arity_known"])
+                or (not signature and signatures[name]["arity_known"] and ordered is not None)
+                else None,
+                "abi": signatures.get(name),
+                "versions": versions(name),
+                "provenance": [signature["provenance"]] if signature else [],
+                "prototype": prototype,
             }
-        if not known:
-            output_functions[name]["abi_declaration"] = (
-                {
-                    "prototype": signature["prototype"],
-                    "reasons": ["types.abi.declared: reuse existing C; propagated semantic conflicts remain named"],
+            if signature is None:
+                # A complete register signature need not have a unique C spelling:
+                # leading floating words in GPRs can belong to by-value aggregates.
+                # Preserve slot semantics; never invent aggregate boundaries.
+                slot_known = (
+                    abi["machine_arity_known"]
+                    and abi["machine_return_known"]
+                    and ordered is not None
+                    and returned["state"] == "known"
+                    and all(p["state"] == "known" for p in params)
+                    and not abi["missing"]
+                    and all(
+                        reason == "parameter ABI disagrees with observed scalar representations"
+                        for reason in abi["conflicts"]
+                    )
+                )
+                output_functions[name]["machine_signature"] = {
+                    "state": "known" if slot_known else "unknown",
+                    "params": [{"register": p["register"], "type": p["type"]} for p in params],
+                    "return": {"register": abi["return_register"], "type": returned.get("type")},
                 }
-                if signature is not None and not signature.get("declaration_conflict")
-                else abi_declarations.prototype(name, output_functions[name], aliases)
-            )
-            carrier = output_functions[name]["abi_declaration"]
-            if not carrier.get("prototype") and not signature:
-                variants = {}
-                abi = signatures[name]
-                selected_returns = abi.get("defined_returns", []) if len(abi.get("used_returns", [])) > 1 else []
-                for reg in selected_returns:
-                    selected = {
-                        **output_functions[name],
-                        "abi": {
-                            **signatures[name],
-                            "used_returns": [reg],
-                            "return_register": reg,
-                            "return_known": True,
-                            "machine_return_known": True,
-                        },
-                        "return": view(f"result:{name}:{reg}", {"state": "unknown", "type": None}),
-                    }
-                    variant = abi_declarations.prototype(name, selected, aliases)
-                    if variant["prototype"]:
-                        variant["reasons"].append(
-                            f"types.abi.caller_contract: global return conflict; {reg} is proven at every callee exit"
-                        )
-                        variants[reg] = variant
-                if any(not uses for uses in abi.get("caller_return_uses", {}).values()):
-                    selected = {
-                        **output_functions[name],
-                        "abi": {**abi, "used_returns": [], "caller_return_uses": {}},
-                        "return": {"state": "unknown", "type": None},
-                    }
-                    variant = abi_declarations.prototype(name, selected, aliases)
-                    if variant["prototype"]:
-                        variant["reasons"].append(
-                            "types.abi.caller_contract: mapped caller does not consume the unresolved return"
-                        )
-                        variants["unused"] = variant
-                carrier["variants"] = variants
-            unknown.append(
-                f"function:{name}: signature incomplete or conflicting; arity={output_functions[name]['arity']}"
-            )
-    output_globals = {
-        name: {
-            **view("global:" + name, {"state": "unknown", "type": None, "provenance": [], "users": []}),
-            "versions": facts["globals"].get(name, {}).get("versions", {}),
-            "declaration": globals_.get(name, {}).get("declaration")
-            or (
-                "extern " + declarations.declarator(graph.resolved["global:" + name]["type"], name) + ";"
-                if ":" not in name and graph.resolved.get("global:" + name, {}).get("state") == "known"
-                else None
-            ),
-        }
-        for name in sorted(set(facts["globals"]) | set(globals_))
-    }
-    # A flow component can merge a published cell with a published pointer or
-    # array view of its address. That disagreement belongs to the constraints;
-    # it cannot remove the cell's own C storage contract from generated headers.
-    for name, record in globals_.items():
-        if record["provenance"].get("kind") in ("published", "proven"):
-            output_globals[name].update(
-                state="conflict" if record.get("declaration_conflict") else "known",
-                type=resolve(record["type"]),
-                declaration=record["declaration"],
-            )
-    output_structs = dict(inferred_structs)
-    unknown.extend(
-        f"struct:{name}: {row.get('reason', 'overlapping or misaligned observed fields')}"
-        for name, row in inferred_structs.items()
-        if row["state"] != "known"
-    )
-    type_users: dict[str, set[str]] = defaultdict(set)
-    visited_states: set[int] = set()
-    for state in graph.resolved.values():
-        if state["type"] is not None and id(state) not in visited_states:
-            visited_states.add(id(state))
-            type_users[state["type"]].update(state["users"])
-    for name, record in structs.items():
-        # Matched sources include generated headers. Their parsed declarations
-        # do not supersede current map-derived bounds and source bindings.
-        if name in inferred_structs and name not in authored_structs:
-            observed = output_structs[name]
-            # Retain proven member names/types as well: storage representations
-            # cannot rewrite a declaration used by already matched C.
-            members = [field for field in record["fields"] if not field["name"].startswith("padding_")]
-            output_structs[name] = {
-                **observed,
-                "state": "conflict" if record.get("declaration_conflict") else "known",
-                "type": record["type"],
-                "declaration": record["declaration"],
-                "aliases": record.get("aliases", []),
-                "typedefs": record.get("typedefs", {}),
-                "fields": [
+            if not known:
+                output_functions[name]["abi_declaration"] = (
                     {
-                        **field,
-                        "widths": [field["size"]],
-                        "state": "unknown" if field.get("extent") else "known",
-                        "type": None if field.get("extent") else field["type"],
-                        "reason": "proven array storage" if field.get("extent") else None,
+                        "prototype": signature["prototype"],
+                        "reasons": ["types.abi.declared: reuse existing C; propagated semantic conflicts remain named"],
                     }
-                    for field in members
-                ],
-                "minimum_size": max((field["offset"] + field["size"] for field in members), default=0),
-                "generated": True,
+                    if signature is not None and not signature.get("declaration_conflict")
+                    else abi_declarations.prototype(name, output_functions[name], aliases)
+                )
+                carrier = output_functions[name]["abi_declaration"]
+                if not carrier.get("prototype") and not signature:
+                    variants = {}
+                    abi = signatures[name]
+                    selected_returns = abi.get("defined_returns", []) if len(abi.get("used_returns", [])) > 1 else []
+                    for reg in selected_returns:
+                        selected = {
+                            **output_functions[name],
+                            "abi": {
+                                **signatures[name],
+                                "used_returns": [reg],
+                                "return_register": reg,
+                                "return_known": True,
+                                "machine_return_known": True,
+                            },
+                            "return": view(f"result:{name}:{reg}", {"state": "unknown", "type": None}),
+                        }
+                        variant = abi_declarations.prototype(name, selected, aliases)
+                        if variant["prototype"]:
+                            variant["reasons"].append(
+                                f"types.abi.caller_contract: global return conflict; "
+                                f"{reg} is proven at every callee exit"
+                            )
+                            variants[reg] = variant
+                    if any(not uses for uses in abi.get("caller_return_uses", {}).values()):
+                        selected = {
+                            **output_functions[name],
+                            "abi": {**abi, "used_returns": [], "caller_return_uses": {}},
+                            "return": {"state": "unknown", "type": None},
+                        }
+                        variant = abi_declarations.prototype(name, selected, aliases)
+                        if variant["prototype"]:
+                            variant["reasons"].append(
+                                "types.abi.caller_contract: mapped caller does not consume the unresolved return"
+                            )
+                            variants["unused"] = variant
+                    carrier["variants"] = variants
+                unknown.append(
+                    f"function:{name}: signature incomplete or conflicting; arity={output_functions[name]['arity']}"
+                )
+        output_globals = {
+            name: {
+                **view("global:" + name, {"state": "unknown", "type": None, "provenance": [], "users": []}),
+                "versions": facts["globals"].get(name, {}).get("versions", {}),
+                "declaration": globals_.get(name, {}).get("declaration")
+                or (
+                    "extern " + declarations.declarator(graph.resolved["global:" + name]["type"], name) + ";"
+                    if ":" not in name and graph.resolved.get("global:" + name, {}).get("state") == "known"
+                    else None
+                ),
             }
-            continue
-        users = sorted(type_users[record["type"]] | type_users[record["type"] + " *"])
-        output_structs[name] = {
-            **record,
-            "state": "conflict" if record.get("declaration_conflict") else "known",
-            "generated": name not in authored_structs,
-            "users": users,
+            for name in sorted(set(facts["globals"]) | set(globals_))
         }
-    for name, record in output_globals.items():
-        if record["state"] != "known":
-            unknown.append(f"global:{name}: {record['state']}")
-    output_arrays = {
-        name: {
-            **row,
-            "state": "conflict"
-            if row.get("declaration_conflict")
-            else "known"
-            if row["extent"] is not None
-            else "unknown",
-        }
-        for name, row in arrays.items()
-    }
-    for key, candidate in machine.arrays.items():
-        if key not in arrays:
-            output_arrays[key] = candidate
-    for name, candidate in output_arrays.items():
-        if name in arrays:
-            continue
-        element_state = graph.resolved.get("element:" + name, {})
-        candidate["observed_scalar_types"] = candidate["element_types"]
-        if element_state.get("state") in ("known", "conflict"):
-            candidate["element_types"] = element_state["alternatives"]
-        if len(candidate["strides"]) == 1 and len(candidate["element_types"]) == 1:
-            type_ = candidate["element_types"][0]
-            width = (
-                4
-                if type_.endswith(" *")
-                else {
-                    "signed char": 1,
-                    "unsigned char": 1,
-                    "short": 2,
-                    "unsigned short": 2,
-                    "int": 4,
-                    "unsigned int": 4,
-                    "float": 4,
-                    "double": 8,
-                }.get(type_)
-            )
-            if candidate["strides"][0] == width:
-                candidate.update(state="known", type=type_, partial=True)
-                if name in output_globals and name not in globals_:
-                    output_globals[name].update(state="known", type=type_ + " []", declaration=None)
-        if len(candidate["strides"]) > 1 or len(candidate["element_types"]) > 1:
-            candidate["state"] = "conflict"
-            conflicts.append(
-                {
-                    "key": f"types.conflict:array:{name}",
-                    "strides": candidate["strides"],
-                    "alternatives": candidate["element_types"],
+        # A flow component can merge a published cell with a published pointer or
+        # array view of its address. That disagreement belongs to the constraints;
+        # it cannot remove the cell's own C storage contract from generated headers.
+        for name, record in globals_.items():
+            if record["provenance"].get("kind") in ("published", "proven"):
+                output_globals[name].update(
+                    state="conflict" if record.get("declaration_conflict") else "known",
+                    type=resolve(record["type"]),
+                    declaration=record["declaration"],
+                )
+        output_structs = dict(inferred_structs)
+        unknown.extend(
+            f"struct:{name}: {row.get('reason', 'overlapping or misaligned observed fields')}"
+            for name, row in inferred_structs.items()
+            if row["state"] != "known"
+        )
+        type_users: dict[str, set[str]] = defaultdict(set)
+        visited_states: set[int] = set()
+        for state in graph.resolved.values():
+            if state["type"] is not None and id(state) not in visited_states:
+                visited_states.add(id(state))
+                type_users[state["type"]].update(state["users"])
+        for name, record in structs.items():
+            # Matched sources include generated headers. Their parsed declarations
+            # do not supersede current map-derived bounds and source bindings.
+            if name in inferred_structs and name not in authored_structs:
+                observed = output_structs[name]
+                # Retain proven member names/types as well: storage representations
+                # cannot rewrite a declaration used by already matched C.
+                members = [field for field in record["fields"] if not field["name"].startswith("padding_")]
+                output_structs[name] = {
+                    **observed,
+                    "state": "conflict" if record.get("declaration_conflict") else "known",
+                    "type": record["type"],
+                    "declaration": record["declaration"],
+                    "aliases": record.get("aliases", []),
+                    "typedefs": record.get("typedefs", {}),
+                    "fields": [
+                        {
+                            **field,
+                            "widths": [field["size"]],
+                            "state": "unknown" if field.get("extent") else "known",
+                            "type": None if field.get("extent") else field["type"],
+                            "reason": "proven array storage" if field.get("extent") else None,
+                        }
+                        for field in members
+                    ],
+                    "minimum_size": max((field["offset"] + field["size"] for field in members), default=0),
+                    "generated": True,
                 }
-            )
-    unknown.extend(
-        f"array:{name}: element/extent unresolved" for name, row in output_arrays.items() if row["state"] != "known"
-    )
-    dependencies = {name: sorted(neighbours.get(name, ())) for name in inventory}
-    return {
-        "typedefs": _typedefs(seeds, aliases),
-        "functions": output_functions,
-        "globals": output_globals,
-        "structs": output_structs,
-        "arrays": output_arrays,
-        "constraints": [*shard, *declared.facts, *machine.constraints],
-        "nodes": nodes,
-        "components": components,
-        "conflicts": conflicts,
-        "unknown": sorted(set(unknown)),
-        "dependencies": dependencies,
-    }
+                continue
+            users = sorted(type_users[record["type"]] | type_users[record["type"] + " *"])
+            output_structs[name] = {
+                **record,
+                "state": "conflict" if record.get("declaration_conflict") else "known",
+                "generated": name not in authored_structs,
+                "users": users,
+            }
+        for name, record in output_globals.items():
+            if record["state"] != "known":
+                unknown.append(f"global:{name}: {record['state']}")
+        output_arrays = {
+            name: {
+                **row,
+                "state": "conflict"
+                if row.get("declaration_conflict")
+                else "known"
+                if row["extent"] is not None
+                else "unknown",
+            }
+            for name, row in arrays.items()
+        }
+        for key, candidate in machine.arrays.items():
+            if key not in arrays:
+                output_arrays[key] = candidate
+        for name, candidate in output_arrays.items():
+            if name in arrays:
+                continue
+            element_state = graph.resolved.get("element:" + name, {})
+            candidate["observed_scalar_types"] = candidate["element_types"]
+            if element_state.get("state") in ("known", "conflict"):
+                candidate["element_types"] = element_state["alternatives"]
+            if len(candidate["strides"]) == 1 and len(candidate["element_types"]) == 1:
+                type_ = candidate["element_types"][0]
+                width = (
+                    4
+                    if type_.endswith(" *")
+                    else {
+                        "signed char": 1,
+                        "unsigned char": 1,
+                        "short": 2,
+                        "unsigned short": 2,
+                        "int": 4,
+                        "unsigned int": 4,
+                        "float": 4,
+                        "double": 8,
+                    }.get(type_)
+                )
+                if candidate["strides"][0] == width:
+                    candidate.update(state="known", type=type_, partial=True)
+                    if name in output_globals and name not in globals_:
+                        output_globals[name].update(state="known", type=type_ + " []", declaration=None)
+            if len(candidate["strides"]) > 1 or len(candidate["element_types"]) > 1:
+                candidate["state"] = "conflict"
+                conflicts.append(
+                    {
+                        "key": f"types.conflict:array:{name}",
+                        "strides": candidate["strides"],
+                        "alternatives": candidate["element_types"],
+                    }
+                )
+        unknown.extend(
+            f"array:{name}: element/extent unresolved" for name, row in output_arrays.items() if row["state"] != "known"
+        )
+        dependencies = {name: sorted(neighbours.get(name, ())) for name in inventory}
+        return {
+            "typedefs": _typedefs(seeds, aliases),
+            "functions": output_functions,
+            "globals": output_globals,
+            "structs": output_structs,
+            "arrays": output_arrays,
+            "constraints": [*shard, *declared.facts, *machine.constraints],
+            "nodes": nodes,
+            "components": components,
+            "conflicts": conflicts,
+            "unknown": sorted(set(unknown)),
+            "dependencies": dependencies,
+        }
 
 
 def _map_parts(facts: dict[str, Any], inventory: Any) -> list[str]:
@@ -980,43 +997,45 @@ def readiness(project: Project, host: Host | None) -> Readiness:
     from unbake.typemap import facts as source_facts
     from unbake.typemap.abi_facts import refine
 
-    paths = {project.root / "config.toml", project.root / "layout.toml", project.build / "map/facts.json"}
-    paths.update(path for root in (*project.include, project.src) for path in root.rglob("*") if path.is_file())
-    paths.update(
-        path
-        for version in project.versions
-        for path in (project.version(version).split, project.version(version).symbols)
-    )
-    paths.update(path for path in (project.build / "types/abi.json",) if path.is_file())
-    paths.update(path for compiler in project.compilers.values() for path in (compiler.sha256, compiler.cc))
-    # Map/ABI shards and evidence inputs count; the solve marker is checked separately.
-    receipt = marker(project)
-    paths.update(
-        path
-        for directory in (project.build / "map", project.build / "types")
-        for path in directory.glob("*")
-        if path.is_file() and path != receipt
-    )
-    policy = (
-        None
-        if host is None
-        else tuple(
-            (field, str(getattr(host, field)), inputs.digest(Path(getattr(host, field)))) for field in ("cpp", "m2c")
+    with tui.task("Checking type inputs"):
+        paths = {project.root / "config.toml", project.root / "layout.toml", project.build / "map/facts.json"}
+        paths.update(path for root in (*project.include, project.src) for path in root.rglob("*") if path.is_file())
+        paths.update(
+            path
+            for version in project.versions
+            for path in (project.version(version).split, project.version(version).symbols)
         )
-    )
-    map_inputs = tuple(sorted(storage.map_inputs(project).items()))
-    snapshot = (
-        tuple((str(path), inputs.signature(path) if path.is_file() else None) for path in sorted(paths)),
-        map_inputs,
-        policy,
-    )
+        paths.update(path for path in (project.build / "types/abi.json",) if path.is_file())
+        paths.update(path for compiler in project.compilers.values() for path in (compiler.sha256, compiler.cc))
+        # Map/ABI shards and evidence inputs count; the solve marker is checked separately.
+        receipt = marker(project)
+        paths.update(
+            path
+            for directory in (project.build / "map", project.build / "types")
+            for path in directory.glob("*")
+            if path.is_file() and path != receipt
+        )
+        policy = (
+            None
+            if host is None
+            else tuple(
+                (field, str(getattr(host, field)), inputs.digest(Path(getattr(host, field))))
+                for field in ("cpp", "m2c")
+            )
+        )
+        map_inputs = tuple(sorted(storage.map_inputs(project).items()))
+        snapshot = (
+            tuple((str(path), inputs.signature(path) if path.is_file() else None) for path in sorted(paths)),
+            map_inputs,
+            policy,
+        )
 
-    def current() -> Readiness:
-        facts = refine(project, refresh_map(project, host))
-        source_keys = source_facts.published_keys(project, host)
-        return Readiness(_types_key(project, host, facts, source_keys), facts, source_keys)
+        def current() -> Readiness:
+            facts = refine(project, refresh_map(project, host), host)
+            source_keys = source_facts.published_keys(project, host)
+            return Readiness(_types_key(project, host, facts, source_keys), facts, source_keys)
 
-    return content_cache.memo("types.readiness", (str(project.root), SCHEMA, snapshot), current, keep=2)
+        return content_cache.memo("types.readiness", (str(project.root), SCHEMA, snapshot), current, keep=2)
 
 
 def input_key(project: Project, host: Host | None) -> str:
@@ -1097,14 +1116,17 @@ def _solve(project: Project, policy: Host | None) -> dict[str, Any]:
     ):
         tui.line("The type inputs did not change, so the last solution stands")
         return {"changes": {}, "reused": True}
-    previous = types_db.summary(database) if database.is_file() else {}
+    with tui.task("Reading the previous type summary"):
+        previous = types_db.summary(database) if database.is_file() else {}
     facts, fact_keys = current.facts, current.source_keys
     from unbake.typemap import facts as source_facts
 
     output = source_facts.store(project, policy)
-    seeds = declarations.collect(project, policy, fact_keys, store=output)
-    evidence = _evidence(project)
-    publication_key = _publication_key(project, evidence)
+    with tui.task("Loading declaration facts"):
+        seeds = declarations.collect(project, policy, fact_keys, store=output)
+    with tui.task("Pinning declaration evidence"):
+        evidence = _evidence(project)
+        publication_key = _publication_key(project, evidence)
     content_key = current.key
 
     def compute() -> dict[str, Any]:
@@ -1131,6 +1153,7 @@ def _solve(project: Project, policy: Host | None) -> dict[str, Any]:
             seeds,
             compute,
             output=output,
+            policy=policy,
         )
         if not all(
             _installed(project, Cache(project.cache), row)

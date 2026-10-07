@@ -119,6 +119,13 @@ class Constraints:
             seen.add(identity)
         self.seeds[node][type_].append(evidence)
 
+    def seed_prepared(self, node: str, type_: str, evidence: dict[str, Any], identity: Any) -> None:
+        self.use(node)
+        seen = self.machine_seeds[node][type_] if evidence.get("kind") == "machine" else self._seen[(node, type_)]
+        if identity not in seen:
+            seen.add(identity)
+            self.seeds[node][type_].append(evidence)
+
     def root(self, node: str) -> str:
         root = node
         while self.parents[root] != root:
@@ -250,10 +257,9 @@ class Recorder:
         self.ops.append(("use", (node, user)))
 
     def seed(self, node: str, type_: str, evidence: dict[str, Any]) -> None:
-        # Only the fields a machine seed keeps travel back.
-        self.ops.append(
-            ("seed", (node, type_, _machine_evidence(evidence) if evidence.get("kind") == "machine" else evidence))
-        )
+        kept = _machine_evidence(evidence) if evidence.get("kind") == "machine" else evidence
+        identity = tuple(sorted(kept.items())) if kept.get("kind") == "machine" else _identity(kept)
+        self.ops.append(("seed_prepared", (node, type_, kept, identity)))
 
     def connect(self, left: str, right: str, evidence: dict[str, Any]) -> None:
         kept = {key: evidence[key] for key in ("function", "version", "instruction", "rom_offset") if key in evidence}
@@ -360,6 +366,32 @@ def _function_body(
             _access(graph, function, version, body, memory, addresses, fields, memory_sources)
 
 
+@pool.cpu
+def _resolve_job(rows: Any) -> Any:
+    return [(index, resolve(members, seeds, users)) for index, members, seeds, users in rows]
+
+
+def _resolve_groups(groups: Any, seeds: Any, users: Any, indices: Any, host: Host | None) -> Any:
+    indices = list(indices)
+    if host is None:
+        return [(index, resolve(groups[index], seeds, users)) for index in indices]
+    pieces = []
+    for start in range(0, len(indices), 4096):
+        rows = []
+        for index in indices[start : start + 4096]:
+            members = groups[index]
+            rows.append(
+                (
+                    index,
+                    members,
+                    {node: seeds[node] for node in members if node in seeds},
+                    {node: users[node] for node in members if node in users},
+                )
+            )
+        pieces.append(rows)
+    return [row for batch in pool.run(host, _resolve_job, pieces) for row in batch]
+
+
 def build(
     functions: Mapping[str, dict[str, Any]],
     signatures: dict[str, dict[str, Any]],
@@ -388,68 +420,69 @@ def build(
             if host is not None
             else [_function_ops(shared, piece) for piece in pieces]
         )
-    for piece in done:
-        for function, ops, local_fields, local_sources, local_forwarded, local_neighbours, arrays in piece:
-            for operation, arguments in ops:
-                getattr(graph, operation)(*arguments)
-            for origin, offsets in local_fields.items():
-                for offset, accesses in offsets.items():
-                    fields[origin][offset].extend(accesses)
-            memory_sources.update(local_sources)
-            for formal, nodes in local_forwarded.items():
-                forwarded[formal] |= nodes
-            for node, others in local_neighbours.items():
-                neighbours[node] |= others
-            _merge_arrays(candidates, function, arrays)
-    base_cache: dict[str, str | None] = {}
+    with tui.task("Joining machine value flow"):
+        for piece in done:
+            for function, ops, local_fields, local_sources, local_forwarded, local_neighbours, arrays in piece:
+                for operation, arguments in ops:
+                    getattr(graph, operation)(*arguments)
+                for origin, offsets in local_fields.items():
+                    for offset, accesses in offsets.items():
+                        fields[origin][offset].extend(accesses)
+                memory_sources.update(local_sources)
+                for formal, nodes in local_forwarded.items():
+                    forwarded[formal] |= nodes
+                for node, others in local_neighbours.items():
+                    neighbours[node] |= others
+                _merge_arrays(candidates, function, arrays)
+        base_cache: dict[str, str | None] = {}
 
-    def common_base(origin: str, active: frozenset[str] = frozenset()) -> str | None:
-        if origin == "unknown" or origin in active:
-            return None
-        if origin in base_cache:
-            return base_cache[origin]
-        if origin in memory_sources:
-            root = common_base(memory_sources[origin], active | {origin})
+        def common_base(origin: str, active: frozenset[str] = frozenset()) -> str | None:
+            if origin == "unknown" or origin in active:
+                return None
+            if origin in base_cache:
+                return base_cache[origin]
+            if origin in memory_sources:
+                root = common_base(memory_sources[origin], active | {origin})
+                base_cache[origin] = root
+                return root
+            if origin.startswith("field:"):
+                source, offset = origin.removeprefix("field:").rsplit(":", 1)
+                root = common_base(source, active | {origin})
+                return f"field:{root}:{offset}" if root is not None else None
+            sources = forwarded.get(origin, set())
+            if not sources:
+                return origin
+            roots = {common_base(source, active | {origin}) for source in sources}
+            root = next(iter(roots)) if len(roots) == 1 and None not in roots else None
             base_cache[origin] = root
             return root
-        if origin.startswith("field:"):
-            source, offset = origin.removeprefix("field:").rsplit(":", 1)
-            root = common_base(source, active | {origin})
-            return f"field:{root}:{offset}" if root is not None else None
-        sources = forwarded.get(origin, set())
-        if not sources:
-            return origin
-        roots = {common_base(source, active | {origin}) for source in sources}
-        root = next(iter(roots)) if len(roots) == 1 and None not in roots else None
-        base_cache[origin] = root
-        return root
 
-    bases: dict[str, str | None] = {}
-    shared_fields: dict[str, dict[int, list[dict[str, Any]]]] = defaultdict(lambda: defaultdict(list))
-    for origin, offsets in fields.items():
-        root = bases[origin] = common_base(origin)
-        if root is None:
-            continue
-        for offset, accesses in offsets.items():
-            shared_fields[root][offset].extend(accesses)
-            if root != origin:
-                graph.connect(f"field:{origin}:{offset}", f"field:{root}:{offset}", accesses[0])
-    graph.instantiate()
-    groups = graph.groups()
-    seeds = {node: dict(types) for node, types in graph.seeds.items()}
-    users = dict(graph.users)
-    return Machine(
-        groups=groups,
-        records=[resolve(members, seeds, users) for members in groups],
-        seeds=seeds,
-        users=users,
-        neighbours=dict(neighbours),
-        fields={origin: dict(offsets) for origin, offsets in fields.items()},
-        shared_fields={origin: dict(offsets) for origin, offsets in shared_fields.items()},
-        bases=bases,
-        arrays=candidates,
-        constraints=graph.facts,
-    )
+        bases: dict[str, str | None] = {}
+        shared_fields: dict[str, dict[int, list[dict[str, Any]]]] = defaultdict(lambda: defaultdict(list))
+        for origin, offsets in fields.items():
+            root = bases[origin] = common_base(origin)
+            if root is None:
+                continue
+            for offset, accesses in offsets.items():
+                shared_fields[root][offset].extend(accesses)
+                if root != origin:
+                    graph.connect(f"field:{origin}:{offset}", f"field:{root}:{offset}", accesses[0])
+        graph.instantiate()
+        groups = graph.groups()
+        seeds = {node: dict(types) for node, types in graph.seeds.items()}
+        users = dict(graph.users)
+        return Machine(
+            groups=groups,
+            records=[record for _, record in _resolve_groups(groups, seeds, users, range(len(groups)), host)],
+            seeds=seeds,
+            users=users,
+            neighbours=dict(neighbours),
+            fields={origin: dict(offsets) for origin, offsets in fields.items()},
+            shared_fields={origin: dict(offsets) for origin, offsets in shared_fields.items()},
+            bases=bases,
+            arrays=candidates,
+            constraints=graph.facts,
+        )
 
 
 def _access(
@@ -630,11 +663,11 @@ class Closure:
         rows.append(evidence)
         self.dirty.add(self.group[node])
 
-    def close(self) -> list[dict[str, Any]]:
+    def close(self, host: Host | None = None) -> list[dict[str, Any]]:
         """Resolve touched components; return every conflict in component order."""
-        for index in self.dirty:
+        for index, record in _resolve_groups(self.groups, self.seeds, self.users, self.dirty, host):
             members = self.groups[index]
-            record = self.records[index] = resolve(members, self.seeds, self.users)
+            self.records[index] = record
             for member in members:
                 self.resolved[member] = record
             if record["state"] == "conflict":
@@ -654,13 +687,19 @@ def cached(cache: Cache | None, kind: str, parts: list[str], compute: Callable[[
         return compute()
     from unbake.cache import key
 
-    content_key = key(kind, *parts)
-    path = cache.get(kind, content_key)
-    if path is not None:
-        return load(path)
-    value = compute()
-    cache.produce(kind, content_key, lambda target: atomic_files.fresh(target, pickle.dumps(value, protocol=5)))
-    return value
+    labels = {
+        "types-abi": "Loading function ABI facts",
+        "types-machine": "Loading the machine value graph",
+        "types-inferred": "Loading the inferred type graph",
+    }
+    with tui.task(labels.get(kind, "Loading cached type facts")):
+        content_key = key(kind, *parts)
+        path = cache.get(kind, content_key)
+        if path is not None:
+            return load(path)
+        value = compute()
+        cache.produce(kind, content_key, lambda target: atomic_files.fresh(target, pickle.dumps(value, protocol=5)))
+        return value
 
 
 def load(path: Path) -> Any:

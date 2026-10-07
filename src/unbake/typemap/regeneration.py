@@ -7,11 +7,12 @@ import os
 import re
 from collections.abc import Callable
 from dataclasses import asdict
+from functools import partial
 from pathlib import Path
 from typing import Any, ClassVar
 
 from unbake import atomic as atomic_files
-from unbake import effort, inputs
+from unbake import effort, inputs, pool, tui
 from unbake.cache import Cache, key, memo
 from unbake.config import Held, Host, Project
 from unbake.layout import headers
@@ -20,7 +21,7 @@ from unbake.layout import map as layout_map
 from unbake.typemap import header_names, split, storage
 
 # Bump when the value an artifact kind stores changes for the same inputs.
-SOURCE_NAMES_SCHEMA = 5
+SOURCE_NAMES_SCHEMA = 6
 RENDER_SCHEMA = 7
 
 
@@ -78,12 +79,57 @@ def environment(project: Project, policy: Host | None) -> str:
             tools.extend((field, path))
     for ident, compiler in sorted(project.compilers.items()):
         tools.extend((ident, compiler.cc, compiler.sha256))
+    configuration = asdict(project)
+    configuration.pop("units", None)
+    configuration.pop("unit_flags", None)
     return key(
-        "semantic-environment-v3",
+        "semantic-environment-v4",
         *(path for path in sources),
-        json.dumps(storage.relocatable(asdict(project), project.root), default=str, sort_keys=True),
+        json.dumps(storage.relocatable(configuration, project.root), default=str, sort_keys=True),
         *tools,
     )
+
+
+def _projection(project: Project, policy: Host | None, path: Path, text: str, exported: set[str]) -> Any:
+    from unbake.cdecl import declaration_source
+    from unbake.typemap import declarations
+
+    owned, tags = header_names._owned((project, policy, path, text))
+
+    def tokens(view: str) -> list[str]:
+        outside = declarations._unit_bodies_blanked(declaration_source(view))
+        return [match[0] for match in declarations._C_TOKEN.finditer(outside)]
+
+    try:
+        declared: Any = tokens(text)
+    except Held as error:
+        if policy is None or not re.search(r"^\s*#\s*(?:if|ifdef|ifndef|elif)\b", text, re.M):
+            raise Held("solve", f"types.declaration: {path}: {error.reason}") from error
+        from unbake.fold.source_views import active_source
+
+        declared = {
+            version: tokens(active_source(project, policy, text, version, path.stem)) for version in project.versions
+        }
+    return {
+        "declarations": declared,
+        "directives": re.findall(r"^[ \t]*#(?:\\\n|[^\n])*", text, re.M),
+        "owned": owned,
+        "tags": tags,
+        "dependencies": sorted(set(re.findall(r"\b[A-Za-z_]\w*\b", text)) & exported),
+    }
+
+
+@pool.cpu
+def _projection_job(shared: Any, jobs: Any) -> None:
+    project, policy, exported = shared
+    cache = Cache(project.cache)
+    for content_key, path, text in jobs:
+        artifact(
+            cache,
+            "typemap-source-names",
+            content_key,
+            partial(_projection, project, policy, path, text, exported),
+        )
 
 
 class Session:
@@ -104,7 +150,7 @@ class Session:
         self.published, self.published_homes = published_snapshot(project, sources=self.sources)
         self.ownership = layout_map.load(project)
         from unbake.cdecl import declarations as parsed_names
-        from unbake.typemap import declarations, facts
+        from unbake.typemap import facts
 
         exported: set[str] = set()
         for path in {*self.authored, *layout_index.headers(project)}:
@@ -114,52 +160,42 @@ class Session:
         self.source_words = {path: set(re.findall(r"\b[A-Za-z_]\w*\b", text)) for path, text in self.sources.items()}
         self.projections: dict[Path, Any] = {}
         snapshot = facts.Snapshot(project)
-        for path, text in self.sources.items():
-
-            def project_source(path: Path = path, text: str = text) -> Any:
-                owned, tags = header_names._owned((project, policy, path, text))
-                from unbake.cdecl import declaration_source
-
-                def tokens(view: str) -> list[str]:
-                    outside = declarations._unit_bodies_blanked(declaration_source(view))
-                    return [match[0] for match in declarations._C_TOKEN.finditer(outside)]
-
-                try:
-                    declared: Any = tokens(text)
-                except Held as error:
-                    if policy is None or not re.search(r"^\s*#\s*(?:if|ifdef|ifndef|elif)\b", text, re.M):
-                        raise Held("solve", f"types.declaration: {path}: {error.reason}") from error
-                    from unbake.fold.source_views import active_source
-
-                    declared = {
-                        version: tokens(active_source(project, policy, text, version, path.stem))
+        rows = []
+        pending = []
+        with tui.task("Selecting changed header consumers", len(self.sources)):
+            for path, text in self.sources.items():
+                bindings = storage.encoded(
+                    {
+                        version: facts._command(project, policy, version, path, marked=True)
                         for version in project.versions
                     }
-                directives = re.findall(r"^[ \t]*#(?:\\\n|[^\n])*", text, re.M)
-                return {
-                    "declarations": declared,
-                    "directives": directives,
-                    "owned": owned,
-                    "tags": tags,
-                    "dependencies": sorted(self.source_words[path] & exported),
-                }
-
-            self.projections[path] = artifact(
-                self.cache,
-                "typemap-source-names",
-                key(
+                )
+                content_key = key(
                     str(SOURCE_NAMES_SCHEMA),
                     self.environment,
                     storage.relative(project, path),
                     text,
                     exported_names,
+                    bindings,
                     *(
                         facts.unit_key(project, policy, path, version, snapshot)
                         for version in project.versions
                         if re.search(r"^\s*#\s*(?:if|ifdef|ifndef|elif)\b", text, re.M)
                     ),
-                ),
-                project_source,
+                )
+                rows.append((content_key, path, text))
+                if self.cache.get("typemap-source-names", content_key) is None:
+                    pending.append((content_key, path, text))
+        if policy is not None:
+            jobs = [pending[start : start + 32] for start in range(0, len(pending), 32)]
+            with tui.task("Reading changed header consumers", len(pending)):
+                pool.run(policy, _projection_job, jobs, (project, policy, exported))
+        for content_key, path, text in rows:
+            self.projections[path] = artifact(
+                self.cache,
+                "typemap-source-names",
+                content_key,
+                partial(_projection, project, policy, path, text, exported),
             )
         self.inputs = key(
             self.environment,

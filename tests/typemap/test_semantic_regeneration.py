@@ -5,12 +5,22 @@ from pathlib import Path
 from unittest.mock import patch
 
 from tests.project_fixture import ProjectCase
-from unbake import effort
+from unbake import effort, pool
 from unbake.config import Host
 from unbake.typemap import database, regeneration
 
 
 class SemanticRegenerationTests(ProjectCase):
+    def setUp(self):
+        super().setUp()
+        boundary = patch.object(
+            pool,
+            "run",
+            lambda host, fn, jobs, shared=None: [fn(job) if shared is None else fn(shared, job) for job in jobs],
+        )
+        boundary.start()
+        self.addCleanup(boundary.stop)
+
     versions = ("us",)
 
     def test_local_rename_reuses_render_but_declaration_or_dependency_change_invalidates(self):

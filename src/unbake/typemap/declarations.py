@@ -15,7 +15,7 @@ from typing import Any
 from pycparser import c_ast, c_generator  # type: ignore[import-untyped]
 
 from unbake import atomic as atomic_files
-from unbake import cdecl, prefixes
+from unbake import cdecl, pool, prefixes
 from unbake.cache import memo
 from unbake.cdecl import attribute_source, declaration_source
 from unbake.cdecl import declarations as header_declarations
@@ -874,6 +874,7 @@ def rooted(project: Project, text: str) -> str:
     return text.replace(f'"{project.root}/', '"').replace(f'"{project.root.resolve()}/', '"')
 
 
+@pool.cpu
 def _declared_job(job: tuple[Project, Host, str, dict[str, Any], set[Path]]) -> None:
     """Pool worker: one version's declared header facts, extracted into the shared store."""
     from unbake.typemap import facts
@@ -884,6 +885,7 @@ def _declared_job(job: tuple[Project, Host, str, dict[str, Any], set[Path]]) -> 
     )
 
 
+@pool.cpu
 def _version_text(job: tuple[Project, Host | None, str, dict[Path, str], Path | None, list[Path]]) -> str:
     """One version's preprocessed authored headers (and EXTRA after the generated ones): a pool task."""
     project, policy, version, contents, extra, ordered = job

@@ -4,7 +4,7 @@ import io
 from unittest.mock import MagicMock, patch
 
 from tests.project_fixture import ProjectCase
-from unbake import inputs, tui
+from unbake import inputs, pool, tui
 from unbake.config import Held
 from unbake.typemap import declarations, facts, solver, types_db
 
@@ -14,6 +14,13 @@ class SolveReuseFixture(ProjectCase):
 
     def setUp(self):
         super().setUp()
+        boundary = patch.object(
+            pool,
+            "run",
+            lambda host, fn, jobs, shared=None: [fn(job) if shared is None else fn(shared, job) for job in jobs],
+        )
+        boundary.start()
+        self.addCleanup(boundary.stop)
         (self.project.build / "map").mkdir(exist_ok=True)
         (self.project.build / "map/facts.json").write_text("{}")
         self.source = self.project.src / "alpha.c"

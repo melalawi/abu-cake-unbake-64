@@ -25,10 +25,10 @@ import re
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Any, NamedTuple
+from typing import Any, NamedTuple, cast
 
 from unbake import atomic as atomic_files
-from unbake import inputs, tui
+from unbake import inputs, pool, tui
 from unbake.cache import Cache, key, memo
 from unbake.config import Held, Host, Project
 from unbake.typemap import declarations, facts_decode, layers, storage
@@ -434,7 +434,8 @@ class Store:
         land) reuse every alias map and layout template an earlier solve read. Seeds only read them."""
         if self.cache is None or (path := self.cache.get(SHARED, digest)) is None:
             raise Held("solve", f"facts.shared: missing {digest}")
-        return _load(path)
+        binary = self.cache.get("facts-shared-pickle", digest)
+        return closure_load(binary) if binary is not None else _load(path)
 
     def encode(self, seed: dict[str, Any]) -> dict[str, Any]:
         result = {}
@@ -695,6 +696,7 @@ def _header_part(project: Project, host: Host | None, version: str, header: Path
         return {"refused": True, "reason": error.reason}
 
 
+@pool.cpu
 def _header_job(job: tuple[Project, Host | None, str, list[tuple[str, Path]]]) -> int:
     """Worker body: one version's missing header parts, straight into the shared cache."""
     project, host, version, headers = job
@@ -888,6 +890,7 @@ def _unit_work(
     return result, counts
 
 
+@pool.cpu
 def _unit_job(
     shared: Shared, versions: list[list[tuple[int, str, Task]]]
 ) -> tuple[list[tuple[int, bytes]], dict[str, int]]:
@@ -927,6 +930,7 @@ def _unit_job(
         raise Held("solve", f"types.source: {identity.source}: {type(error).__name__}: {error}", fault=fault) from error
 
 
+@pool.cpu
 def _unit_key_job(shared: tuple[Project, Host | None, Snapshot], item: tuple[Path, tuple[str, ...]]) -> list[str]:
     """One physical source's version keys, reusing the pool's shared include snapshot."""
     project, host, snapshot = shared
@@ -963,6 +967,7 @@ def published_keys(project: Project, policy: Host | None) -> list[str]:
     return [keys[source, version] for _, source, version in tasks]
 
 
+@pool.cpu
 def _header_keys_job(
     shared: tuple[Project, Host, Snapshot], item: tuple[str, list[Path]]
 ) -> list[tuple[str, Path, str]]:
@@ -971,6 +976,7 @@ def _header_keys_job(
     return [(version, path, header_key(project, host, path, version, snapshot)) for path in headers]
 
 
+@pool.cpu
 def _bundle_job(
     shared: tuple[Project, Host, dict[str, dict[str, str]], Snapshot], versions: list[list[tuple[int, str, Task]]]
 ) -> str:
@@ -1005,8 +1011,44 @@ def _bundle_key(
     return key(*parts)
 
 
-def _decode_job(rows: facts_decode.Batch) -> facts_decode.Batch:
-    return facts_decode.decode(rows)
+@pool.cpu
+def _shared_job(cache_root: Path, digests: list[str]) -> None:
+    cache = Cache(cache_root)
+    for digest in digests:
+        source = cache.get(SHARED, digest)
+        if source is None:
+            raise Held("solve", f"facts.shared: missing {digest}")
+        cache.produce(
+            "facts-shared-pickle", digest, functools.partial(_write, data=pickle.dumps(_load(source), protocol=5))
+        )
+
+
+@pool.cpu
+def _decode_job(
+    shared: tuple[Path | None] | facts_decode.Batch, rows: facts_decode.Batch | None = None
+) -> facts_decode.Batch:
+    """Retain the bounded file transport; unchanged payloads need no decode job."""
+    if rows is None:
+        return facts_decode.decode(cast(facts_decode.Batch, shared))
+    (cache_root,) = cast(tuple[Path | None], shared)
+    if cache_root is None:
+        return facts_decode.decode(rows)
+    import shutil
+
+    cache = Cache(cache_root)
+    found: facts_decode.Batch = []
+    for index, payload in rows:
+        content_key = inputs.digest(payload) if isinstance(payload, Path) else storage.digest(payload)
+
+        def make(target: Path, index: int = index, payload: facts_decode.Payload = payload) -> None:
+            [(_, decoded)] = facts_decode.decode([(index, payload)])
+            if isinstance(decoded, Path):
+                shutil.copyfile(decoded, target)
+            else:
+                target.write_bytes(decoded)
+
+        found.append((index, cache.produce("facts-decoded-v1", content_key, make)))
+    return found
 
 
 def published(project: Project, policy: Host | None, output: Store, keys: list[str]) -> list[dict[str, Any]]:
@@ -1031,7 +1073,8 @@ def published(project: Project, policy: Host | None, output: Store, keys: list[s
             for version in versions
             for start in range(0, len(headers), HEADERS_PER_JOB)
         ]
-        rows = pool.run(policy, _header_keys_job, jobs, (project, policy, snapshot))
+        with tui.task("Checking C header fact keys", len(jobs)):
+            rows = pool.run(policy, _header_keys_job, jobs, (project, policy, snapshot))
         for batch in rows:
             for version, header, content_key in batch:
                 header_keys[version][spell(str(header))] = content_key
@@ -1056,26 +1099,27 @@ def published(project: Project, policy: Host | None, output: Store, keys: list[s
     bundles: list[tuple[str, list[int]]] = []
     pending = []
     cache = output.cache
-    bundle_keys = (
-        pool.run(policy, _bundle_job, ordered, (project, policy, header_keys, snapshot))
-        if policy is not None and cache is not None
-        else []
-    )
-    for position, versions_ in enumerate(ordered):
-        indices = [index for group in versions_ for index, _, _ in group]
-        if cache is None:
-            pending.append(versions_)
-            continue
-        bundle = bundle_keys[position]
-        cached = cache.get("facts-unit", bundle)
-        if cached is not None:
-            rows = closure_load(cached)
-            if len(rows) != len(indices):
-                raise Held("solve", "facts.unit: cached task inventory disagrees with its key")
-            encoded.update(zip(indices, rows, strict=True))
-        else:
-            pending.append(versions_)
-            bundles.append((bundle, indices))
+    with tui.task("Selecting changed C units", len(ordered)):
+        bundle_keys = (
+            pool.run(policy, _bundle_job, ordered, (project, policy, header_keys, snapshot))
+            if policy is not None and cache is not None
+            else []
+        )
+        for position, versions_ in enumerate(ordered):
+            indices = [index for group in versions_ for index, _, _ in group]
+            if cache is None:
+                pending.append(versions_)
+                continue
+            bundle = bundle_keys[position]
+            cached = cache.get("facts-unit", bundle)
+            if cached is not None:
+                rows = closure_load(cached)
+                if len(rows) != len(indices):
+                    raise Held("solve", "facts.unit: cached task inventory disagrees with its key")
+                encoded.update(zip(indices, rows, strict=True))
+            else:
+                pending.append(versions_)
+                bundles.append((bundle, indices))
     if policy is None or output.cache is None:
         results = [_unit_job(shared, versions_) for versions_ in pending]
     else:
@@ -1094,13 +1138,50 @@ def published(project: Project, policy: Host | None, output: Store, keys: list[s
     from unbake import effort
 
     effort.count("facts", counts["sources"], len(groups))
-    seeds: list[dict[str, Any]] = []
-    temporary_root = policy.cache_machine_root if policy is not None else project.build
-    temporary_root.mkdir(parents=True, exist_ok=True)
-    with TemporaryDirectory(prefix="unbake-facts-", dir=temporary_root) as directory:
-        jobs_ = facts_decode.jobs(encoded, len(tasks), Path(directory))
-        decoded = pool.run(policy, _decode_job, jobs_) if policy is not None else [_decode_job(job) for job in jobs_]
-        for decoded_batch in decoded:
-            for _, payload in decoded_batch:
-                seeds.extend(output.decode(row) for row in facts_decode.read(payload))
+    with tui.task("Decoding changed C facts", len(tasks)):
+        seeds: list[dict[str, Any]] = []
+        temporary_root = policy.cache_machine_root if policy is not None else project.build
+        temporary_root.mkdir(parents=True, exist_ok=True)
+        decoded: dict[int, facts_decode.Payload] = {}
+        pending_indices: list[int] = []
+        for index in range(len(tasks)):
+            decoded_path = (
+                None if output.cache is None else output.cache.get("facts-decoded-v1", storage.digest(encoded[index]))
+            )
+            if decoded_path is None:
+                pending_indices.append(index)
+            else:
+                decoded[index] = decoded_path
+        with TemporaryDirectory(prefix="unbake-facts-", dir=temporary_root) as directory:
+            pending_encoded = {position: encoded[index] for position, index in enumerate(pending_indices)}
+            jobs_ = facts_decode.jobs(pending_encoded, len(pending_indices), Path(directory))
+            jobs_ = [[(pending_indices[index], payload) for index, payload in job] for job in jobs_]
+            cache_root = None if output.cache is None else output.cache.root
+            done = (
+                pool.run(policy, _decode_job, jobs_, (cache_root,))
+                if policy is not None
+                else [_decode_job((cache_root,), job) for job in jobs_]
+            )
+            for completed_batch in done:
+                decoded.update(completed_batch)
+            if policy is not None and output.cache is not None:
+                digests = set()
+                for index in range(len(tasks)):
+                    for row in facts_decode.read(decoded[index]):
+                        for name in ("structs", "aliases", "shared_typedefs"):
+                            ref = row.get(name, {})
+                            if isinstance(ref, dict):
+                                digest = ref.get("$template", ref.get("$shared"))
+                                if digest is not None and output.cache.get("facts-shared-pickle", digest) is None:
+                                    digests.add(digest)
+                pending_shared = sorted(digests)
+                with tui.task("Preparing shared C facts", len(pending_shared)):
+                    pool.run(
+                        policy,
+                        _shared_job,
+                        [pending_shared[start : start + 16] for start in range(0, len(pending_shared), 16)],
+                        output.cache.root,
+                    )
+            for index in range(len(tasks)):
+                seeds.extend(output.decode(row) for row in facts_decode.read(decoded[index]))
     return seeds

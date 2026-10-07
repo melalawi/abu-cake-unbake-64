@@ -7,10 +7,12 @@ import hashlib
 import os
 import re
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from typing import Any
 
-from unbake.cache import memo
+from unbake import inputs, pool, tui
+from unbake.cache import Cache, key, memo
 from unbake.cdecl import LayoutParser, declaration_source, declarations
 from unbake.config import Held, Host, Project, relative_text
 from unbake.decomp.draft_context import ordered_headers
@@ -18,7 +20,7 @@ from unbake.fold import imports
 from unbake.layout import split as inventory
 from unbake.layout.header_context import Headers
 from unbake.layout.split import Edit
-from unbake.typemap import split
+from unbake.typemap import split, storage
 
 _MARKER = re.compile(r"/\* unbake declaration evidence: (evidence_[a-f0-9]+) \*/")
 _DEFINE = re.compile(r"^[ \t]*#[ \t]*define[ \t]+([A-Za-z_]\w*)(?:\\\n|[^\n])*", re.M)
@@ -52,57 +54,62 @@ def _body(text: str) -> str:
 
 
 def units(contents: dict[Path, str]) -> tuple[Unit, ...]:
+    return tuple(
+        unit
+        for path, text in sorted(contents.items())
+        for unit in memo("declaration.units", (path, text), partial(_units, path, text), keep=32768)
+    )
+
+
+def _units(path: Path, text: str) -> tuple[Unit, ...]:
     result = []
-    for path, text in sorted(contents.items()):
-        # SDK/system declarations already have live providers. Evidence is an
-        # explicit include tree, but only authored declarations are consumed.
+    # SDK/system declarations already have live providers. Evidence is an
+    # explicit include tree, but only authored declarations are consumed.
+    try:
+        statements = split.statements(_body(text))
+    except Held:
+        return ()
+    for statement in statements:
+        if re.match(r"\s*#\s*(?:include|pragma|undef)\b", statement):
+            continue
         try:
-            statements = split.statements(_body(text))
+            row = declarations(statement)
         except Held:
             continue
-        for statement in statements:
-            if re.match(r"\s*#\s*(?:include|pragma|undef)\b", statement):
-                continue
-            try:
-                row = declarations(statement)
-            except Held:
-                continue
-            macros = {m[1] for m in _DEFINE.finditer(statement)}
-            constants = {
-                match[1]
-                for body in re.findall(r"\benum\b[^{};]*\{([^{}]*)\}", declaration_source(statement))
-                for member in body.split(",")
-                if (match := re.match(r"\s*([A-Za-z_]\w*)", member))
-            }
-            names = row.typedefs | row.declared | constants | macros
-            if any(name.startswith("M2C_") for name in names):
-                continue
-            if not names and not row.tags:
-                continue
-            # Definitions/initializers are implementation, never declaration evidence.
-            if re.search(r"\)\s*\{", declaration_source(statement)) or (
-                row.declared and re.search(r"=|\bstatic\b", declaration_source(statement))
-            ):
-                continue
-            uses = row.uses | row.complete_uses
-            # Array extents and conditional tests are declaration dependencies
-            # too, although the declarator reader deliberately skips expressions.
-            for expression in re.findall(
-                r"\[([^]]*)\]|^[ \t]*#[ \t]*(?:if|elif|ifdef|ifndef)\b([^\n]*)", statement, re.M
-            ):
-                uses.update(re.findall(r"\b[A-Za-z_]\w*\b", " ".join(expression)))
-            if macros:
-                uses |= set(re.findall(r"\b[A-Za-z_]\w*\b", statement)) - macros
-            result.append(
-                Unit(
-                    path,
-                    statement.strip() + "\n",
-                    frozenset(names),
-                    frozenset(row.typedefs),
-                    frozenset(row.tags),
-                    frozenset(uses),
-                )
+        macros = {m[1] for m in _DEFINE.finditer(statement)}
+        constants = {
+            match[1]
+            for body in re.findall(r"\benum\b[^{};]*\{([^{}]*)\}", declaration_source(statement))
+            for member in body.split(",")
+            if (match := re.match(r"\s*([A-Za-z_]\w*)", member))
+        }
+        names = row.typedefs | row.declared | constants | macros
+        if any(name.startswith("M2C_") for name in names):
+            continue
+        if not names and not row.tags:
+            continue
+        # Definitions/initializers are implementation, never declaration evidence.
+        if re.search(r"\)\s*\{", declaration_source(statement)) or (
+            row.declared and re.search(r"=|\bstatic\b", declaration_source(statement))
+        ):
+            continue
+        uses = row.uses | row.complete_uses
+        # Array extents and conditional tests are declaration dependencies
+        # too, although the declarator reader deliberately skips expressions.
+        for expression in re.findall(r"\[([^]]*)\]|^[ \t]*#[ \t]*(?:if|elif|ifdef|ifndef)\b([^\n]*)", statement, re.M):
+            uses.update(re.findall(r"\b[A-Za-z_]\w*\b", " ".join(expression)))
+        if macros:
+            uses |= set(re.findall(r"\b[A-Za-z_]\w*\b", statement)) - macros
+        result.append(
+            Unit(
+                path,
+                statement.strip() + "\n",
+                frozenset(names),
+                frozenset(row.typedefs),
+                frozenset(row.tags),
+                frozenset(uses),
             )
+        )
     return tuple(result)
 
 
@@ -307,8 +314,40 @@ def published_components(project: Project) -> dict[Path, str]:
     return published_snapshot(project)[0]
 
 
+@pool.cpu
+def _compatible(shared: Any, job: Any) -> bool:
+    mapping, cache_root = shared
+    content_key, unit, candidate, tags = job
+    from unbake.layout import redeclarations
+
+    if tags:
+        old_bodies = redeclarations.tag_definitions(unit.text)
+        new_bodies = redeclarations.tag_definitions(candidate)
+        agrees = all(
+            redeclarations._body_signature(unit.text[a:b], mapping)
+            == redeclarations._body_signature(candidate[c:d], mapping)
+            for tag in tags
+            for a, b in old_bodies.get(tag, ())
+            for c, d in new_bodies.get(tag, ())
+        )
+    else:
+        agrees = redeclarations.equivalent(unit.text, candidate, mapping)
+    if agrees and cache_root is not None:
+
+        def write(target: Path) -> None:
+            target.write_bytes(b"compatible")
+
+        Cache(cache_root).produce("types-contract", content_key, write)
+    return agrees
+
+
 def validate_published(
-    project: Project, value: dict[str, Any], published: dict[str, str], *, context: tuple[str, ...] = ()
+    project: Project,
+    value: dict[str, Any],
+    published: dict[str, str],
+    *,
+    context: tuple[str, ...] = (),
+    policy: Host | None = None,
 ) -> None:
     """Carried contracts yield only to compatible proven evidence, never silently.
 
@@ -330,6 +369,15 @@ def validate_published(
             for name in names:
                 by_name.setdefault((namespace, name), set()).add(unit)
     mapping = redeclarations.aliases([*context, *contents.values()])
+    environment = key(
+        "types-contract-v1",
+        storage.encoded(mapping),
+        inputs.digest(Path(__file__)),
+        inputs.digest(Path(redeclarations.__file__)),
+    )
+    cache = None if policy is None else Cache(project.cache)
+    jobs = []
+    owners = []
     for kind, field in (("structs", "declaration"), ("functions", "prototype"), ("globals", "declaration")):
         for name, record in value.get(kind, {}).items():
             candidate = record.get(field)
@@ -345,28 +393,27 @@ def validate_published(
                 ordinary = (proposed.typedefs | proposed.declared) & unit.names
                 if not tags and not ordinary:
                     continue
-                if tags:
-                    old_bodies = redeclarations.tag_definitions(unit.text)
-                    new_bodies = redeclarations.tag_definitions(candidate)
-                    agrees = all(
-                        redeclarations._body_signature(unit.text[a:b], mapping)
-                        == redeclarations._body_signature(candidate[c:d], mapping)
-                        for tag in tags
-                        for a, b in old_bodies.get(tag, ())
-                        for c, d in new_bodies.get(tag, ())
-                    )
-                else:
-                    agrees = redeclarations.equivalent(unit.text, candidate, mapping)
-                if not agrees:
-                    homes = value.get("published_homes", {}).get(
-                        unit.path.relative_to(project.include[0]).as_posix(), []
-                    )
-                    raise Held(
-                        "headers",
-                        f"headers.declaration: {name}: published `{unit.text.strip()}` "
-                        f"({', '.join(homes) or str(unit.path)}) is incompatible with proven "
-                        f"`{candidate}` ({record.get('provenance')})",
-                    )
+                content_key = key(environment, unit.text, candidate, storage.encoded(sorted(tags)))
+                if cache is not None and cache.get("types-contract", content_key) is not None:
+                    continue
+                jobs.append((content_key, unit, candidate, tags))
+                owners.append((name, record))
+    with tui.task("Checking changed published contracts", len(jobs)):
+        shared = mapping, None if cache is None else cache.root
+        results = (
+            [_compatible(shared, job) for job in jobs]
+            if policy is None
+            else pool.run(policy, _compatible, jobs, shared)
+        )
+    for (_, unit, candidate, _), (name, record), agrees in zip(jobs, owners, results, strict=True):
+        if not agrees:
+            homes = value.get("published_homes", {}).get(unit.path.relative_to(project.include[0]).as_posix(), [])
+            raise Held(
+                "headers",
+                f"headers.declaration: {name}: published `{unit.text.strip()}` "
+                f"({', '.join(homes) or str(unit.path)}) is incompatible with proven "
+                f"`{candidate}` ({record.get('provenance')})",
+            )
 
 
 def published_snapshot(

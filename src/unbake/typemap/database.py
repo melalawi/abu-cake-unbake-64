@@ -159,7 +159,7 @@ def _render(
         published_homes[relative] = sorted(home.relative_to(root).as_posix() for home in retained_homes[path])
     from unbake.typemap.declaration_evidence import validate_published
 
-    validate_published(project, value, published, context=tuple(session.authored.values()))
+    validate_published(project, value, published, context=tuple(session.authored.values()), policy=policy)
     components = dict(session.authored)
     components.update({root / path: text for path, text in value.get("declaration_evidence", {}).items()})
     components.update({root / path: text for path, text in value.get("published_declarations", {}).items()})
@@ -556,13 +556,15 @@ def symbol_segments(project: Project) -> dict[str, str]:
 def publish(project: Project, value: dict[str, Any], previous: dict[str, Any], *, policy: Host | None = None) -> None:
     if not project.include:
         raise Held("solve", "paths.include: required shared type destination")
-    session = regeneration.Session(project, policy)
+    with tui.task("Preparing header ownership"):
+        session = regeneration.Session(project, policy)
     with tui.task("Writing the shared headers", len(session.sources)):
         outputs = session.render(value, lambda: _render(project, value, policy, session))
     from unbake.layout import header_loss
 
     # Types retains obsolete headers until layout rewrites their source imports.
-    header_loss.check(project, outputs)
+    with tui.task("Checking retained header declarations"):
+        header_loss.check(project, outputs)
     replacements = value["shared_aliases"]
     reserved = session.reserved
     abi_context = "\n".join(
@@ -591,111 +593,114 @@ def publish(project: Project, value: dict[str, Any], previous: dict[str, Any], *
             validated=validated,
             session=session,
         )
-    value["rendered_sha256"] = {
-        storage.relative(project, path): storage.digest(content)
-        for path, content in outputs.items()
-        if isinstance(content, bytes)
-    }
-    database = types_db.path(project)
-    encoded = types_db.encode(value)
-    digest = types_db.content_digest(encoded)
-    summary: dict[str, Any] = {}
-    changed: set[str] = set()
-    for kind in ("functions", "globals", "structs", "arrays"):
-        before = previous.get(kind, {})
-        after = value[kind]
-
-        summary[kind] = {
-            name: {
-                "semantic_sha256": storage.digest(storage.encoded(_semantic(row))),
-                "users": list(row.get("users", [])),
-            }
-            for name, row in after.items()
+    with tui.task("Saving the type database"):
+        value["rendered_sha256"] = {
+            storage.relative(project, path): storage.digest(content)
+            for path, content in outputs.items()
+            if isinstance(content, bytes)
         }
-        for name in set(before) | set(after):
-            old = before.get(name, {})
-            old_digest = old.get("semantic_sha256") or storage.digest(storage.encoded(_semantic(old)))
-            new_digest = summary[kind].get(name, {}).get("semantic_sha256")
-            if old_digest != new_digest:
-                changed.add(f"{kind}:{name}")
-    marks = redrafts(project)
-    if previous:
-        dependants: dict[str, set[str]] = defaultdict(set)
-        for function, neighbours in value["dependencies"].items():
-            for name in (function, *neighbours):
-                dependants[name].add(function)
-        affected: dict[str, list[str]] = defaultdict(list)
-        for entity in sorted(changed):
-            kind, name = entity.split(":", 1)
-            record = value[kind].get(name, {})
-            old = previous.get(kind, {}).get(name, {})
-            users = set(record.get("users", [])) | set(old.get("users", []))
-            if kind == "functions":
-                users.update(dependants.get(name, ()))
-            for function in users:
-                if function in value["dependencies"]:
-                    affected[function].append(entity)
-        for function, reasons in affected.items():
-            if reasons:
-                marks[function] = {
-                    "function": function,
-                    "reasons": reasons,
-                    "revision": value["revision"],
-                    "type_db_sha256": digest,
-                }
-    # Carry pending marks forward so a draft against the newest revision can clear them.
-    for mark in marks.values():
-        mark.update(revision=value["revision"], type_db_sha256=digest)
-    staged, _ = types_db.stage(database, encoded, summary, marks)
-    from unbake.layout import index
+        database = types_db.path(project)
+        encoded = types_db.encode(value)
+        digest = types_db.content_digest(encoded)
+        summary: dict[str, Any] = {}
+        changed: set[str] = set()
+        for kind in ("functions", "globals", "structs", "arrays"):
+            before = previous.get(kind, {})
+            after = value[kind]
 
-    # Sources still include headers this render no longer produces until the headers step rewrites them, and
-    # that step deletes them in the same install; until then they stay listed as generated.
-    retained = index.headers(project) - outputs.keys()
-    if retained:
-        listing = outputs[index.path(project)]
-        lookup = json.loads(listing.read_bytes() if isinstance(listing, Path) else listing)
-        for path in retained:
-            if path.is_file():
-                lookup["headers"][path.relative_to(project.include[0]).as_posix()] = inputs.digest(path)
-        outputs[index.path(project)] = index.encoded(lookup)
-    outputs = {
-        path: content
-        for path, content in outputs.items()
-        if not path.is_file()
-        or (
-            inputs.digest(path) != inputs.digest(content) if isinstance(content, Path) else path.read_bytes() != content
-        )
-    }
-    backups: dict[Path, Path | None] = {}
-    try:
-        for path in set(outputs) | {database}:
-            if path.is_file():
-                descriptor, name = tempfile.mkstemp(prefix=".typemap-backup-", dir=path.parent)
-                os.close(descriptor)
-                backup_path = Path(name)
-                backups[path] = backup_path
-                atomic_files.copyfile(path, backup_path)
-            else:
-                backups[path] = None
-        for path, content in outputs.items():
-            if isinstance(content, Path):
-                storage.install(path, content)
-            else:
-                storage.write(path, content)
-        types_db.install(database, staged)
-    except BaseException:
-        for path, backup in backups.items():
-            if backup is None:
-                path.unlink(missing_ok=True)
-            else:
-                atomic_files.publish(backup, path)
-        raise
-    finally:
-        staged.unlink(missing_ok=True)
-        for backup in backups.values():
-            if backup is not None:
-                backup.unlink(missing_ok=True)
+            summary[kind] = {
+                name: {
+                    "semantic_sha256": storage.digest(storage.encoded(_semantic(row))),
+                    "users": list(row.get("users", [])),
+                }
+                for name, row in after.items()
+            }
+            for name in set(before) | set(after):
+                old = before.get(name, {})
+                old_digest = old.get("semantic_sha256") or storage.digest(storage.encoded(_semantic(old)))
+                new_digest = summary[kind].get(name, {}).get("semantic_sha256")
+                if old_digest != new_digest:
+                    changed.add(f"{kind}:{name}")
+        marks = redrafts(project)
+        if previous:
+            dependants: dict[str, set[str]] = defaultdict(set)
+            for function, neighbours in value["dependencies"].items():
+                for name in (function, *neighbours):
+                    dependants[name].add(function)
+            affected: dict[str, list[str]] = defaultdict(list)
+            for entity in sorted(changed):
+                kind, name = entity.split(":", 1)
+                record = value[kind].get(name, {})
+                old = previous.get(kind, {}).get(name, {})
+                users = set(record.get("users", [])) | set(old.get("users", []))
+                if kind == "functions":
+                    users.update(dependants.get(name, ()))
+                for function in users:
+                    if function in value["dependencies"]:
+                        affected[function].append(entity)
+            for function, reasons in affected.items():
+                if reasons:
+                    marks[function] = {
+                        "function": function,
+                        "reasons": reasons,
+                        "revision": value["revision"],
+                        "type_db_sha256": digest,
+                    }
+        # Carry pending marks forward so a draft against the newest revision can clear them.
+        for mark in marks.values():
+            mark.update(revision=value["revision"], type_db_sha256=digest)
+        staged, _ = types_db.stage(database, encoded, summary, marks)
+        from unbake.layout import index
+
+        # Sources still include headers this render no longer produces until the headers step rewrites them, and
+        # that step deletes them in the same install; until then they stay listed as generated.
+        retained = index.headers(project) - outputs.keys()
+        if retained:
+            listing = outputs[index.path(project)]
+            lookup = json.loads(listing.read_bytes() if isinstance(listing, Path) else listing)
+            for path in retained:
+                if path.is_file():
+                    lookup["headers"][path.relative_to(project.include[0]).as_posix()] = inputs.digest(path)
+            outputs[index.path(project)] = index.encoded(lookup)
+        outputs = {
+            path: content
+            for path, content in outputs.items()
+            if not path.is_file()
+            or (
+                inputs.digest(path) != inputs.digest(content)
+                if isinstance(content, Path)
+                else path.read_bytes() != content
+            )
+        }
+        backups: dict[Path, Path | None] = {}
+        try:
+            for path in set(outputs) | {database}:
+                if path.is_file():
+                    descriptor, name = tempfile.mkstemp(prefix=".typemap-backup-", dir=path.parent)
+                    os.close(descriptor)
+                    backup_path = Path(name)
+                    backups[path] = backup_path
+                    atomic_files.copyfile(path, backup_path)
+                else:
+                    backups[path] = None
+            for path, content in outputs.items():
+                if isinstance(content, Path):
+                    storage.install(path, content)
+                else:
+                    storage.write(path, content)
+            types_db.install(database, staged)
+        except BaseException:
+            for path, backup in backups.items():
+                if backup is None:
+                    path.unlink(missing_ok=True)
+                else:
+                    atomic_files.publish(backup, path)
+            raise
+        finally:
+            staged.unlink(missing_ok=True)
+            for backup in backups.values():
+                if backup is not None:
+                    backup.unlink(missing_ok=True)
 
 
 def validate_headers(

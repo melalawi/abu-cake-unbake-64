@@ -6,7 +6,7 @@ from tests.preprocessor import output
 from tests.project_fixture import ProjectCase
 from tests.typemap.test_facts import SourceKeyTests
 from tests.typemap.test_render_once import session, solution
-from unbake import process
+from unbake import pool, process
 from unbake.cache import Cache
 from unbake.typemap import database, facts, regeneration
 
@@ -45,6 +45,16 @@ class EffectiveDependencyTests(SourceKeyTests):
 
 
 class RenderInputTests(ProjectCase):
+    def setUp(self):
+        super().setUp()
+        boundary = patch.object(
+            pool,
+            "run",
+            lambda host, fn, jobs, shared=None: [fn(job) if shared is None else fn(shared, job) for job in jobs],
+        )
+        boundary.start()
+        self.addCleanup(boundary.stop)
+
     versions = ("us",)
 
     def test_caller_argument_changes_regenerate_a_void_header_contract(self):

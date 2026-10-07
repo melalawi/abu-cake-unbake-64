@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from tests.kit import TempCase
+from unbake import pool
 from unbake.cache import Cache
 from unbake.typemap import facts, inference_cache, layers
 
@@ -56,7 +57,7 @@ class InferenceReuseCounts(RealSlice):
                 self.project, self.cache, ["map"], self.seeds(store, "x"), compute, output=store
             )
         self.assertEqual(compute.call_count, 1)
-        self.assertEqual((cold, len(walks) - cold), (1, 0))
+        self.assertEqual((cold, len(walks) - cold), (0, 0))
         self.assertTrue(all(row["sha256"].startswith("x") for row in self._receipts(warm)))
 
     def _receipts(self, graph):
@@ -80,3 +81,47 @@ class SpellingCounts(TempCase):
         for _ in range(100):
             layers.spelling(project, self.root / "machine", header)
         self.assertEqual(layers._spell_in.cache_info().misses, 1)
+
+
+class PooledReceiptCounts(RealSlice):
+    def test_only_changed_real_seed_rows_need_jobs_and_none_are_normalized_in_the_parent(self):
+        import copy
+        import inspect
+
+        store = facts.Store(self.project, self.cache)
+        seeds = self.seeds(store)
+        state = {"worker": False, "serial": 0, "items": 0}
+        original = inference_cache.Receipts.inputs
+
+        def inputs(receipts, value):
+            state["serial"] += int(not state["worker"])
+            return original(receipts, value)
+
+        def run(host, fn, jobs, shared=None):
+            state["worker"] = True
+            try:
+                if fn.__name__ == "_inputs_job":
+                    state["items"] += sum(len(job) for job in jobs)
+                return [fn(job) if shared is None else fn(shared, job) for job in jobs]
+            finally:
+                state["worker"] = False
+
+        kwargs = {"policy": object()} if "policy" in inspect.signature(inference_cache.infer).parameters else {}
+        compute = MagicMock(return_value={"functions": {}, "constraints": []})
+        with patch.object(pool, "run", run), patch.object(inference_cache.Receipts, "inputs", inputs):
+            first = inference_cache.infer(self.project, self.cache, ["map"], seeds, compute, output=store, **kwargs)
+            self.assertEqual(state["serial"], 0)
+            self.assertEqual(state["items"], len(seeds))
+            state["items"] = 0
+            inference_cache.infer(self.project, self.cache, ["map"], seeds, compute, output=store, **kwargs)
+            self.assertEqual(state["items"], 0)
+            changed = list(seeds)
+            changed[0] = copy.deepcopy(changed[0])
+            for record in changed[0]["functions"].values():
+                record["provenance"]["sha256"] = "landed"
+            after = inference_cache.infer(self.project, self.cache, ["map"], changed, compute, output=store, **kwargs)
+            self.assertEqual(state["serial"], 0)
+            self.assertEqual(state["items"], 1)
+            self.assertEqual(first[1], after[1])
+            self.assertNotEqual(first[2], after[2])
+            self.assertEqual(compute.call_count, 1)
