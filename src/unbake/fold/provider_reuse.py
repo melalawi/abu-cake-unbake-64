@@ -213,3 +213,51 @@ def view(project: Project, host: Host, versions: tuple[str, ...]) -> Iterator[Pr
                 mirror.parent.mkdir(parents=True, exist_ok=True)
                 mirror.symlink_to(path)
         yield replace(project, work_include=(root, *project.work_include))
+
+
+def regenerated(
+    project: Project,
+    outputs: dict[Path, bytes | Path],
+    contents: dict[Path, str],
+    installed: dict[Path, str],
+    *,
+    cache: dict[str, Catalog] | None = None,
+) -> dict[Path, bytes | Path]:
+    """Use fold's owner plan on the complete retained and proposed header view.
+
+    A regenerated wrapper can still be reached alongside an older header by a
+    published source. Keep its canonical imports in this installation and in
+    the manifest, so the following headers step cannot delete their owners.
+    All native validation still consumes the normalized proposed bytes.
+    """
+    from unbake.layout import index
+
+    proposed = {
+        path: (data.read_bytes() if isinstance(data, Path) else data).decode()
+        for path, data in outputs.items()
+        if path.suffix == ".h"
+    }
+    effective = {**contents, **proposed}
+    edits = plan(project, effective, tuple(project.versions), changed=frozenset(proposed), cache=cache)
+    normalized = dict(outputs)
+    for edit in edits:
+        effective[edit.path] = edit.after
+        proposed[edit.path] = edit.after
+        normalized[edit.path] = edit.after.encode()
+    needed = include_closure(effective, tuple(project.include), set(proposed))
+    retained = needed & installed.keys() - proposed.keys()
+    for path in retained:
+        normalized[path] = effective[path].encode()
+    if edits or retained:
+        listing = normalized.get(index.path(project))
+        if listing is not None:
+            import json
+
+            lookup = json.loads(listing.read_bytes() if isinstance(listing, Path) else listing)
+            changes = {
+                path.relative_to(project.include[0]).as_posix(): effective[path]
+                for path in {*retained, *(edit.path for edit in edits)}
+                if path.is_relative_to(project.include[0])
+            }
+            normalized[index.path(project)] = index.encoded(index.overlay(lookup, changes))
+    return normalized

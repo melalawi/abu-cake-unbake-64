@@ -14,8 +14,11 @@ from unbake.typemap import regeneration
 
 def session(cache: Cache, inputs: str) -> regeneration.Session:
     made = object.__new__(regeneration.Session)
-    made.project = SimpleNamespace(include=(Path("/include"),), root=Path("/"))
+    made.project = SimpleNamespace(
+        include=(Path("/include"),), root=Path("/"), build=Path("/build"), versions=(), work_include=()
+    )
     made.cache, made.inputs = cache, hashlib.sha256(inputs.encode()).hexdigest()
+    made.authored, made.installed, made.provider_catalogs = {}, {}, {}
     made.source_words = {}
     made.reserved, made.consumer_names, made.consumer_tags = set(), {}, {}
     return made

@@ -39,7 +39,10 @@ entries are restored without scanning or copying the entire project.
 Equal guarded aggregate definitions and typedefs use one installed shared owner.
 Comparison stages the same ownership view without editing the draft headers.
 Publication reconciles both its initial catalogue and final proposed headers
-before proving their existing consumers. Different declarations, conflicting
+before proving their existing consumers. Type/header regeneration uses the same
+owner plan before caching rendered bytes and after final namespace projection;
+its manifest retains canonical imported headers through the next installation.
+Different declarations, conflicting
 typedef dependencies, conditional uncertainty and import cycles refuse with
 provider locations. The native source, ABI, consumer and ROM proof gates remain
 required.

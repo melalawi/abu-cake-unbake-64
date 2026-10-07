@@ -53,6 +53,9 @@ class OrphanHeaderTests(ProjectCase):
         session = object.__new__(regeneration.Session)
         session.project, session.cache = self.project, Cache(self.project.cache)
         session.inputs = "db50f25979c8d8b6f7af81fb18bc938122b0556565d22b97d12d3c16b714fac2"
+        session.authored = {self.hand: self.hand.read_text()}
+        session.installed = {}
+        session.provider_catalogs = {}
         session.source_words = {}
         session.reserved, session.consumer_names, session.consumer_tags = set(), {}, {}
         return session

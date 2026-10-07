@@ -15,6 +15,7 @@ from unbake import cache as retention
 from unbake import effort, inputs, pool, tui
 from unbake.cache import Cache, key, memo
 from unbake.config import Held, Host, Project
+from unbake.fold import provider_reuse
 from unbake.layout import headers
 from unbake.layout import index as layout_index
 from unbake.layout import map as layout_map
@@ -23,7 +24,7 @@ from unbake.typemap import header_names, split, storage
 
 # Bump when the value an artifact kind stores changes for the same inputs.
 SOURCE_NAMES_SCHEMA = 7
-RENDER_SCHEMA = 9
+RENDER_SCHEMA = 10
 
 
 def environment(project: Project, policy: Host | None) -> str:
@@ -31,6 +32,7 @@ def environment(project: Project, policy: Host | None) -> str:
     code = Path(__file__).parents[1]
     modules = (
         "cdecl.py",
+        "fold/provider_reuse.py",
         "prefixes.py",
         "typemap/regeneration.py",
         "typemap/header_names.py",
@@ -126,6 +128,7 @@ def _projection_job(shared: Any, jobs: Any) -> None:
 class Session:
     def __init__(self, project: Project, policy: Host | None) -> None:
         self.project, self.policy = project, policy
+        self.provider_catalogs: dict[str, provider_reuse.Catalog] = {}
         self.cache = Cache(project.cache)
         self.environment = environment(project, policy)
         self.certificates = self.cache.certificates("typemap-certificates", self.environment)
@@ -408,7 +411,17 @@ class Session:
             if result is not None:
                 return result
             effort.count("render.compute", 1, 1)
-            outputs = compute()
+            outputs = provider_reuse.regenerated(
+                self.project,
+                compute(),
+                {**self.authored, **self.installed},
+                self.installed,
+                cache=self.provider_catalogs,
+            )
+            listing = outputs.get(layout_index.path(self.project))
+            if listing is not None:
+                lookup = json.loads(listing.read_bytes() if isinstance(listing, Path) else listing)
+                value["declaration_headers"] = dict(lookup["symbols"])
             return {
                 "outputs": {
                     storage.relative(self.project, p): data.decode()

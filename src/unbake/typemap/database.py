@@ -658,6 +658,13 @@ def publish(project: Project, value: dict[str, Any], previous: dict[str, Any], *
                     data, algorithm="sha256"
                 )
         outputs[layout_index.path(project)] = layout_index.encoded(lookup)
+    from unbake.fold import provider_reuse
+
+    # Namespace projection can extend an installed header after its render.
+    # Reconcile that final view with the same owner policy before any proof.
+    outputs = provider_reuse.regenerated(
+        project, outputs, installed, session.installed, cache=session.provider_catalogs
+    )
     sources = {path: canonical.get(path, text.encode()).decode() for path, text in session.sources.items()}
     reconnected = _consumer_imports(project, outputs, sources)
     outputs.update(reconnected)
