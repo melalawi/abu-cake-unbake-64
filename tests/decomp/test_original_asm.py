@@ -11,7 +11,6 @@ from unbake.config import Held
 from unbake.decomp import original_asm
 from unbake.layout import split
 from unbake.report import progress
-from unbake.report import units as report_units
 from unbake.work import shape
 
 MTC0 = [0x40846000, 0x03E00008, 0]  # mtc0 a0,$12; jr ra; nop (__osSetSR)
@@ -129,15 +128,15 @@ class BuildAndProgressTests(OriginalAsmCase):
         # A new unit shortens the slice before it: slices are cut again when slices.mk changes.
         self.assertIn("build/$1/slices/%.bin: $$($1.BASEROM) versions/$1/slices.mk", makefile)
 
-    def test_original_asm_counts_as_done_in_its_own_category(self) -> None:
+    def test_original_asm_is_only_denominator_in_its_own_category(self) -> None:
         rows = {
             "c": ("c", ".c", True),
-            "hasm": ("original_asm", ".s", True),
-            "asm": (None, None, False),
+            "hasm": ("original_asm", ".s", False),
+            "asm": ("asm", None, False),
         }
         for kind, (category, suffix, complete) in rows.items():
             with self.subTest(kind):
-                unit = progress._unit(report_units.Function("alpha", "alpha", kind, 0, 12, None), None)
+                unit = progress._unit(split.Function("us", "alpha", 0, 12, 0, "alpha", kind, ("alpha",)))
                 self.assertEqual(unit["metadata"]["complete"], complete)
                 self.assertEqual(unit["metadata"].get("progress_categories"), [category] if category else None)
                 if suffix:

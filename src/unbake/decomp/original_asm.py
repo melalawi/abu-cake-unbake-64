@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from unbake import atomic as atomic_files
-from unbake import process, scratch
+from unbake import process, scratch, strict_json
 from unbake.compilers.families.mips import ORIGINAL_RULES
 from unbake.config import Held
 from unbake.layout import split
@@ -45,7 +45,7 @@ def load(project: Project) -> dict[str, Record]:
     if not path.is_file():
         return {}
     try:
-        value = json.loads(path.read_text())
+        value = strict_json.read(path)
     except (OSError, ValueError) as error:
         raise Held("original-asm", f"{MANIFEST}: {error}") from error
     if not isinstance(value, dict) or value.get("schema") != 1 or set(value) != {"schema", "functions"}:

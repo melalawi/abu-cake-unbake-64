@@ -192,6 +192,9 @@ class FuzzyPublishTests(ProjectCase):
         path = self.project.version("us").split
         path.write_text(path.read_text().replace("asm, alpha]", "asm, alpha_row]"))
         current = config.load(self.project.root)
+        from unbake.report import verify
+
+        (current.root / verify.BUNDLE).write_bytes(verify.bundle())
         with (
             patch.object(progress, "readme_descriptions", return_value={v: v for v in self.versions}),
             patch.object(progress, "render", return_value="progress"),

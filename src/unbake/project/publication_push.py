@@ -147,6 +147,9 @@ def _prove(job: tuple[Project, Host, str, str]) -> dict[str, Any] | None:
 def reconcile(
     project: Project, host: Host, before: dict[ProofKey, str]
 ) -> tuple[list[dict[str, str]], dict[ProofKey, str]]:
+    from unbake.report import state
+
+    state.inventory(project)
     after = snapshot(project, host)
     affected = [key for key, digest in after.items() if before.get(key) != digest]
     # Source admission remains a publication gate after the rebase. Scan each
@@ -192,6 +195,9 @@ def push(project: Project, host: Host, remote: str, *, attempts_limit: int = 5) 
         raise Held("publish", "publish.push_remote: supply a remote name or URL")
     branch = host.publish_branch
     _git(project, "check-ref-format", "refs/heads/" + branch)
+    from unbake.report import state
+
+    state.inventory(project)
     before: dict[ProofKey, str] | None = None
     reconciled = []
     original = _git(project, "rev-parse", "HEAD")

@@ -201,21 +201,33 @@ def _preprocessed_lines(
 _DIRECTIVE = re.compile(r"^\s*#\s*(\w+)\s*(.*?)\s*$")
 
 
-def _version_lines(project: Project, policy: Host, text: str, version: str, unit: str) -> set[int] | None:
+def _version_lines(
+    project: Project,
+    policy: Host | None,
+    text: str,
+    version: str,
+    unit: str,
+    *,
+    source_only: bool = False,
+    non_matching: bool = False,
+) -> set[int] | None:
     """Select conditional branches whose tests name only VERSION and command-line macros.
 
     Returns None whenever a header could influence a test; cpp then decides.
     """
     code = re.sub(r"/\*.*?\*/", lambda match: re.sub(r"[^\n]", " ", match[0]), text, flags=re.S)
     code = re.sub(r"//[^\n]*", "", code)
-    if "\\\n" in code or re.search(r"^\s*#\s*include\b", code, re.M):
+    if "\\\n" in code or (not source_only and re.search(r"^\s*#\s*include\b", code, re.M)):
         return None
     from unbake.compilers import drivers
 
     compiler = project.compiler_for(unit)
     from unbake.compilers.families import family_for
 
-    values = [*family_for(compiler).analysis_cppflags(project.cppflags), *drivers.flags(project, version, unit)]
+    values = [
+        *family_for(compiler).analysis_cppflags(project.cppflags),
+        *drivers.flags(project, version, unit, non_matching=non_matching),
+    ]
     preprocess, _ = drivers._options(values)
     if "-include" in preprocess or "-imacros" in preprocess:
         return None
@@ -248,7 +260,7 @@ def _version_lines(project: Project, policy: Host, text: str, version: str, unit
         except LookupError:
             return None
         for name in set(re.findall(r"\b[A-Za-z_]\w*\b", expression)):
-            value = macros.get(name)
+            value = macros.get(name, 0)
             if name not in known or value is None:
                 return None
             expression = re.sub(rf"\b{name}\b", str(value), expression)
@@ -302,3 +314,22 @@ def _version_lines(project: Project, policy: Host, text: str, version: str, unit
                 value = rest[len(name) :].strip()
                 macros[name] = int(value) if re.fullmatch(r"\d+", value) else (1 if not value else None)
     return active if not stack else None
+
+
+def version_source(project: Project, text: str, version: str, unit: str, *, non_matching: bool = False) -> str:
+    """ROM-free source-owned version selection using the existing conditional boundary.
+
+    Includes remain unexpanded. Unknown header-dependent tests require native reconciliation;
+    source-state validation never invents their active branch.
+    """
+    from unbake.config import Held
+
+    active = _version_lines(project, None, text, version, unit, source_only=True, non_matching=non_matching)
+    if active is None:
+        raise Held(
+            "report", f"source.conditions: {unit} VERSION {version}: native source-state reconciliation required"
+        )
+    return "".join(
+        line if index in active else "".join("\n" if char == "\n" else " " for char in line)
+        for index, line in enumerate(text.splitlines(keepends=True))
+    )

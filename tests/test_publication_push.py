@@ -38,7 +38,7 @@ class PublicationPushTests(ProjectCase):
         return (
             patch.object(flow.split, "functions", side_effect=lambda p, v: self.rows[v]),
             patch.object(flow.drivers, "flags", side_effect=lambda p, v, u, **kwargs: ["-O2", "-D" + v]),
-            patch.object(flow.attempts, "fuzzy_sources", return_value=frozenset()),
+            patch.object(flow.attempts, "fuzzy_sources", return_value={}),
         )
 
     def test_snapshot_reads_each_actual_input_once_with_two_version_scans_and_no_native_work(self):

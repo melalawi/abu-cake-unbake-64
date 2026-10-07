@@ -74,3 +74,29 @@ The former publication helpers map to public commands as follows:
 
 These commands own publication correctness. They do not import historical private
 raw-scan evidence into the attempts store or promote an unverified raw identity.
+
+Progress reports use the current split member inventory. Only unguarded C is exact;
+startup and original assembly remain code in the denominator. Address aliases count
+once. Declared non-code subsegments contribute data, while opaque top-level binary
+assets are excluded. Data matching has no owning proof yet: its state is unknown
+and its verified numerator is zero.
+
+A retained draft needs its committed receipt, exact source hash, selected compiler,
+and all current holding versions. Historical best scores never earn current progress.
+Similarity may be null; the objdiff fuzzy scalar includes only known similarity,
+so it is a lower bound. The separate `report-state.json` records draft byte/function
+coverage, current scores including nulls, source pins and artifact mappings. A missing
+receipt requires reviewed source-bound prior evidence and compilation proof for every
+holding version. The publication owner performs native reconciliation before a new
+publication transition; the report validator refuses a missing record and never
+manufactures eligibility from history. Prior receipt evidence is preserved by the
+owning offline migration, with unavailable dependency proof kept explicit.
+
+The owning build generator writes `tools/report-verifier.zip`, including the exporter
+and its source parser. Both generated CI workflows check its immutable content hash
+and run `python3 -m unbake.report.verify` before copying reports. Verification needs no
+ROM or compiler executable. It checks strict JSON, receipt agreement, full inventories,
+canonical report bytes, README figures and the source/coverage manifest. Each report
+artifact retains the established version naming and gains a companion manifest with
+the immutable checkout revision, tool payload hash and report hash. Consumers must
+compare those identities with the requested revision before accepting numerical repair.

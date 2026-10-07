@@ -75,7 +75,7 @@ class MergeTests(ProjectCase):
 
 
 class ReaderTests(ProjectCase):
-    def test_fresh_tree_measures_fuzzy_from_the_committed_summary(self) -> None:
+    def test_fresh_tree_history_does_not_measure_current_source_fuzzy(self) -> None:
         table = {"beta": Summary(12, {"us": 50.0}, False, 2.0, 2)}
         attempts.summary_path(self.project).write_bytes(attempts.encode(table))
         report = progress.measure(self.project, self.host, "us")
@@ -83,9 +83,9 @@ class ReaderTests(ProjectCase):
         self.assertEqual(measures["matched_code"], 0)
         self.assertEqual(measures["total_code"], 36)
         self.assertEqual(measures["total_functions"], 3)
-        self.assertEqual(measures["fuzzy_match_percent"], 16.666666)
+        self.assertEqual(measures["fuzzy_match_percent"], 0)
         beta = next(unit for unit in report["units"] if unit["name"] == "beta")
-        self.assertEqual(beta["functions"][0]["fuzzy_match_percent"], 50.0)
+        self.assertNotIn("fuzzy_match_percent", beta["functions"][0])
 
     def test_percentages_are_shortest_32_bit_floats(self) -> None:
         for value, expected in ((2.53478674704256, 2.5347867), (12.428734321550742, 12.428735), (100.0, 100.0)):
@@ -112,6 +112,7 @@ class ReaderTests(ProjectCase):
                     patch("unbake.report.progress.write", return_value=[self.project.root / "README.md"]),
                     patch.object(attempts, "committed_documents", side_effect=[before, after]),
                     patch.object(land, "_git", side_effect=git),
+                    patch.object(land, "dangling_includes", return_value=[]),
                 ):
                     self.assertEqual(land.record(self.project, self.host), expected)
                 commits = [args for args in calls if "commit" in args]

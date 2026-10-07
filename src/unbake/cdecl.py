@@ -88,6 +88,7 @@ class Declarations:
     complete_uses: set[str] = field(default_factory=set)
     complete_alias_uses: set[str] = field(default_factory=set)
     declared: set[str] = field(default_factory=set)
+    functions: set[str] = field(default_factory=set)
 
 
 class NameParser:
@@ -228,9 +229,14 @@ class NameParser:
                 break
             self.take(",")
         if external and self.peek() == "{":
-            self.take()
-            self.skip({"}"})
-            self.take("}")
+            self.result.functions.add(name)
+            self.take("{")
+            # Version branches may each open a call closed by shared trailing arguments.
+            # Bodies are opaque to declaration discovery; only brace depth owns their end.
+            depth = 1
+            while depth:
+                token = self.take()
+                depth += (token == "{") - (token == "}")
         else:
             self.take(";")
 
@@ -260,6 +266,7 @@ def declarations(source: str) -> Declarations:
         set(parsed.complete_uses),
         set(parsed.complete_alias_uses),
         set(parsed.declared),
+        set(parsed.functions),
     )
 
 

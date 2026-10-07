@@ -353,21 +353,7 @@ def _extract(project: Project, host: Host) -> None:
 def _progress_key(project: Project, host: Host) -> str:
     from unbake.report import progress
 
-    sources = sorted([*project.src.glob("*.c"), *project.src.glob("*.s")])
-    from unbake import inputs
-
-    return key(
-        "progress",
-        str(progress.SCHEMA),
-        *(
-            part
-            for path in (project.root / "layout.toml", *sources)
-            for part in (
-                path.relative_to(project.root).as_posix(),
-                inputs.digest(path, algorithm="sha256", reuse=retention.configured()),
-            )
-        ),
-    )
+    return progress.input_key(project)
 
 
 def _progress(project: Project, host: Host) -> None:

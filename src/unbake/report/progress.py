@@ -10,19 +10,20 @@ import struct
 from pathlib import Path
 from typing import Any, cast
 
+from unbake import strict_json
 from unbake.config import Held, Host, Project
+from unbake.layout import split
 from unbake.report import files, readme_layout
-from unbake.report import units as report_units
 
 # Bump when this step's output changes for the same inputs. Keys never digest the tool's code.
-SCHEMA = 3
-# Row kinds that count as done, each its own objdiff progress category: matched C and original asm (.s).
-DONE = {"c": ("c", "Matched C", ".c"), "hasm": ("original_asm", "Original asm", ".s")}
+SCHEMA = 4
+# Only C earns exact matched credit. Original assembly remains a separate denominator category.
+DONE = {"c": ("c", "Matched C", ".c")}
 
 
 def _json(path: Path) -> dict[str, Any]:
     try:
-        return cast(dict[str, Any], json.loads(path.read_bytes()))
+        return cast(dict[str, Any], strict_json.read(path))
     except (OSError, ValueError) as error:
         raise Held("report", f"objdiff report {path}: {error}") from error
 
@@ -66,8 +67,8 @@ def _percentage(measures: dict[str, Any], field: str, name: str) -> float:
 
 def _figures(document: dict[str, Any], name: str, functions: bool = False) -> tuple[int, int, float, float]:
     measures = _measures(document, name)
-    kind = "units" if functions else "code"
-    complete = _counter(measures, "complete_" + kind, name)
+    kind = "functions" if functions else "code"
+    complete = _counter(measures, "matched_functions" if functions else "complete_code", name)
     total = _counter(measures, "total_" + kind, name)
     if complete > total:
         raise Held("report", f"{name}.measures: complete_{kind} exceeds total_{kind}")
@@ -101,8 +102,18 @@ def progress(reports: dict[str, dict[str, Any]], descriptions: dict[str, str]) -
             raise Held("report", f"readme.descriptions.{version}: invalid table description")
         byte_line = _line("bytes    ", document, version)
         function_line = _line("functions", document, version, functions=True)
+        draft: dict[str, Any] = next(
+            (category["measures"] for category in document.get("categories", []) if category["id"] == "draft"), {}
+        )
+        detail = (
+            f"Retained drafts: {int(draft.get('total_code', 0)):,} bytes / "
+            f"{int(draft.get('total_functions', 0)):,} functions; "
+            f"declared data: {int(document['measures'].get('total_data', 0)):,} bytes (matching unknown). "
+            "Fuzzy % is known similarity; unknown scores remain unknown."
+        )
         blocks.append(
-            f"| {description} |\n|---|\n| <pre><code>{byte_line}</code><br><code>{function_line}</code></pre> |"
+            f"| {description} |\n|---|\n| <pre><code>{byte_line}</code><br>"
+            f"<code>{function_line}</code></pre> {detail} |"
         )
     if len(reports) > 1:
         summaries = {"all": _aggregate(reports), **reports}
@@ -111,7 +122,14 @@ def progress(reports: dict[str, dict[str, Any]], descriptions: dict[str, str]) -
             f"<code>{_line(version.ljust(width), document, version)} bytes</code>"
             for version, document in summaries.items()
         ]
-        blocks.insert(0, "<pre>" + "<br>".join(lines) + "</pre>")
+        data = int(summaries["all"]["measures"].get("total_data", 0))
+        blocks.insert(
+            0,
+            "<pre>"
+            + "<br>".join(lines)
+            + "</pre>\n"
+            + f"All versions: {data:,} declared data bytes (matching unknown); opaque binary assets excluded.",
+        )
     return "\n\n".join(blocks)
 
 
@@ -182,14 +200,10 @@ def _aggregate(reports: dict[str, dict[str, Any]]) -> dict[str, Any]:
     matched = sum(row[0] for row in figures)
     total = sum(row[1] for row in figures)
     fuzzy = sum(row[1] * row[3] for row in figures) / total if total else 0.0
-    return {
-        "version": 2,
-        "measures": {
-            "complete_code": matched,
-            "total_code": total,
-            "fuzzy_match_percent": fuzzy,
-        },
-    }
+    units = [{"measures": report["measures"]} for report in reports.values()]
+    measures = _sum_measures(units)
+    measures.update(complete_code=matched, matched_code=matched, total_code=total, fuzzy_match_percent=fuzzy)
+    return {"version": 2, "measures": measures}
 
 
 def render(template: str, reports: dict[str, dict[str, Any]], *, descriptions: dict[str, str] | None = None) -> str:
@@ -274,140 +288,174 @@ def f32(value: float) -> float:
     return float(single)
 
 
-def _unit(row: report_units.Function, best: float | None, fuzzy_source: str | None = None) -> dict[str, Any]:
+def _share(part: float, whole: float) -> float:
+    return f32(100.0 * part / whole) if whole else 0.0
+
+
+def _unit(
+    row: split.Function,
+    *,
+    members: list[split.Function] | None = None,
+    receipts: dict[str, dict[str, Any]] | None = None,
+    version: str = "",
+) -> dict[str, Any]:
+    entries = members if members is not None else [row]
+    matched = row.kind == "c"
     size = row.end - row.start
-    matched = row.kind in DONE
+    functions = []
+    weighted = 0.0
+    draft = False
+    for entry in entries:
+        receipt_name = next(
+            (name for name in entry.aliases if receipts is not None and name in receipts),
+            None,
+        )
+        receipt = receipts[receipt_name] if receipts is not None and receipt_name is not None else None
+        similarity = 100.0 if matched else (receipt["versions"][version] if receipt is not None else None)
+        length = entry.end - entry.start
+        function: dict[str, Any] = {
+            "name": entry.name,
+            "size": str(length),
+            "metadata": {},
+            "address": str(entry.address or 0),
+        }
+        if similarity is not None:
+            function["fuzzy_match_percent"] = f32(similarity)
+            weighted += length * similarity / 100
+        draft |= receipt is not None
+        functions.append(function)
     measures: dict[str, Any] = {
         "total_code": str(size),
-        "matched_data_percent": 100.0,
-        "total_functions": 1,
-        "complete_data_percent": 100.0,
+        "total_functions": len(entries),
         "total_units": 1,
+        "fuzzy_match_percent": _share(weighted, size),
     }
-    function: dict[str, Any] = {"name": row.name, "size": str(size), "metadata": {}, "address": "0"}
-    section: dict[str, Any] = {"name": ".text", "size": str(size), "metadata": {}}
-    fuzzy = 100.0 if matched else (None if best is None else f32(best))
-    if fuzzy is not None:
-        measures["fuzzy_match_percent"] = fuzzy
-        function["fuzzy_match_percent"] = fuzzy
-        section["fuzzy_match_percent"] = fuzzy
     if matched:
         measures.update(
             matched_code=str(size),
-            matched_code_percent=100.0,
-            matched_functions=1,
-            matched_functions_percent=100.0,
             complete_code=str(size),
+            matched_code_percent=100.0,
             complete_code_percent=100.0,
+            matched_functions=len(entries),
+            matched_functions_percent=100.0,
             complete_units=1,
         )
-    metadata: dict[str, Any] = {"complete": matched}
-    if matched:
-        category, _, suffix = DONE[row.kind]
-        metadata["source_path"] = f"src/{row.path}{suffix}"
-        metadata["progress_categories"] = [category]
-    elif fuzzy_source:
-        metadata["source_path"] = f"src/{fuzzy_source}.c"
+    category = "c" if matched else "original_asm" if row.kind == "hasm" else "draft" if draft else "asm"
+    metadata: dict[str, Any] = {"complete": matched, "progress_categories": [category]}
+    if matched or row.kind == "hasm":
+        metadata["source_path"] = f"src/{row.path}{'.c' if matched else '.s'}"
+    elif draft:
+        names = [name for entry in entries for name in entry.aliases if receipts is not None and name in receipts]
+        metadata["source_path"] = f"src/{names[0]}.c"
     return {
-        "name": row.name,
+        "name": Path(row.path).name,
         "measures": measures,
-        "sections": [section],
-        "functions": [function],
+        "sections": [
+            {"name": ".text", "size": str(size), "metadata": {}, "fuzzy_match_percent": _share(weighted, size)}
+        ],
+        "functions": functions,
         "metadata": metadata,
     }
 
 
-def measure(project: Project, policy: Host, version: str) -> dict[str, Any]:
-    """Progress of one version from its split rows and the best attempt of each unmatched function."""
-    from unbake.layout import split
-    from unbake.work import attempts
-
-    rows = report_units.functions(project.version(version))
-    summaries = attempts.summaries(project)
-    best = {function: summary.best[version] for function, summary in summaries.items() if version in summary.best}
-    retained = {name: summary for name, summary in summaries.items() if summary.fuzzy is not None}
-    fuzzy_rows = {}
-    if retained:
-        owners = split.owners_by_alias(project, version)
-        for function, summary in retained.items():
-            found = owners.get(function, ())
-            if len(found) == 1:
-                name = Path(found[0].path).name
-                fuzzy_rows[name] = function
-                if version in summary.best:
-                    best[name] = max(best.get(name, 0.0), summary.best[version])
-    units = [_unit(row, best.get(row.name), fuzzy_rows.get(row.name)) for row in rows]
-    total = sum(row.end - row.start for row in rows)
-    matched_rows = [row for row in rows if row.kind in DONE]
-    matched = sum(row.end - row.start for row in matched_rows)
-    fuzzy_bytes = sum(
-        (row.end - row.start) * (100.0 if row.kind in DONE else best.get(row.name, 0.0)) / 100.0 for row in rows
+def _sum_measures(units: list[dict[str, Any]]) -> dict[str, Any]:
+    counters = (
+        "total_code",
+        "matched_code",
+        "complete_code",
+        "total_data",
+        "matched_data",
+        "complete_data",
+        "total_functions",
+        "matched_functions",
+        "total_units",
+        "complete_units",
     )
+    result: dict[str, Any] = {field: sum(int(unit["measures"].get(field, 0)) for unit in units) for field in counters}
+    for field, total in (
+        ("matched_code", "total_code"),
+        ("complete_code", "total_code"),
+        ("matched_functions", "total_functions"),
+    ):
+        result[field + "_percent"] = _share(result[field], result[total])
+    weighted = sum(
+        int(unit["measures"].get("total_code", 0)) * unit["measures"].get("fuzzy_match_percent", 0) / 100
+        for unit in units
+    )
+    result["fuzzy_match_percent"] = _share(weighted, result["total_code"])
+    # Data matching is unknown: zero verified numerator, no fabricated percentage.
+    return result
 
-    def share(part: float, whole: float) -> float:
-        return f32(100.0 * part / whole) if whole else 0.0
 
-    categories = []
-    for kind, (ident, name, _) in DONE.items():
-        done = [row for row in rows if row.kind == kind]
-        size = sum(row.end - row.start for row in done)
-        categories.append(
-            {
-                "id": ident,
-                "name": name,
-                "measures": {
-                    "total_code": total,
-                    "matched_code": size,
-                    "matched_code_percent": share(size, total),
-                    "complete_code": size,
-                    "complete_code_percent": share(size, total),
-                    "total_functions": len(rows),
-                    "matched_functions": len(done),
-                    "total_units": len(rows),
-                    "complete_units": len(done),
-                },
-            }
-        )
+def measure(project: Project, policy: Host | None, version: str, *, current: Any = None) -> dict[str, Any]:
+    """One current-source inventory; exact C, retained drafts, asm and declared data."""
+    from unbake.layout import split
+    from unbake.report import state
 
-    measures = {
-        "fuzzy_match_percent": share(fuzzy_bytes, total),
-        "total_code": total,
-        "matched_code": matched,
-        "matched_code_percent": share(matched, total),
-        "matched_data_percent": 100.0,
-        "total_functions": len(rows),
-        "matched_functions": len(matched_rows),
-        "matched_functions_percent": share(len(matched_rows), len(rows)),
-        "complete_code": matched,
-        "complete_code_percent": share(matched, total),
-        "complete_data_percent": 100.0,
-        "total_units": len(rows),
-        "complete_units": len(matched_rows),
+    if current is None:
+        current = state.inventory(project)
+    else:
+        state.assert_current(project, current)
+    units = [
+        _unit(row, members=split.unit_members(row), receipts=current.receipts, version=version)
+        for row in current.units[version]
+    ]
+    _, _, segments = split.layout(project.version(version).split)
+    for segment in segments:
+        for index, row in enumerate(segment.rows):
+            if row.kind in split.CODE_KINDS:
+                continue
+            stop = segment.rows[index + 1].start if index + 1 < len(segment.rows) else segment.end
+            if stop is None:
+                raise Held("report", f"data.boundary: VERSION {version} {row.path}: missing end")
+            units.append(
+                {
+                    "name": f"{row.kind}:{row.path}@{row.start:X}",
+                    "measures": {"total_data": str(stop - row.start), "total_units": 1},
+                    "sections": [{"name": row.kind, "size": str(stop - row.start), "metadata": {}}],
+                    "functions": [],
+                    "metadata": {"complete": False, "progress_categories": ["data"]},
+                }
+            )
+    category_units: dict[str, list[dict[str, Any]]] = {
+        kind: [] for kind in ("c", "original_asm", "draft", "asm", "data")
     }
-    # Summary counters are native integers (what _native_counts reads back); unit rows keep objdiff's proto3 strings.
-    return {"measures": measures, "units": units, "categories": categories, "version": 2}
+    for row in current.units[version]:
+        for member in split.unit_members(row):
+            entry = _unit(member, members=[member], receipts=current.receipts, version=version)
+            category_units[entry["metadata"]["progress_categories"][0]].append(entry)
+    category_units["data"] = [unit for unit in units if "data" in unit["metadata"]["progress_categories"]]
+    categories = [
+        {"id": ident, "name": label, "measures": _sum_measures(category_units[ident])}
+        for ident, label in (
+            ("c", "Matched C"),
+            ("original_asm", "Original asm"),
+            ("draft", "Retained C draft"),
+            ("asm", "Assembly"),
+            ("data", "Declared data"),
+        )
+    ]
+    return {"measures": _sum_measures(units), "units": units, "categories": categories, "version": 2}
 
 
 def findings(project: Project, policy: Host) -> list[str]:
     """Name every VERSION whose saved native totals disagree with current inputs."""
+    from unbake.report import state
+
+    try:
+        inventory = state.inventory(project)
+    except Held as error:
+        return [f"HELD(check): report: {error.reason}"]
     lines = []
     for version in project.versions:
         destination = project.root / "versions" / version / "report.json"
         try:
-            current = measure(project, policy, version)
+            current = measure(project, policy, version, current=inventory)
             saved = _json(destination)
             _native_counts(saved, destination)
-            expected = _measures(current, version)
-            actual = _measures(saved, destination)
             # Equal totals can conceal merged, renamed or reclassified rows.
             # Compare each VERSION's own inventory, including its open state.
-            current_units = [(unit["name"], unit.get("metadata", {}).get("complete")) for unit in current["units"]]
-            saved_units = [
-                (unit.get("name"), unit.get("metadata", {}).get("complete")) for unit in saved.get("units", [])
-            ]
-            if current_units != saved_units or any(
-                actual.get(field, 0) != expected.get(field, 0) for field in actual.keys() | expected.keys()
-            ):
+            if saved != current:
                 lines.append(f"HELD(check): stale report VERSION {version}: run unbake check")
         except Held as error:
             lines.append(f"HELD(check): report VERSION {version}: {error.reason}")
@@ -438,26 +486,79 @@ def readme_descriptions(project: Project) -> dict[str, str]:
     }
 
 
-def write(project: Project, policy: Host, *, reports: dict[str, dict[str, Any]] | None = None) -> list[Path]:
+def input_key(project: Project) -> str:
+    """The owning report's source/receipt/layout/exporter dependency identity."""
+    from unbake.cache import key
+    from unbake.report import verify
+
+    pins = verify.source_pins(project)
+    tool = pins.get(verify.BUNDLE, "missing verifier payload")
+    return key("progress", str(SCHEMA), json.dumps(pins, sort_keys=True), tool)
+
+
+def owner_descriptions(project: Project, template: str) -> dict[str, str]:
+    """Preserve the existing owning release and ROM identity labels for source-only regeneration."""
+    descriptions = {}
+    for version in project.versions:
+        match = re.search(r"^\| (" + re.escape(version) + r" \([^\n|]+) \|$", template, re.M)
+        if match is None:
+            raise Held("report", f"readme.descriptions.{version}: owner label required for source-only regeneration")
+        descriptions[version] = match[1]
+    return descriptions
+
+
+def write(
+    project: Project,
+    policy: Host | None,
+    *,
+    reports: dict[str, dict[str, Any]] | None = None,
+    source_only: bool = False,
+) -> list[Path]:
     """versions/*/report.json, the README progress block and attempts.json, the history they are measured from."""
     from unbake.layout import split
     from unbake.work import attempts
 
     if not project.versions:
         raise Held("report", "project.versions is missing")
-    descriptions = readme_descriptions(project)
+    if source_only:
+        # ROM identity text belongs to the existing owner README; this operation makes no ROM certification.
+        template = (project.root / "README.md").read_text()
+        descriptions = owner_descriptions(project, template)
+    else:
+        descriptions = readme_descriptions(project)
+    from unbake.report import state, verify
+
+    current = state.inventory(project)
+    candidate_history = attempts.summaries(project)
+    expected = {v: measure(project, policy, v, current=current) for v in project.versions}
     if reports is None:
-        reports = {v: measure(project, policy, v) for v in project.versions}
+        reports = expected
     readme = project.root / "README.md"
     if set(reports) != set(project.versions):
         raise Held("report", "reports: expected every configured VERSION exactly once")
     reports = {name: reports[name] for name in descriptions}
     for version, document in reports.items():
-        if "units" in document:
-            expected_units = [(row.name, row.kind in DONE) for row in report_units.functions(project.version(version))]
-            reported_units = [(unit["name"], unit.get("metadata", {}).get("complete")) for unit in document["units"]]
-            if reported_units != expected_units:
-                raise Held("report", f"VERSION {version}: function rows changed; regenerate report")
+        if document != expected[version]:
+            raise Held("report", f"VERSION {version}: report inventory or measures changed; regenerate report")
+    # Strictly read every existing metadata file before the first write.
+    rows = {
+        alias
+        for version in project.versions
+        for row in current.units[version]
+        for member in split.unit_members(row)
+        for alias in member.aliases
+    }
+    omitted = [name for name, summary in candidate_history.items() if summary.fuzzy is not None and name not in rows]
+    if omitted:
+        raise Held("report", f"source.transition: {omitted[0]}: report rewrite would erase a retained receipt")
+    prior_manifest = project.root / verify.MANIFEST
+    if prior_manifest.is_file():
+        _json(prior_manifest)
+    for version in project.versions:
+        previous = project.root / "versions" / version / "report.json"
+        if previous.is_file():
+            _json(previous)
+    state.assert_current(project, current)
     try:
         if readme.exists():
             original = readme.read_bytes().decode("utf-8", errors="surrogateescape")
@@ -475,12 +576,10 @@ def write(project: Project, policy: Host, *, reports: dict[str, dict[str, Any]] 
             written.append(destination)
         files.write(readme, rendered.encode("utf-8", errors="surrogateescape"))
         written.append(readme)
-        rows = {row.name for version in project.versions for row in report_units.functions(project.version(version))}
-        # Retained names may be aliases of a differently named ROM row.
-        for version in project.versions:
-            owners = split.owners_by_alias(project, version)
-            rows.update(name for name in attempts.fuzzy_sources(project) if name in owners)
         written.append(attempts.write_summary(project, rows))
+        manifest = project.root / verify.MANIFEST
+        files.write(manifest, (json.dumps(verify.document(project, current, reports), indent=2) + "\n").encode())
+        written.append(manifest)
     except OSError as error:
         raise Held("report", f"report file/tool: {error}") from error
     return written

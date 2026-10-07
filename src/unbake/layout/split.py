@@ -474,34 +474,36 @@ def _functions(project: Project, v: str) -> list[Function]:
     return result
 
 
-def members(project: Project, v: str) -> list[Function]:
-    """Every function of VERSION v: the rows of split.functions, with each C row that a merge left holding more
-    than one function (inner `type: func` entries) split into one interval per function. The rows stay the
-    units the build links; this is the function view the map and the type solve read."""
+def unit_members(row: Function) -> list[Function]:
+    """Expand one build unit into address-deduplicated function intervals."""
+    entries: dict[int, list[str]] = {0: list(dict.fromkeys((row.name, *row.aliases)))}
+    for name, offset in row.entries:
+        if 0 <= offset < row.end - row.start:
+            entries.setdefault(offset, []).append(name)
+    starts = sorted(entries)
     result = []
-    for row in functions(project, v):
-        inner = sorted((offset, name) for name, offset in row.entries if offset > 0)
-        if row.kind != "c" or not inner:
-            result.append(row)
-            continue
-        starts = [(0, row.name), *inner]
-        for index, (offset, name) in enumerate(starts):
-            stop = starts[index + 1][0] if index + 1 < len(starts) else row.end - row.start
-            own = (name, *(alias for alias in row.aliases if index == 0 and alias != name))
-            result.append(
-                Function(
-                    v,
-                    name,
-                    row.start + offset,
-                    row.start + stop,
-                    row.address + offset,
-                    row.path,
-                    row.kind,
-                    own,
-                    tuple((alias, 0) for alias in own),
-                )
+    for index, offset in enumerate(starts):
+        aliases = tuple(dict.fromkeys(entries[offset]))
+        stop = starts[index + 1] if index + 1 < len(starts) else row.end - row.start
+        result.append(
+            Function(
+                row.version,
+                aliases[0],
+                row.start + offset,
+                row.start + stop,
+                row.address + offset,
+                row.path,
+                row.kind,
+                aliases,
+                tuple((alias, 0) for alias in aliases),
             )
+        )
     return result
+
+
+def members(project: Project, v: str) -> list[Function]:
+    """Contained function entries; build units remain split.functions()."""
+    return [member for row in functions(project, v) for member in unit_members(row)]
 
 
 def member_owners(project: Project, function: str) -> dict[str, Function]:
