@@ -267,3 +267,22 @@ class CacheOwnershipWork(TempCase):
         self.assertEqual(len(cache.entries(store.root)), 1)
         self.assertEqual(len(cache.trim(store.root, 1, 0)), 1)
         self.assertEqual(certificates.contains(keys), frozenset())
+
+    def test_public_resolvers_reuse_one_real_alias_normalization(self):
+        from unbake.typemap import declarations, header_names
+
+        scalar = (VEC3.parent / "types.h").read_text()
+        aliases = header_names.alias_types(scalar)
+        self.assertEqual(aliases["s32"], "signed int")
+        with patch.object(declarations, "canonical", wraps=declarations.canonical) as produced:
+            first = declarations.resolver(aliases)
+            self.assertEqual(first("s32"), "int")
+            second = declarations.resolver(dict(aliases))
+            self.assertEqual(second("s32"), "int")
+            self.assertEqual(produced.call_count, 1)
+            self.assertEqual(second("s32"), "int")
+            self.assertEqual(produced.call_count, 1)
+            aliases["s32"] = "float"
+            self.assertEqual(first("s32"), "int")
+            self.assertEqual(declarations.resolver(aliases)("s32"), "float")
+            self.assertEqual(produced.call_count, 2)

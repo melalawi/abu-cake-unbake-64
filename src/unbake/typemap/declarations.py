@@ -514,14 +514,20 @@ def unknown(type_: str) -> bool:
 
 def _canonical_in(aliases: dict[str, str]) -> Callable[[str], str]:
     """canonical(type_, aliases), remembered per alias environment: a unit's extractions share one."""
-    known: dict[str, str] = memo(
-        "decl.canonical", tuple(aliases.items()), dict, size=retention.memory_size, copy_out=retention.clone
-    )
+    bindings = dict(aliases)
+    environment = tuple(sorted(bindings.items()))
+    known: dict[str, str] = {}
 
     def resolve(type_: str) -> str:
         found = known.get(type_)
         if found is None:
-            found = known[type_] = canonical(type_, aliases)
+            found = known[type_] = memo(
+                "decl.canonical",
+                (environment, type_),
+                lambda: canonical(type_, bindings),
+                size=retention.memory_size,
+                copy_out=str,
+            )
         return found
 
     return resolve
