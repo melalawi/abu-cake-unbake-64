@@ -12,6 +12,81 @@ from unbake.layout import split
 from unbake.layout.structs_types import SCALARS
 
 
+def leaf_entry_record(record: dict[str, Any], function: str, version: str, body: dict[str, Any]) -> dict[str, Any]:
+    """Reconcile an old caller-union carrier against byte-pinned leaf reads.
+
+    The installed semantic record is untouched. Typed C contracts, forwarding,
+    incomplete control, version differences and unproved exits remain strict.
+    """
+    from unbake.typemap import abi_declarations, evidence
+
+    if not isinstance(body, dict) or not body.get("target_sha256"):
+        return record
+    abi = record.get("abi") or {}
+    provenance = record.get("provenance", [])
+    if isinstance(provenance, dict):
+        provenance = [provenance]
+    if (
+        record.get("prototype")
+        or any(
+            row.get("kind") not in (None, "machine", "published")
+            or (row.get("kind") == "published" and row.get("function") in (None, function))
+            for row in provenance
+        )
+        or body.get("calls")
+        or body.get("unknown")
+        or abi.get("conflicts")
+        or not abi.get("return_known")
+        or abi.get("return_width") == 8
+    ):
+        return record
+    inputs = abi.get("inputs", {})
+    versions = set(record.get("versions", inputs))
+    if not versions or set(inputs) != versions or version not in inputs:
+        return record
+    consumed = set(inputs[version])
+    if any(set(row) != consumed for row in inputs.values()):
+        return record
+    actual = {reg for reg in body.get("register_inputs", []) if evidence.argument(reg)}
+    parameters = {param["register"] for param in record.get("params", [])}
+    old = set(abi.get("registers", []))
+    if not consumed < old or actual != consumed or parameters != consumed:
+        return record
+    if any(param.get("type") in ("float", "double", "long long", "unsigned long long") for param in record["params"]):
+        return record
+    if record.get("return", {}).get("type") in ("float", "double", "long long", "unsigned long long"):
+        return record
+    missing = [row for row in abi.get("missing", []) if row.get("register") in consumed]
+    if missing:
+        return record
+    returned = abi.get("return_register")
+    if returned not in (None, "r2") or abi.get("unproven_return_reads"):
+        return record
+    if returned == "r2":
+        if "r2" not in body.get("register_outputs", []) or not body.get("returns"):
+            return record
+        for exit_ in body["returns"]:
+            value = exit_["values"].get("r2", {})
+            if not value.get("defined", not value.get("unknown", True)) or value.get("origins") == [
+                {"id": f"param:{function}:r2", "offset": 0}
+            ]:
+                return record
+    result = {
+        **record,
+        "abi": {**abi, "registers": sorted(consumed), "arity_known": True, "missing": missing},
+        "entry_reconciliation": {
+            "kind": "legacy caller-union leaf carrier",
+            "version": version,
+            "consumed_registers": sorted(consumed),
+            "caller_only_registers": sorted(old - consumed),
+            "target_sha256": body.get("target_sha256"),
+            "resolution": "byte-pinned leaf entry; semantic database retained",
+        },
+    }
+    result["abi_declaration"] = abi_declarations.prototype(function, result, {})
+    return result
+
+
 def declarations(
     project: Project,
     policy: Host,

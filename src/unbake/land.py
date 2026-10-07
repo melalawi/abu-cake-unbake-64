@@ -345,14 +345,16 @@ def _prove_versions(
 
 def _fuzzy_signature(project: Project, function: str, version: str, source: str) -> None:
     """A nonmatching body cannot use byte equality to excuse an invented entry ABI."""
-    from unbake.decomp.draft_abi import mapped_body
+    from unbake.decomp.draft_abi import leaf_entry_record, mapped_body
     from unbake.layout import redeclarations
     from unbake.typemap import declarations, header_names, o32, types_db
 
-    if mapped_body(project, function, version) is None:
+    body = mapped_body(project, function, version)
+    if body is None:
         raise Held("land", f"land.fuzzy_identity: {function} VERSION {version}: no current mapped entry")
     database = types_db.path(project)
     record = types_db.entries(database, "functions", [function]).get(function, {})
+    record = leaf_entry_record(record, function, version, body)
     abi = record.get("abi", {})
     if abi.get("return_width") == 8 and (not abi.get("return_pair_known") or abi.get("conflicts")):
         raise Held("land", f"land.fuzzy_abi: {function}: consumed integer return pair is unproven or contradictory")
