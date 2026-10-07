@@ -38,13 +38,11 @@ class RwDoubleEntryTests(unittest.TestCase):
         counts = {}
 
         class Reads(UserDict):
-            inventory = {
-                NAME: {
-                    "versions": {
-                        v: {"address": row["address"]} for v, row in machine["functions"][NAME]["versions"].items()
-                    }
+            def __init__(self, rows):
+                super().__init__(rows)
+                self.inventory = {
+                    NAME: {"versions": {v: {"address": row["address"]} for v, row in rows[NAME]["versions"].items()}}
                 }
-            }
 
             def __getitem__(self, name):
                 counts[name] = counts.get(name, 0) + 1
