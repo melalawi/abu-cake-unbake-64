@@ -1106,6 +1106,43 @@ def _publication_key(project: Project, evidence: Any) -> str:
     )
 
 
+def _settled_inputs(
+    project: Project,
+    policy: Host | None,
+    content_key: str,
+    inference_key: str | None,
+    receipts_key: str | None,
+    publication_key: str,
+) -> str:
+    """Acknowledge generated writes only after their exact facts and proof receipts are verified unchanged."""
+    if policy is None or inference_key is None or receipts_key is None:
+        return content_key
+    with tui.task("Verifying published type inputs"):
+        post = readiness(project, policy)
+        if post.key == content_key:
+            return content_key
+        evidence = _evidence(project)
+        if _publication_key(project, evidence) != publication_key:
+            return content_key
+        from unbake.typemap import facts as source_facts
+        from unbake.typemap import inference_cache
+
+        output = source_facts.store(project, policy)
+        seeds = declarations.collect(project, policy, post.source_keys, store=output)
+        inventory = getattr(post.facts["functions"], "inventory", post.facts["functions"])
+        _, post_inference, post_receipts = inference_cache.prepare(
+            project,
+            Cache(project.cache),
+            [str(SCHEMA), str(ABI_SCHEMA), str(MACHINE_SCHEMA), *_map_parts(post.facts, inventory)],
+            seeds,
+            output=output,
+            policy=policy,
+        )
+        # Identical meanings but different evidence stamps still require rebinding
+        # the installed records. Do not acknowledge those as unchanged inputs.
+        return post.key if (post_inference, post_receipts) == (inference_key, receipts_key) else content_key
+
+
 def solve(project: Project, policy: Host | None = None) -> dict[str, Any]:
     """Merge cached per-source facts with the map and infer types; publish the solution. Inputs identical to the
     last published solution's leave it standing."""
@@ -1216,6 +1253,7 @@ def _solve(project: Project, policy: Host | None) -> dict[str, Any]:
 
     try:
         publish(project, result, previous, policy=policy)
+        content_key = _settled_inputs(project, policy, content_key, inference_key, receipts_key, publication_key)
     except BaseException:
         stored.unlink(missing_ok=True)
         raise

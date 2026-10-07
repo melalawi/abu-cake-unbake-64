@@ -516,25 +516,27 @@ def _ensure(
                     changes = _reading_current(project, partial(step.run, project, host)) or {}
                     if name == "types":
                         count = sum(kind["count"] for kind in changes.values())
-                        shown.note = (
-                            f"; changed {count} answers, so it runs once more to check them"
-                            if count
-                            else "; nothing changed"
-                        )
+                        shown.note = f"; changed {count} answers" if count else "; nothing changed"
             except Held:
                 raise
             except Exception as error:
                 where = f" reading {error.filename}" if isinstance(error, OSError) and error.filename else ""
                 raise Held("steps", f"steps.{name}: {type(error).__name__}{where}: {error}") from error
+            recorded_key = current
+            if name in ("extract", "rom-facts", "resident", "headers", "buildfiles"):
+                recorded_key = step.key(project, host)
+            elif name == "types":
+                from unbake.typemap import solver
+
+                receipt = solver.marker(project)
+                if receipt.is_file():
+                    confirmed = receipt.read_text()
+                    if confirmed != current and confirmed == step.key(project, host):
+                        recorded_key = confirmed
             record(
                 project,
                 name,
-                # These steps write their own inputs (extract applies shape edits to the split; rom-facts renders
-                # layout.toml): the key after the run is the one the next command sees. Types records the key it
-                # read, so a solve that changed the generated headers runs again on them (solver._types_key).
-                step.key(project, host)
-                if name in ("extract", "rom-facts", "resident", "headers", "buildfiles")
-                else current,
+                recorded_key,
                 None if step.outputs is None else _digests(project, step.outputs(project)),
             )
             command.running(None)

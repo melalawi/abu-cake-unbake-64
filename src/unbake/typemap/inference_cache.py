@@ -145,18 +145,16 @@ def _inputs(cache: Cache, seeds: list[dict[str, Any]], policy: Host) -> Any:
     return [result[index] for index in range(len(seeds))]
 
 
-def infer(
+def prepare(
     project: Project,
     cache: Cache,
     parts: list[str],
     seeds: list[dict[str, Any]],
-    compute: Callable[[], dict[str, Any]],
     *,
     output: facts.Store | None = None,
     policy: Host | None = None,
-) -> tuple[dict[str, Any], str, str]:
-    """All input facts and their order count; only evidence hashes are rebound on a hit. OUTPUT is the store the
-    seeds were decoded with, which knows their shared values' digests."""
+) -> tuple[Receipts, str, str]:
+    """Pin exact input meaning and receipts without loading or solving the graph."""
     output = facts.Store(project, cache) if output is None else output
     receipts = Receipts()
     digest = hashlib.sha256()
@@ -181,5 +179,21 @@ def infer(
             digest.update(len(data).to_bytes(8, "big"))
             digest.update(data)
         content_key = key(str(SCHEMA), *parts, digest.digest())
+    return receipts, content_key, key(serialized(receipts.rows))
+
+
+def infer(
+    project: Project,
+    cache: Cache,
+    parts: list[str],
+    seeds: list[dict[str, Any]],
+    compute: Callable[[], dict[str, Any]],
+    *,
+    output: facts.Store | None = None,
+    policy: Host | None = None,
+) -> tuple[dict[str, Any], str, str]:
+    """All input facts and their order count; only evidence hashes are rebound on a hit. OUTPUT is the store the
+    seeds were decoded with, which knows their shared values' digests."""
+    receipts, content_key, receipts_key = prepare(project, cache, parts, seeds, output=output, policy=policy)
     frozen = closure.cached(cache, "types-inferred", [content_key], lambda: receipts.freeze(compute()))
-    return receipts.thaw(frozen), content_key, key(serialized(receipts.rows))
+    return receipts.thaw(frozen), content_key, receipts_key
