@@ -5,8 +5,9 @@ from dataclasses import replace
 from pathlib import Path
 
 from tests.project_fixture import ProjectCase
-from unbake.compilers import drivers
-from unbake.config import Compiler
+from unbake import buildfiles
+from unbake.compilers import drivers, registry
+from unbake.config import Compiler, Held
 
 TOOLS = drivers.Tools("/bin/cpp", "/bin/as", "/bin/n64link")
 
@@ -128,3 +129,41 @@ class DriverTests(ProjectCase):
                     {"cc": ("$(CC)",), "codegen": ("$(CG)",), "name": ("$*",)},
                 )
                 self.assertEqual(made, ("$(CC)", "-Wab,-r4300_mul", "$(CG)", "-c", "$*.i", "-o", "$*.o"))
+
+    def test_actual_gnu_loop_options_survive_ordinary_make_and_driver_recipes(self):
+        # The native-exact 2916-byte case uses the SN64 baseline plus these
+        # options; ordinary units_mk previously refused the first option.
+        flags = ("-fno-thread-jumps", "-fno-rerun-cse-after-loop")
+        spec = registry.specification("gcc-2.8.1-sn64")
+        compiler = replace(self.project.compilers[spec.id], cflags=spec.cflags)
+        self.project = replace(
+            self.project,
+            compilers={**self.project.compilers, spec.id: compiler},
+            unit_flags={"beta": flags},
+        )
+        (self.project.src / "beta.c").write_text("int beta(void) { return 0; }\n")
+        made = buildfiles.units_mk(self.project)
+        self.assertIn("UNIT_CODEGEN := " + " ".join(flags) + "\n", made)
+        steps = self.steps("beta")
+        self.assertEqual(steps.compile, ("tools/sn/cc1", "-quiet", *spec.cflags, *flags, "beta.i", "-o", "beta.s"))
+        for flag in flags:
+            self.assertNotIn(flag, steps.preprocess)
+        self.assertIn("$(CODEGEN) $(UNIT_CODEGEN)", buildfiles._kind_recipes("gnu"))
+
+    def test_registered_gnu_profiles_include_both_loop_options(self):
+        for ident in ("gcc-2.7.2-kmc", "gcc-2.8.1-sn64"):
+            with self.subTest(compiler=ident):
+                spec = registry.specification(ident)
+                for flag in ("-fno-thread-jumps", "-fno-rerun-cse-after-loop"):
+                    self.assertIn([flag], registry._read(registry.REGISTRY_PATH)["compilers"][ident]["flag_variants"])
+                    _, codegen = drivers.stage_flags(ident, [*spec.cflags, flag])
+                    self.assertEqual(codegen, (*spec.cflags, flag))
+
+    def test_gnu_loop_options_remain_refused_by_ido_and_unknown_options_by_gnu(self):
+        for ident, flags in (
+            ("ido-7.1", ["-fno-thread-jumps"]),
+            ("ido-5.3", ["-fno-rerun-cse-after-loop"]),
+            ("gcc-2.8.1-sn64", ["-fno-thread-jumps", "-fno-invented-loop-pass"]),
+        ):
+            with self.subTest(compiler=ident, flags=flags), self.assertRaisesRegex(Held, flags[-1]):
+                drivers.stage_flags(ident, flags)

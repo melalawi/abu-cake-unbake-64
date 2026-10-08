@@ -116,6 +116,7 @@ flag_variants = [
     ["-mgp32", "-mfp32"], ["-mgp32", "-mfp64"],
     ["-funsigned-char"], ["-fno-defer-pop"], ["-ffast-math"],
     ["-fno-delayed-branch"], ["-fforce-addr"],
+    ["-fno-thread-jumps"], ["-fno-rerun-cse-after-loop"],
 ]
 decompme = "gcc2.7.2kmc"
 
@@ -148,6 +149,7 @@ flag_variants = [
     ["-mgp32", "-mfp32"], ["-mgp32", "-mfp64"],
     ["-funsigned-char"], ["-fno-defer-pop"], ["-ffast-math"],
     ["-fno-delayed-branch"], ["-fforce-addr"],
+    ["-fno-thread-jumps"], ["-fno-rerun-cse-after-loop"],
 ]
 decompme = "gcc2.8.1sn"
 
