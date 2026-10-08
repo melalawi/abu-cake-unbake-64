@@ -116,8 +116,8 @@ def _figures(
     measures = _measures(document, name)
     kind = "functions" if functions else "data" if data else "code"
     complete = _counter(measures, "matched_functions" if functions else "complete_" + kind, name)
-    total = _counter(measures, "total_" + kind, name)
-    if complete > total:
+    size = _counter(measures, "total_" + kind, name)
+    if complete > size:
         raise Held(
             cause_named(
                 "report.progress",
@@ -126,9 +126,9 @@ def _figures(
                 stage="report",
             )
         )
-    percent = 100 * complete / total if total else 0.0
+    percent = 100 * complete / size if size else 0.0
     fuzzy = percent if functions or data else _percentage(measures, "fuzzy_match_percent", name)
-    return complete, total, percent, fuzzy
+    return complete, size, percent, fuzzy
 
 
 def _bar(percent: float, fuzzy: float) -> str:

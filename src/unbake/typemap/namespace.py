@@ -49,7 +49,7 @@ def _prototypes(row: FunctionDeclarations, text: str) -> list[tuple[str, str]]:
     return found
 
 
-def _fan_out(host: Host | None, cache_root: Path | None, job: Any, shared: Any, texts: list[str]) -> list[Any]:
+def _fan_out(host: Host, cache_root: Path | None, job: Any, shared: Any, texts: list[str]) -> list[Any]:
     """JOB over every text in the pool; the shared value and cache root go to each worker once."""
     from unbake import pool, tui
 
@@ -130,17 +130,20 @@ class FunctionDeclarations:
         if not self.names:
             return
         texts = list(dict.fromkeys(contents.values()))
-        pooled = host is not None and cache_root is not None
         # Parsing every header is a pure function of its text: pooled across the workers and kept in the project
         # cache, so a later landing reads what an earlier one parsed.
-        scanned = _fan_out(host, cache_root, _scan_job, (), texts) if pooled else [_scan(text) for text in texts]
+        scanned = (
+            _fan_out(host, cache_root, _scan_job, (), texts)
+            if host is not None and cache_root is not None
+            else [_scan(text) for text in texts]
+        )
         for text, (spans, typedefs) in zip(texts, scanned, strict=True):
             self.spans[text] = [(start, end) for start, end in spans]
             self.typedefs.update(typedefs)
         shared = (sorted(self.names), sorted(self.aliases), self.typedefs)
         found = (
             _fan_out(host, cache_root, _prototype_job, shared, texts)
-            if pooled
+            if host is not None and cache_root is not None
             else [_prototypes(self, text) for text in texts]
         )
         for rows in found:

@@ -9,6 +9,7 @@ import toml
 
 from tests.project_fixture import ProjectCase
 from unbake import journal, land, process
+from unbake.compilers.recipe_options import UnitRecipe
 from unbake.config import Held
 
 FIXTURE = Path(__file__).parent / "fixtures/data_emission"
@@ -25,8 +26,9 @@ class LandConfigScopeTests(ProjectCase):
         self.local = self.staged
         self.path.write_bytes(self.local)
         values = toml.loads(self.head.decode())
+        default = values["project"]["default_compiler"]
         self.project = replace(
-            self.project, default_compiler=values["project"]["default_compiler"], unit_flags={FUNCTION: ()}
+            self.project, default_compiler=default, units={self.project.unit_path(FUNCTION): UnitRecipe(default)}
         )
         self.index = self.project.root / ".git/index"
         self.index.parent.mkdir()
@@ -87,11 +89,13 @@ class LandConfigScopeTests(ProjectCase):
             self.path.write_bytes(committed)
             land._commit(self.project, self.host, [self.path], "Match " + FUNCTION)
             land._restore_compiler_config(self.project, self.host, local, index)
-        expected = {**initial, "units": {**initial["units"], FUNCTION: {"compiler": "ido-7.1"}}}
+        unit = self.project.unit_path(FUNCTION)
+        recipe = UnitRecipe("ido-7.1").document()
+        expected = {**initial, "units": {**initial["units"], unit: recipe}}
         self.assertEqual(toml.loads(self.head.decode()), expected)
         self.assertEqual(toml.loads(self.path.read_text())["units"][OTHER], staged["units"][OTHER])
         self.assertEqual(toml.loads(self.staged.decode())["units"][OTHER], staged["units"][OTHER])
-        self.assertEqual(toml.loads(self.staged.decode())["units"][FUNCTION], {"compiler": "ido-7.1"})
+        self.assertEqual(toml.loads(self.staged.decode())["units"][unit], recipe)
         self.assertEqual(self.index.read_bytes(), prior_index)
 
     def test_unstaged_other_unit_and_staged_or_local_global_changes_still_refuse(self):
