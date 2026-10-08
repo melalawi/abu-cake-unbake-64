@@ -1,0 +1,53 @@
+{
+  "unit": "ragewars_pickup_weapons_us_rev1",
+  "scope": [
+    867888,
+    868008
+  ],
+  "address": 2148348464,
+  "compiler": "gcc-2.8.1-sn64",
+  "cflags": [
+    "-G0",
+    "-mips3",
+    "-O2",
+    "-mgas",
+    "-meb",
+    "-mcpu=VR4300",
+    "-mhard-float",
+    "-mgp32",
+    "-mfp64",
+    "-mno-fix4300"
+  ],
+  "cppflags": [
+    "-P",
+    "-undef",
+    "-nostdinc",
+    "-D_LANGUAGE_C",
+    "-DF3DEX_GBI_2",
+    "-D__GNUC__=2"
+  ],
+  "sn64_asflags": [
+    "-mips3"
+  ],
+  "tools": {
+    "cpp": "cpp",
+    "mips_as": "mips-linux-gnu-as",
+    "n64link": "/mnt/devstorage/AbuCode/.buildtmp/tmp/claude-1000/-mnt-devstorage-Workspaces/16a2299c-8f51-4270-9c1f-009829f453ab/scratchpad/cutover/host/n64src/build/n64link"
+  },
+  "successful_push_sha": "e6e8abec432e73746f7c4bf870290d0b490c14c8",
+  "relocations": 12,
+  "files": {
+    "compilers.sha256": "b28b12299b9e8803d03ffefca0963b4fafa1d1c15ff743b89b12e160a9e47991",
+    "final.elf": "9c5d6c90017aa55eb1c83a3c9cce6d9d96f6f15af5bfeabb17010d7067788047",
+    "input.i": "498cc2281467b1a4ea3c549445b94527caf37a0dfead229ded3b8d86c32b9322",
+    "linked.o": "73c19ff63c7caaca0e2a23aa570cfec5261dbb2f0848040dd3d4fb6f9f7ecb3e",
+    "n64link.version": "503b6a8de93b9c1deeb0b063f2780a2f8e83c0320d1f0fd8daa5685e2f1ab645",
+    "native.bin": "f0e4c2235e8727215fd4c55882498309adfb781df08991680ae1c78f90a33400",
+    "native.key": "9d0c2702fee3849c6942cc93b0232d4c2bd438abd993544eaaaaf60490aa48ba",
+    "original.o": "73c19ff63c7caaca0e2a23aa570cfec5261dbb2f0848040dd3d4fb6f9f7ecb3e",
+    "publication.json": "b626538be14730ee985130c48ffcdf9c4676e02b895ee438c8d53a1cf5915838",
+    "source.c": "d003fdd88157eb8b5cf29e1ef79aeaea462a071fee5c3959cb82b881896ad175",
+    "symbols.ld": "6274409bdea33f461d846e6c85abb4d14bbe9de8671a03378557c7480a39aa2a"
+  },
+  "tools_origin": "rw-data-largest/build-prepared.py retained explicit N64LINK Make argument"
+}

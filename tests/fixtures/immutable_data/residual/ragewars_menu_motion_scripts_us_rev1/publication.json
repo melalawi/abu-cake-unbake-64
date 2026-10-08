@@ -1,0 +1,29 @@
+{
+  "before": "1251173c67c43a7c3170a25d02c2b3068a1381ac",
+  "branch": "main",
+  "check": {
+    "base": "876b13eb79af7e0a064b2944810d21bf4dade955",
+    "elapsed_ns": 1332351012,
+    "head": "c71c1ebb0e979de8aa4d3138055418b76aa4795d",
+    "ok": true,
+    "scopes": [
+      {
+        "bytes": 92,
+        "data": "ragewars_menu_motion_scripts_us_rev1",
+        "rom_start": 867692,
+        "version": "us-rev1"
+      }
+    ],
+    "source_findings": [],
+    "work": {
+      "data_extents_compared": 1,
+      "functions_compared": 0,
+      "native_bytes_read": 92,
+      "rom_bytes_read": 92
+    }
+  },
+  "elapsed_ns": 4136270441,
+  "head": "c71c1ebb0e979de8aa4d3138055418b76aa4795d",
+  "reconciled": [],
+  "remote": "https://github.com/melalawi/ragewars-decomp.git"
+}

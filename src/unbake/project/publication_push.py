@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 from contextlib import suppress
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from unbake import atomic, buildfiles, config, journal, process
 from unbake.cache import Cache
@@ -15,6 +15,9 @@ from unbake.process import capture
 from unbake.process import named as cause_named
 from unbake.work import attempts
 
+if TYPE_CHECKING:
+    from unbake.compilers.drivers import Tools
+
 
 def _git(project: Project, *args: str) -> str:
     argv, stdin = process.git_pathspec(["git", *args])
@@ -23,7 +26,14 @@ def _git(project: Project, *args: str) -> str:
 
 @attempts.with_ledger
 def admission(
-    project: Project, host: Host, head: str, base: str, *, producer_sources: tuple[Path, ...] = ()
+    project: Project,
+    host: Host,
+    head: str,
+    base: str,
+    *,
+    producer_sources: tuple[Path, ...] = (),
+    producer_tools: Tools | None = None,
+    producer_receipts: tuple[dict[str, Any], ...] = (),
 ) -> dict[str, Any]:
     """Changed native extents and hygiene; explicit owner sources reuse this same admission.
 
@@ -279,7 +289,25 @@ def admission(
                     stage="publish",
                 )
             )
-        proof = data.capture_producer(project, version, unit, linked, original)
+        receipt = next(
+            (
+                r
+                for r in producer_receipts
+                if {"data": unit.name, "version": version, "rom_start": unit.start, "bytes": unit.size}
+                in r.get("check", {}).get("scopes", [])
+            ),
+            None,
+        )
+        proof = data.capture_producer(
+            project,
+            version,
+            unit,
+            linked,
+            original,
+            host=host,
+            producer_tools=producer_tools,
+            publication_receipt=receipt,
+        )
         if proof is not None:
             proofs[version, unit] = proof
         scopes.append({"data": unit.name, "version": version, "rom_start": unit.start, "bytes": unit.size})

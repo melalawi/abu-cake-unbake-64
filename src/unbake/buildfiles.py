@@ -607,14 +607,14 @@ def slices_mk(project: Project, version: str) -> str:
     return "".join(lines)
 
 
-def units_mk(project: Project) -> str:
+def units_mk(project: Project, *, names: tuple[str, ...] | None = None) -> str:
     """Pattern-specific values (all versions) for units off the default compiler or with their own flags."""
     lines = [HEADER]
     default = project.compilers[project.default_compiler]
     from unbake.work import attempts
 
-    names = sorted({path.stem for path in project.src.glob("*.c")})
-    for name in names:
+    selected = sorted({path.stem for path in project.src.glob("*.c")}) if names is None else names
+    for name in selected:
         targets = f"build/%/src/{name}.i build/%/src/{name}.key build/%/units/{name}.bin build/%/data/{name}.bin"
         compiler = project.compiler_for(name)
         effective = [
@@ -669,6 +669,29 @@ def _kind_recipes(kind: str) -> str:
     if template["assemble"] is not None:
         commands.append(_recipe(template["assemble"]))
     return f"PREPROCESS_{kind} = {prep}\nCOMPILE_{kind} = {' && '.join(commands)}\n"
+
+
+def native_compile_recipe(project: Project, name: str, tools: drivers.Tools) -> str:
+    """The existing Make CAS command, retaining its significant empty-variable spaces.
+
+    Tools must name the actual producing Make arguments; never guess alternative
+    spellings to make a historical key pass. Make's key strips only CURDIR.
+    """
+    compiler = project.compiler_for(name)
+    _, codegen, _ = drivers.compiler_parts(project, compiler.id)
+    _, unit_codegen, _ = drivers.unit_parts(project, name)
+    recipe = _kind_recipes(compiler.kind).split("COMPILE_" + compiler.kind + " = ", 1)[1].rstrip("\n")
+    for variable, value in {
+        "$(abspath $(CC))": relative(project, compiler.cc),
+        "$(CODEGEN)": words(codegen),
+        "$(UNIT_CODEGEN)": words(unit_codegen),
+        "$(N64LINK)": tools.n64link,
+        "$(AS)": tools.mips_as,
+        "$(ASSEMBLER_FLAGS)": words(list(drivers.assembly_flags(project, compiler.id))),
+        "$(*F)": name,
+    }.items():
+        recipe = recipe.replace(variable, value)
+    return recipe.replace(str(project.root) + "/", "")
 
 
 # The expanded unit tracks source/header/command freshness; the key changes only with object content.

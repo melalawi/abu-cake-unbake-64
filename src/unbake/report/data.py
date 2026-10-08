@@ -18,6 +18,7 @@ from unbake.process import named as cause_named
 from unbake.work import attempts
 
 if TYPE_CHECKING:
+    from unbake.compilers.drivers import Tools
     from unbake.objects.rodata import InitializedSection
 
 
@@ -407,13 +408,203 @@ def producer_configuration(project: Project, version: str, binding: dict[str, An
     }
 
 
+def _same_preprocessed_inputs(retained: str, current: str, obj: Any) -> bool:
+    """Only a const qualifier on a proven unused scalar extern may differ.
+
+    Keep the entire emitting/type/macro input byte-identical. An extern is unused
+    only when its name occurs once in each translation unit and never in the
+    native object symbol table. No declaration/type provider is dropped broadly.
+    """
+    from unbake import cdecl
+
+    if retained == current:
+        return True
+    declared = {symbol["name"] for table in obj.symbols.values() for symbol in table}
+    pattern = re.compile(r"(?m)^extern (?:const )?(float|double|int|char|short|long) ([A-Za-z_]\w*);$")
+
+    def normalize(text: str) -> str:
+        names = [token for token in cdecl.NAME_TOKEN.findall(text) if re.fullmatch(r"[A-Za-z_]\w*", token)]
+        counts: dict[str, int] = {}
+        for name in names:
+            counts[name] = counts.get(name, 0) + 1
+        return pattern.sub(
+            lambda match: (
+                f"extern {match[1]} {match[2]};" if counts.get(match[2]) == 1 and match[2] not in declared else match[0]
+            ),
+            text,
+        )
+
+    return normalize(retained) == normalize(current)
+
+
+def _immutable_producer_inputs(
+    project: Project,
+    host: Host,
+    version: str,
+    unit: Any,
+    source: Path,
+    linked: bytes,
+    tools: Tools,
+    receipt: dict[str, Any],
+) -> tuple[dict[Path, str], dict[str, Any], inputs.DependencySet] | None:
+    """Validate the existing Make input/key/CAS/link chain before admitting mtime reuse.
+
+    This narrow route proves standalone DATA and every used relocation. Missing native
+    provenance, changed preprocessing or recipes remain unqualified. It neither
+    edits timestamps nor manufactures an input pin for an old ledger event.
+    """
+    from unbake import buildfiles, process, runner
+    from unbake.compilers import drivers
+    from unbake.objects import rodata
+    from unbake.objects.elf import Object
+
+    check = receipt.get("check", {})
+    head = receipt.get("head")
+    scope = {"data": unit.name, "version": version, "rom_start": unit.start, "bytes": unit.size}
+    if (
+        not isinstance(head, str)
+        or re.fullmatch(r"[0-9a-f]{40}", head) is None
+        or check.get("head") != head
+        or check.get("ok") is not True
+        or check.get("source_findings") != []
+        or scope not in check.get("scopes", [])
+    ):
+        return None
+    try:
+        published = process.run_tool(
+            ["git", "show", head + ":" + source.relative_to(project.root).as_posix()],
+            project.root,
+            "publish",
+        ).encode()
+    except Held:
+        return None
+    if published != source.read_bytes():
+        return None
+    native = project.build_link(version) / "data" / (unit.name + ".bin")
+    preprocessed = project.build_link(version) / "src" / (unit.name + ".i")
+    key_path = preprocessed.with_suffix(".key")
+    if any(not path.is_file() or path.is_symlink() for path in (preprocessed, key_path)):
+        return None
+    key = key_path.read_text().strip()
+    if re.fullmatch(r"[0-9a-f]{80}", key) is None:
+        return None
+    compiler = project.compiler_for(unit.name)
+    make = (project.root / "Makefile").read_text()
+    kind = buildfiles._kind_recipes(compiler.kind)
+    key_recipe = buildfiles.UNIT_RECIPES.split("UNIT_KEY =", 1)[1].split("LINK_BIN =", 1)[0]
+    data_recipe = buildfiles.UNIT_RECIPES.split("PLAIN_DATA_BIN =", 1)[1].split("MIXED_TOOL =", 1)[0]
+    if (
+        kind not in make
+        or "UNIT_KEY =" + key_recipe not in make
+        or "PLAIN_DATA_BIN =" + data_recipe not in make
+        or (project.root / "versions" / version / (project.name + ".data.ld")).read_text()
+        != buildfiles.data_link_script(project, version)
+    ):
+        return None
+    binding = producer_binding(project, version, unit)
+    configuration = producer_configuration(project, version, binding)
+    expected = buildfiles.units_mk(project, names=(unit.name,)).splitlines()[1:]
+    if configuration["unit_recipe"] != expected:
+        return None
+    recipe = buildfiles.native_compile_recipe(project, unit.name, tools)
+    toolchain = hashlib.sha1(
+        (project.tools / "compilers.sha256").read_bytes() + (project.tools / "n64link.version").read_bytes()
+    ).hexdigest()
+    expanded = preprocessed.read_bytes()
+    expected_key = hashlib.sha1((toolchain + " " + recipe + "\n").encode()).hexdigest()
+    expected_key += hashlib.sha1(expanded).hexdigest()
+    if key != expected_key:
+        return None
+    original = project.root / "build" / "cas" / (key + ".o")
+    copied = native.with_suffix(".o")
+    paths = (preprocessed, key_path, original, copied, native.with_suffix(".elf"), native)
+    if any(not path.is_file() or path.is_symlink() for path in paths):
+        return None
+    if native.read_bytes() != linked:
+        return None
+    hashes = {path: inputs.digest(path, algorithm="sha256", reuse=False) for path in paths}
+    try:
+        obj = Object(original)
+        # Make copies the CAS and changes only DATA section flags before linking.
+        # Verify that exact copy; a damaged CAS cannot gain a fresh hash certificate.
+        sections = []
+        for index, (name, section) in enumerate(zip(obj.names, obj.sections, strict=True)):
+            if name in {".rdata", ".rodata", ".data", ".sdata"}:
+                struct.pack_into(">I", obj.data, obj.table + index * 40 + 8, 3 if name in {".data", ".sdata"} else 2)
+                if section[5]:
+                    sections.append(index)
+            elif section[5] and section[2] & 4:
+                return None
+        if bytes(obj.data) != copied.read_bytes() or struct.unpack_from(">H", obj.data, 16)[0] != 1:
+            return None
+        if len(sections) != 1:
+            return None
+        symbols = linker_symbols(
+            project.root / "versions" / version / "symbols.ld",
+            (project.root / "versions" / version / "symbols.ld").read_text(),
+        )
+        if symbols is None:
+            return None
+        material = rodata.relocated(
+            obj, obj.names[sections[0]], 0, symbols=symbols, section_addresses={sections[0]: unit.address}
+        )
+        if material != linked:
+            return None
+    except (ValueError, IndexError, struct.error):
+        return None
+    # Capture before CPP and assert afterwards, including missing header probes.
+    command = drivers.preprocess_command(project, str(host.cpp), version, unit.name, source, non_matching=False)
+    captured = capture_inputs(
+        project, source, version, command, compiler=project.compiler_reference(unit.name), non_matching=False
+    )
+    if captured.values.get("dependencies_unknown"):
+        return None
+    try:
+        current = runner.preprocess(project, host, source, version, unit=unit.name)
+        assert_inputs(project, captured)
+    except Held:
+        return None
+    if expanded.decode() != current and any(
+        flag.startswith("-g")
+        for flag in drivers.codegen_flags(list(compiler.cflags) + list(project.unit_flags.get(unit.name, ())))
+    ):
+        return None
+    if not _same_preprocessed_inputs(expanded.decode(), current, obj):
+        return None
+    identity = {
+        "producer_native_inputs": {
+            "compiler_key": key,
+            "compile_recipe_sha256": hashlib.sha256(recipe.encode()).hexdigest(),
+            "preprocessed_sha256": hashes[preprocessed],
+            "original_object_sha256": hashes[original],
+            "link_object_sha256": hashes[copied],
+            "final_artifact_sha256": hashes[native.with_suffix(".elf")],
+            "native_bytes_sha256": hashes[native],
+            "current_input_identity": captured.digest,
+            "publication_head": head,
+            "publication_receipt_sha256": digest(receipt),
+            "published_source_sha256": hashlib.sha256(published).hexdigest(),
+        }
+    }
+    return hashes, identity, captured
+
+
 def capture_producer(
-    project: Project, version: str, unit: Any, linked: bytes, original: bytes
+    project: Project,
+    version: str,
+    unit: Any,
+    linked: bytes,
+    original: bytes,
+    *,
+    host: Host | None = None,
+    producer_tools: Tools | None = None,
+    publication_receipt: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """Retain an accepted standalone native output, never infer credit from its source row.
 
-    Existing Make freshness and native/ROM admission supply the proof. A historical
-    output older than its actual producer inputs remains unmeasured; no build is run.
+    Existing Make freshness or verified immutable inputs and native/ROM admission
+    supply the proof. Content reuse runs only the selected owning CPP stage, never
+    compilation or linking. Unqualified historical outputs remain unmeasured.
     """
     from unbake import buildfiles
     from unbake.compilers import drivers
@@ -431,6 +622,7 @@ def capture_producer(
     code = b""
     native_inputs: dict[Path, str] = {}
     native_identity: dict[str, Any] = {}
+    preprocessing: inputs.DependencySet | None = None
     recipes = {"data.producer": inputs.digest(Path(__file__), algorithm="sha256", reuse=cache.configured())}
     if unit.kind == "data":
         command = drivers.flags(project, version, unit.name)
@@ -499,13 +691,26 @@ def capture_producer(
     if any(not path.is_file() or path.is_symlink() for path in producer_paths):
         return None
     if any(path.stat().st_mtime_ns > native.stat().st_mtime_ns for path in freshness_paths):
-        return None
+        if unit.kind != "data" or mixed or host is None or producer_tools is None or publication_receipt is None:
+            return None
+        reusable = _immutable_producer_inputs(
+            project, host, version, unit, source, linked, producer_tools, publication_receipt
+        )
+        if reusable is None:
+            return None
+        native_inputs, native_identity, preprocessing = reusable
     meta = project.version(version)
     if inputs.digest(meta.baserom, algorithm="sha1", reuse=cache.configured()) != meta.baserom_sha1:
         return None
     paths = producer_paths | {project.root / name for name in required(project, version)} | {meta.baserom}
+    pins = {
+        pin.path: pin
+        for pin in (inputs.file_pin(path, root=project.root, root_id="project", reuse=False) for path in sorted(paths))
+    }
+    if preprocessing is not None:
+        pins.update((pin.path, pin) for pin in preprocessing.files)
     dependencies = inputs.DependencySet(
-        tuple(inputs.file_pin(path, root=project.root, root_id="project", reuse=False) for path in sorted(paths)),
+        tuple(pins[name] for name in sorted(pins)),
         {
             "version": version,
             "dependencies_unknown": False,
@@ -533,7 +738,10 @@ def capture_producer(
         final = native.with_suffix(".elf")
         if not final.is_file():
             return None
-        obj = Object(final)
+        try:
+            obj = Object(final)
+        except (ValueError, IndexError, struct.error):
+            return None
         index = obj.section(".data")
         if index is None:
             index = obj.section(".rodata")
@@ -594,10 +802,26 @@ def capture_producer(
             for symbol in table
             if symbol["section"] == index and symbol["name"] and symbol["info"] & 15 != 3
         }
+        # In the immutable pure-DATA route, the exact current CPP/key/CAS chain
+        # also proves multiple size-zero composite definitions. Partition only
+        # when every emitted name has its current initialized definition proof,
+        # with distinct offsets beginning at the explicit binding's base.
+        native_bounds = {}
+        if "producer_native_inputs" in native_identity and named == definitions.keys():
+            locations = {
+                symbol["name"]: symbol["value"] - unit.address
+                for table in obj.symbols.values()
+                for symbol in table
+                if symbol["section"] == index and symbol["name"] in named
+            }
+            offsets = sorted(locations.values())
+            if offsets and offsets[0] == 0 and len(set(offsets)) == len(named) and offsets[-1] < unit.size:
+                ends = dict(zip(offsets, [*offsets[1:], unit.size], strict=True))
+                native_bounds = {name: ends[start] - start for name, start in locations.items()}
         for table in obj.symbols.values():
             for symbol in table:
                 name = symbol["name"]
-                length = symbol["size"] or sizes.get(name, 0)
+                length = symbol["size"] or sizes.get(name, 0) or native_bounds.get(name, 0)
                 # SN64 emits STT_NOTYPE size-zero composite definitions. The
                 # explicit standalone binding owns the entire native section
                 # only when it has exactly one initialized definition at its base.

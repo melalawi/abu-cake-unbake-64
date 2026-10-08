@@ -1,0 +1,53 @@
+{
+  "unit": "resident_menu_inventory_settings",
+  "scope": [
+    1830472,
+    1837152
+  ],
+  "address": 2148884480,
+  "compiler": "gcc-2.8.1-sn64",
+  "cflags": [
+    "-G0",
+    "-mips3",
+    "-O2",
+    "-mgas",
+    "-meb",
+    "-mcpu=VR4300",
+    "-mhard-float",
+    "-mgp32",
+    "-mfp64",
+    "-mno-fix4300"
+  ],
+  "cppflags": [
+    "-P",
+    "-undef",
+    "-nostdinc",
+    "-D_LANGUAGE_C",
+    "-DF3DEX_GBI_2",
+    "-D__GNUC__=2"
+  ],
+  "sn64_asflags": [
+    "-mips3"
+  ],
+  "tools": {
+    "cpp": "cpp",
+    "mips_as": "mips-linux-gnu-as",
+    "n64link": "../../../cutover/host/n64src/build/n64link"
+  },
+  "successful_push_sha": "7cd1b5e54fed1135fcb0d0240a52bf97e5babb7a",
+  "relocations": 476,
+  "files": {
+    "compilers.sha256": "b28b12299b9e8803d03ffefca0963b4fafa1d1c15ff743b89b12e160a9e47991",
+    "final.elf": "e14607cef88d3a1196cdb7831f2a607422c1b67d136df469c65387666f441f38",
+    "input.i": "a13864ec9566e118230e549619047b413427499a0f9510f23a1f17f45be62259",
+    "linked.o": "e071f17720f71e7c4c2281e7db1beb9b0d91ccd9dff8ef3db0090f92cf206863",
+    "n64link.version": "503b6a8de93b9c1deeb0b063f2780a2f8e83c0320d1f0fd8daa5685e2f1ab645",
+    "native.bin": "d619589bf70e31c6f84ef8bd49a858eeda9489301289dc40e47fb3e342cc6137",
+    "native.key": "ad95230a548e18f5e6e9032bdf947c40380f6d7cd1231b5d0f7293cc49b06b46",
+    "original.o": "9575ecaef8b01246472e92b58c4ee37ac97b2f8d43005dd04608e919360648bb",
+    "publication.json": "e97f807435b4fa25520303994b9f1991653627358436dc63d08157a79b92c505",
+    "source.c": "4b47da6eac369e30f628f4b3870754f0945a213d083b7b8cdbef9ea284d0e34d",
+    "symbols.ld": "79555c9f7d56a63887283ab67ec5d44dd77527de3fe8b32c34f6063e66939034"
+  },
+  "tools_origin": "rw-resident-tables/transcript.jsonl retained make N64LINK=$PWD/../../../cutover/host/n64src/build/n64link, after Make CURDIR stripping"
+}

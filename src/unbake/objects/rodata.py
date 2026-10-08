@@ -110,16 +110,31 @@ def placement(obj: Object, section: str, target_words: Mapping[int, int | None])
     return ranked[0][0], sum(votes.values()) - ranked[0][1]
 
 
-def relocated(obj: Object, section: str, text_address: int) -> bytes:
+def relocated(
+    obj: Object,
+    section: str,
+    text_address: int,
+    *,
+    symbols: Mapping[str, int] | None = None,
+    section_addresses: Mapping[int, int] | None = None,
+) -> bytes:
     """Materialize local jump-table pointers for comparison with resident bytes."""
     index, text = obj.section(section), obj.section(".text")
     if index is None:
         raise ValueError(f"{section}: missing section")
     result = bytearray(obj.content(index))
     for offset, kind, symbol in obj.relocations(index):
-        if kind != 2 or text is None or symbol["section"] != text:
+        if kind != 2:
             raise ValueError(f"{section}.relocation[{offset}]: expected local text pointer")
-        value = _word(result, offset, section) + text_address + symbol["value"]
+        if section_addresses is not None and symbol["section"] in section_addresses:
+            target = section_addresses[symbol["section"]] + symbol["value"]
+        elif symbols is not None and symbol["section"] == 0 and symbol["name"] in symbols:
+            target = symbols[symbol["name"]]
+        elif section_addresses is None and text is not None and symbol["section"] == text:
+            target = text_address + symbol["value"]
+        else:
+            raise ValueError(f"{section}.relocation[{offset}]: missing proved symbol binding")
+        value = _word(result, offset, section) + target
         struct.pack_into(">I", result, offset, value & 0xFFFFFFFF)
     return bytes(result)
 

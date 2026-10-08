@@ -1,0 +1,53 @@
+{
+  "unit": "ragewars_menu_motion_scripts_us_rev1",
+  "scope": [
+    867692,
+    867784
+  ],
+  "address": 2148348268,
+  "compiler": "gcc-2.8.1-sn64",
+  "cflags": [
+    "-G0",
+    "-mips3",
+    "-O2",
+    "-mgas",
+    "-meb",
+    "-mcpu=VR4300",
+    "-mhard-float",
+    "-mgp32",
+    "-mfp64",
+    "-mno-fix4300"
+  ],
+  "cppflags": [
+    "-P",
+    "-undef",
+    "-nostdinc",
+    "-D_LANGUAGE_C",
+    "-DF3DEX_GBI_2",
+    "-D__GNUC__=2"
+  ],
+  "sn64_asflags": [
+    "-mips3"
+  ],
+  "tools": {
+    "cpp": "cpp",
+    "mips_as": "mips-linux-gnu-as",
+    "n64link": "/mnt/devstorage/AbuCode/.buildtmp/tmp/claude-1000/-mnt-devstorage-Workspaces/16a2299c-8f51-4270-9c1f-009829f453ab/scratchpad/cutover/host/n64src/build/n64link"
+  },
+  "successful_push_sha": "c71c1ebb0e979de8aa4d3138055418b76aa4795d",
+  "relocations": 0,
+  "files": {
+    "compilers.sha256": "b28b12299b9e8803d03ffefca0963b4fafa1d1c15ff743b89b12e160a9e47991",
+    "final.elf": "4139a91459074d9bcd3667750418c314fd8498f8760b9c65818d6ffeb48082ea",
+    "input.i": "9d1d4af012b9c90350ea2f805bf9dde03d4270990ec25feba7e7c25ff4b90006",
+    "linked.o": "a3f8a41fb4b7d7aa2024abc8842f2f2082df33027adb03f7a7eff30a7b3426bd",
+    "n64link.version": "503b6a8de93b9c1deeb0b063f2780a2f8e83c0320d1f0fd8daa5685e2f1ab645",
+    "native.bin": "34059ca26fab93115e10ca46399388baeeb0654692cb5f01d9f638a73450eff2",
+    "native.key": "3e4e92a865b601e8e6c1e315318bae8883b5f707850c45570deee43cb8d9e45c",
+    "original.o": "a3f8a41fb4b7d7aa2024abc8842f2f2082df33027adb03f7a7eff30a7b3426bd",
+    "publication.json": "20c7a3a6376d03d38795ce2363b7e36da20f0f5c940edc174a668bf8895fa3b2",
+    "source.c": "8277cea4a5381695d203cba5097d124f575312650a4e1eeca31f07aa69b7f624",
+    "symbols.ld": "0344aaaffab681a1528fd7b8e27a4fb698ea8e11371a7f5ccc263e551ba44843"
+  },
+  "tools_origin": "rw-data-largest/build-prepared.py retained explicit N64LINK Make argument"
+}
