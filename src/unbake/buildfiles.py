@@ -619,9 +619,10 @@ def units_mk(project: Project, *, names: tuple[str, ...] | None = None) -> str:
     )
     for name in selected:
         targets = f"build/%/src/{name}.i build/%/src/{name}.key build/%/units/{name}.bin build/%/data/{name}.bin"
-        compiler = project.compiler_for(name)
+        unit = f"src/{name}.c"
+        compiler = project.compiler_for(unit)
         for version in project.versions:
-            recipe = drivers.resolved(project, version, name)
+            recipe = drivers.resolved(project, version, unit)
             effective = [
                 *(f"-I{relative(project, path)}" for path in project.include),
                 *recipe.phase("preprocess"),
@@ -633,8 +634,8 @@ def units_mk(project: Project, *, names: tuple[str, ...] | None = None) -> str:
                 rendered += " -DNON_MATCHING"
             version_targets = f"build/{version}/src/{name}.i build/{version}/src/{name}.key"
             lines.append(f"{version_targets}: PREPROCESS_FLAGS = {rendered}\n")
-        resolved = drivers.resolved(project, project.versions[0], name)
-        _, codegen = drivers.stage_flags(compiler.id, drivers.flags(project, project.versions[0], name))
+        resolved = drivers.resolved(project, project.versions[0], unit)
+        _, codegen = drivers.stage_flags(compiler.id, drivers.flags(project, project.versions[0], unit))
         lines.append(f"{targets}: KIND := {compiler.kind}\n")
         lines.append(f"{targets}: CC := {relative(project, compiler.cc)}\n")
         lines.append(f"{targets}: CODEGEN := {words(list(codegen))}\n")
@@ -674,8 +675,9 @@ def native_compile_recipe(project: Project, name: str, tools: drivers.Tools) -> 
     Tools must name the actual producing Make arguments; never guess alternative
     spellings to make a historical key pass. Make's key strips only CURDIR.
     """
-    compiler = project.compiler_for(name)
-    _, codegen = drivers.stage_flags(compiler.id, drivers.flags(project, project.versions[0], name))
+    unit = f"src/{name}.c"
+    compiler = project.compiler_for(unit)
+    _, codegen = drivers.stage_flags(compiler.id, drivers.flags(project, project.versions[0], unit))
     unit_codegen: tuple[str, ...] = ()
     recipe = _kind_recipes(compiler.kind).split("COMPILE_" + compiler.kind + " = ", 1)[1].rstrip("\n")
     for variable, value in {

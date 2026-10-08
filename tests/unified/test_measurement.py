@@ -85,13 +85,15 @@ class MeasurementTests(TempCase):
         self.assertFalse(compare.acceptance(measured.compares, ("us",), ["placement unavailable"]))
         old = project.version("us").baserom.read_bytes()
         project.version("us").baserom.write_bytes(old[:-1] + bytes([old[-1] ^ 1]))
-        with self.assertRaisesRegex(Held, "stale_proof"):
+        with self.assertRaises(Held) as held:
             land.exact_attempt(project, host, B, file, required_versions=("us",))
+        self.assertEqual(held.exception.key, "land.stale_proof")
         project.version("us").baserom.write_bytes(old)
         (project.include[-1] / "changed.h").write_text("extern int changed;\n")
         file.write_text(file.read_text() + '#include "changed.h"\n')
-        with self.assertRaisesRegex(Held, "not_compared"):
+        with self.assertRaises(Held) as held:
             land.exact_attempt(project, host, B, file)
+        self.assertEqual(held.exception.key, "land.not_compared")
 
     def test_real_active_ido_error_zero_exit_is_rejected_by_shared_standalone_contract(self):
         fixtures = Path(__file__).parents[1] / "compilers/fixtures/active_error"
@@ -102,7 +104,7 @@ class MeasurementTests(TempCase):
         self.assertEqual(validate_preprocessed("int x;\n", "", 0, "gcc-1"), "int x;\n")
 
     def test_missing_native_measurement_is_unavailable_not_measured_nonexact(self):
-        fault = named("compiler.policy", "unsupported option", owner="compilers", stage="options")
+        fault = Held(named("compiler.policy", "unsupported option", owner="compilers", stage="options")).fault
         m = unavailable("us", 7163, fault)
         self.assertEqual(classify_capability("a" * 64, m).state, "unavailable")
         self.assertEqual(classify_capability("a" * 64, fault=fault.document()).state, "tool_refused")

@@ -125,9 +125,10 @@ class ProducerTests(TempCase):
         self.assertEqual(proof["compiler_key"], key)
         with (
             patch("unbake.process.run_tool", return_value="unproved content"),
-            self.assertRaisesRegex(Held, "data.provenance.key"),
+            self.assertRaises(Held) as held,
         ):
             data.producing_key_inputs(project, (name,), recipe, expanded, key, head)
+        self.assertEqual(held.exception.key, "data.provenance.key")
 
     def test_key_salt_role_never_waives_an_executed_helper_or_source_dependency(self):
         text = "TOOLCHAIN := $(firstword $(shell cat tools/n64link.version tools/producer.py src/unit.c | sha1sum))\n"
@@ -181,9 +182,10 @@ class ResourceQualificationTests(ResourceBuildTests):
         }
         with (
             patch("unbake.process.run_tool", return_value=self.source.read_text()),
-            self.assertRaisesRegex(Held, "data.provenance.native_chain"),
+            self.assertRaises(Held) as held,
         ):
             data.retained_producer_inputs(self.project, "us", resource, self.native.read_bytes(), receipt)
+        self.assertEqual(held.exception.key, "data.provenance.native_chain")
         self.assertNotIn("native_data", receipt["check"])
 
 
@@ -280,5 +282,6 @@ class PublicationTests(TempCase):
         )
         self.assertEqual(manifest["src/" + B + ".c"]["role"], "source")
         (project.root / "tools/recipe_options.py").unlink()
-        with self.assertRaisesRegex(Held, "land.dependencies"):
+        with self.assertRaises(Held) as held:
             land._receipt(project, host, B, file, ("us",), set())
+        self.assertEqual(held.exception.key, "land.dependencies")

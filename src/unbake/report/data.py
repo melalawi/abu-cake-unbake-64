@@ -393,8 +393,8 @@ def producer_configuration(project: Project, version: str, binding: dict[str, An
     return {
         "rom_sha1": project.version(version).baserom_sha1,
         "binding": binding,
-        "compiler": project.compiler_reference(name) if binding["unit"]["kind"] == "data" else None,
-        "flags": drivers.flags(project, version, name) if binding["unit"]["kind"] == "data" else [],
+        "compiler": project.compiler_reference(f"src/{name}.c") if binding["unit"]["kind"] == "data" else None,
+        "flags": drivers.flags(project, version, f"src/{name}.c") if binding["unit"]["kind"] == "data" else [],
         "cppflags": list(project.cppflags),
         "asflags": list(project.gnu_asflags),
         "original_asflags": list(project.asflags),
@@ -516,7 +516,7 @@ def _immutable_producer_inputs(
     key = key_path.read_text().strip()
     if re.fullmatch(r"[0-9a-f]{80}", key) is None:
         qualification_refusal("key", "native compiler key is malformed")
-    compiler = project.compiler_for(unit.name)
+    compiler = project.compiler_for(f"src/{unit.name}.c")
     make = (project.root / "Makefile").read_text()
     from unbake.report import producer_recipe
 
@@ -1424,7 +1424,7 @@ def current_dependencies(project: Project, event: dict[str, Any], version: str) 
         if binding and binding["unit"]["kind"] == "data":
             from unbake.compilers.registry import specification, verify
 
-            compiler = project.compiler_for(binding["unit"]["name"])
+            compiler = project.compiler_for("src/" + binding["unit"]["name"] + ".c")
             try:
                 verify(compiler.cc.parent, specification(compiler.id))
             except Held:

@@ -102,7 +102,10 @@ class Gcc:
     def make_preprocess(self, render: Callable[[tuple[str, ...]], str]) -> str:
         preprocess = self.native_templates()["preprocess"]
         assert preprocess is not None
-        return f"{render(preprocess)} -MMD -MP -MT $(@D)/$(*F).i -MF $(@D)/$(*F).d > $(@D)/$(*F).i"
+        return (
+            "python3 tools/compiler_contracts.py --contract gcc-1 --output $(@D)/$(*F).i -- "
+            f"{render(preprocess)} -MMD -MP -MT $(@D)/$(*F).i -MF $(@D)/$(*F).d"
+        )
 
     def runtime_helpers(
         self, data: bytes, read_memory: Callable[[int, int], bytes]

@@ -89,6 +89,7 @@ def consumer_define(project: Project, unit: str | Path) -> str | None:
 def resolved(project: Project, version: str, unit: str | Path) -> ResolvedRecipe:
     from unbake.compilers.registry import specification
 
+    unit = project.unit_path(unit)
     compiler = project.compiler_for(unit)
     spec = specification(compiler.id)
     adapter = _selection(compiler.id)[1]
@@ -146,6 +147,7 @@ def resolved(project: Project, version: str, unit: str | Path) -> ResolvedRecipe
 
 
 def flags(project: Project, version: str, unit: str | Path, *, non_matching: bool = False) -> list[str]:
+    unit = project.unit_path(unit)
     recipe = resolved(project, version, unit)
     result = [
         f"-I{include.relative_to(project.root) if include.is_relative_to(project.root) else include}"

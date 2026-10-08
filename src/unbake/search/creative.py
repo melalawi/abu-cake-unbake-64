@@ -20,8 +20,7 @@ needs_preprocess = True
 
 
 def _conversions(function: Any, ast: Any, safety: _Safety) -> Iterator[tuple[Any, Any]]:
-    if safety.shadowed:
-        return
+    declarations = [node for node in walk(function) if isinstance(node, ast.Decl)]
     for block in walk(function.body):
         if not isinstance(block, ast.Compound):
             continue
@@ -32,7 +31,12 @@ def _conversions(function: Any, ast: Any, safety: _Safety) -> Iterator[tuple[Any
                 continue
             old = define.lvalue.name
             decl = safety.types.get(old)
-            if decl is None or old in safety.escaped or old in safety.volatile:
+            if (
+                decl is None
+                or sum(node.name == old for node in declarations) != 1
+                or old in safety.escaped
+                or old in safety.volatile
+            ):
                 continue
             if not isinstance(decl.type, ast.TypeDecl) or not isinstance(decl.type.type, ast.IdentifierType):
                 continue
@@ -72,7 +76,12 @@ def _conversions(function: Any, ast: Any, safety: _Safety) -> Iterator[tuple[Any
             ):
                 continue
             result_name = convert.lvalue.name if isinstance(convert.lvalue, ast.ID) else None
-            if result_name is None or any(
+            if (
+                result_name is None
+                or sum(node.name == result_name for node in declarations) != 1
+                or result_name in safety.escaped
+                or result_name in safety.volatile
+            ) or any(
                 isinstance(node, ast.ID) and node.name == result_name
                 for item in items[start + 3 :]
                 for node in walk(item)

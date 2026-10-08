@@ -158,11 +158,13 @@ def admission(
     data_scopes = []
     resource_scopes = []
     selected_sources = set(sources)
+    prior_layouts: dict[str, str | None] = {}
     for version in project.versions:
         meta = project.version(version)
         current = buildfiles.data_bindings(project, version)
         split_name = meta.split.relative_to(project.root).as_posix()
         prior_text = _git(project, "show", base + ":" + split_name) if split_name in changed else None
+        prior_layouts[version] = prior_text
         previous = buildfiles.data_bindings(project, version, text=prior_text) if prior_text is not None else current
         for unit, binding in current.items():
             source = project.src / (unit.name + ".c")
@@ -202,7 +204,9 @@ def admission(
     for version in project.versions:
         meta = project.version(version)
         split_name = meta.split.relative_to(project.root).as_posix()
-        prior_text = _git(project, "show", base + ":" + split_name) if split_name in changed else meta.split.read_text()
+        prior_text = prior_layouts[version]
+        if prior_text is None:
+            prior_text = meta.split.read_text()
         _, _, prior_segments = split.parse_layout(meta.split, prior_text)
         previous_code = set()
         for segment in prior_segments:

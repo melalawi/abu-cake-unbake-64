@@ -74,7 +74,7 @@ class RecipeTests(TempCase):
         self.assertIn("-mfp32", drivers.resolved(view, "us", "func_800B1520_us").phase("compile"))
         with self.assertRaisesRegex(config.Held, "compatible target/caller"):
             options.admit_trial(project, "func_800B1520_us", recipe)
-        self.assertIn("FP64", retained("RW-AUDIT-INPUT.md").decode())
+        self.assertIn("-mfp64", retained("RW-AUDIT-INPUT.md").decode())
 
     def test_symmetric_release_domains_episode_dedup_and_retained_cse_candidates(self):
         project, host, _file = gcc_project(self.root)
@@ -119,6 +119,9 @@ class MigrationTests(TempCase):
         raw["build"]["unit_cflags"] = {"src/alpha.c": ["-O1", "-UVERSION_US"]}
         raw["build"]["sn64_asflags"] = raw["build"].pop("gnu_asflags")
         (project.src / "alpha.c").write_text("int alpha(void) { return 1; }\n")
+        project.version("us").split.write_text(
+            project.version("us").split.read_text().replace("asm, alpha]", "c, alpha]")
+        )
         path.write_text(toml.dumps(raw))
         # Pins are counterfactual byte fixtures at the verify boundary only;
         # parser/resolver/transaction/readback run unchanged.
