@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import shutil
 import struct
 from pathlib import Path
 from unittest.mock import patch
@@ -130,6 +131,34 @@ class DataEmissionTests(ProjectCase):
         self.assertIsNotNone(event)
         self.assertEqual(self.coverage().manifest["verified_bytes"], 4)
         self.assertEqual(self.coverage().manifest["unmeasured_bytes"], 4)
+
+    def test_actual_retained_data1_named_string_original_placed_and_final_native_elf_produce_nine_bytes(self):
+        fixture = FIXTURE / "data1"
+        self.source = self.project.src / "func_80433EA0_de.c"
+        self.source.write_bytes((fixture / "source.c").read_bytes())
+        shutil.copytree(fixture / "include", self.project.include[0], dirs_exist_ok=True)
+        self.original.write_bytes((fixture / "original.elf32").read_bytes())
+        self.placed.write_bytes((fixture / "placed.elf32").read_bytes())
+        self.final.write_bytes((fixture / "final.elf32").read_bytes())
+        expected = (fixture / "linked-string.bin").read_bytes()
+        self.assertEqual(expected, b"%d.%s.%s\0")
+        self.rom(expected)
+        meta = self.project.version("us")
+        meta.split.write_text(meta.split.read_text().replace("0x80001000", "0x800E1EC0").replace("0x6C", "0x6D"))
+        sizes = {}
+        definitions = Graph.capture(self.project).initialized_definitions(self.project, self.source, "us", sizes=sizes)
+        name = "controller_pak_note_label_format"
+        self.assertEqual(sizes[name], 9)
+        self.assertIn(name, definitions)
+        layout = rodata.initialized_sections(
+            Object(self.original), Object(self.placed), ((0x800E1EE4, self.start, 9),), definition_sizes=sizes
+        )
+        self.assertEqual(layout[0].symbols, ((name, 0, 9),))
+        self.capture()
+        self.assertIsNotNone(
+            data.record_linked(self.project, self.host, self.source, "us", self.original, self.final, layout)
+        )
+        self.assertEqual(self.coverage().manifest["verified_bytes"], 9)
 
     def test_actual_data2_named_duplicate_at_native_section_base_mismatches_and_has_zero_credit(self):
         # Actual E33BC..E33C4 bytes: named duplicate would precede the loaded pool.

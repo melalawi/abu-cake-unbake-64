@@ -659,6 +659,8 @@ class Graph:
         self, project: Any, source: Path, version: str, *, sizes: dict[str, int] | None = None
     ) -> dict[str, str]:
         """Current retained, version-active named initializers through the owning C parser."""
+        import ast
+
         from pycparser import c_ast, c_generator
 
         from unbake import cdecl
@@ -728,6 +730,16 @@ class Graph:
                 spelling = re.sub(r"\b(?:const|volatile|restrict)\b\s*", "", spelling).strip()
                 if spelling in SCALARS:
                     sizes[node.name] = SCALARS[spelling][0]
+                elif (
+                    isinstance(node.type, c_ast.ArrayDecl)
+                    and node.type.dim is None
+                    and isinstance(node.init, c_ast.Constant)
+                    and node.init.type == "string"
+                    and re.sub(r"\bconst\b\s*", "", declarations.node_type(node.type.type)).strip() == "char"
+                ):
+                    literal = ast.literal_eval(node.init.value)
+                    if isinstance(literal, str) and literal.isascii():
+                        sizes[node.name] = len(literal) + 1
         return result
 
     def included(self, source: Path, text: str) -> set[str]:

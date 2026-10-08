@@ -215,6 +215,8 @@ def record_linked(
     with project.version(version).baserom.open("rb") as rom:
         for item in layout:
             index = obj.section(item.output_name)
+            if index is None:
+                index = obj.section(item.name)
             if index is None or obj.sections[index][3] != item.address or obj.sections[index][5] != item.size:
                 refuse("final initialized section missing or differs from native placement")
             emitted = obj.content(index)
@@ -222,7 +224,7 @@ def record_linked(
                 refuse("final initialized section is not allocated, relocated PROGBITS")
             sections.append(
                 {
-                    "name": item.output_name,
+                    "name": obj.names[index],
                     "address": item.address,
                     "size": item.size,
                     "sha256": hashlib.sha256(emitted).hexdigest(),
@@ -250,7 +252,7 @@ def record_linked(
                         "version": version,
                         "owner_source": {"root": owner.root, "parts": list(owner.parts)},
                         "symbol": name,
-                        "section": item.output_name,
+                        "section": obj.names[index],
                         "address": address,
                         "rom_offset": start,
                         "size": size,
