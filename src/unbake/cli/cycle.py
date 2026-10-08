@@ -20,8 +20,8 @@ is exact in every version is landed (ROM proof and commit) within seconds, while
 A published unit that breaks a source rule is a candidate too: its draft is its own src/ text, and once it is
 exact and clean it lands again as "Clean UNIT".
 At the end the attempt history is folded into attempts.json and committed as "Record attempts: FUNC, ..."
-with the progress reports it moves (only when an attempt changed it), so fuzzy progress and the ranking
-survive a fresh clone.
+with the progress reports it moves (only when an attempt changed it). Nonexact sources remain local;
+their immutable attempt history survives a fresh clone.
 
 stdout carries one JSON event per line. With a terminal on stderr you also see a live board; without
 one, choose the functions and the stop condition with flags.

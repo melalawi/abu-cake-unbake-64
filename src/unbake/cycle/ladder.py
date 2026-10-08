@@ -1,8 +1,9 @@
 """The mechanical search ladder a draft climbs before it needs an edit by hand.
 
 A function whose compare is not exact is searched with each built-in method in turn (search.BUILTINS order),
-each starting from the best text so far. A method that brings no gain over the best so far ends the ladder, as
-does running out of methods: the function then needs a creative edit and TROUBLE.md says where it stands.
+each starting from the best text so far. Each applicable method runs even if an earlier method brings no gain.
+Running out of applicable methods ends the ladder: the function then needs a creative edit
+and TROUBLE.md says where it stands.
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ from pathlib import Path
 from unbake import atomic as atomic_files
 from unbake.config import Held, Host, Project
 from unbake.search import BUILTINS
+from unbake.work.hints import Hint
 
 
 @dataclass
@@ -25,9 +27,11 @@ class Ladder:
     skipped: dict[str, str] = field(default_factory=dict)
     # The method whose search or whose adopted text's compare is outstanding.
     method: str = ""
+    hints: tuple[Hint, ...] = ()
+    methods: tuple[str, ...] = field(default_factory=lambda: BUILTINS)
 
     def next_method(self) -> str | None:
-        return next((name for name in BUILTINS if name not in self.tried and name not in self.skipped), None)
+        return next((name for name in self.methods if name not in self.tried and name not in self.skipped), None)
 
     def gained(self, percent: float) -> bool:
         return percent > self.best
@@ -63,6 +67,11 @@ def write_trouble(project: Project, host: Host, function: str, file: Path, ladde
         [f"| {name} | {value:.2f}% |" for name, value in ladder.tried.items()]
         + [f"| {name} | skipped: {why} |" for name, why in ladder.skipped.items()]
     )
+    context = "\n".join(
+        f"- {hint.hypothesis}; providers: {', '.join(hint.provider_ids) or 'none retained'}; "
+        f"snapshot: {hint.snapshot_key}; next: {' '.join(hint.next_existing_action)}"
+        for hint in ladder.hints
+    )
     path = file.with_name("TROUBLE.md")
     atomic_files.text(
         path,
@@ -70,6 +79,7 @@ def write_trouble(project: Project, host: Host, function: str, file: Path, ladde
         f"## Target assembly\n\n```\n{assembly.rstrip()}\n```\n\n"
         f"## Best C\n\n```c\n{file.read_text().rstrip()}\n```\n\n"
         f"## First difference\n\n{difference or 'none reported'}\n\n"
+        f"## Advisory provider context\n\n{context or 'unknown; no retained semantic context'}\n\n"
         f"## Methods tried\n\n| method | result |\n| --- | --- |\n{methods}\n",
         encoding="utf-8",
     )

@@ -9,15 +9,18 @@ from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
+from tests.cycle.test_single_writer import SingleWriterTests
 from tests.kit import TempCase
 from tests.project_fixture import make
 from tests.test_resource_build import ResourceBuildTests
-from tests.work.test_creative_slim import B, payloads
+from tests.work.test_creative_slim import B, packed, payloads, source
 from unbake import cache
+from unbake.cycle import ladder
 from unbake.cycle.rank import Candidate
 from unbake.layout import subsystems as sub
 from unbake.project.headers import Graph
 from unbake.work import explain, hints, plan
+from unbake.work.score import measure_words
 
 FIXTURE = Path(__file__).parent / "fixtures/subsystem_provider_retention"
 
@@ -161,3 +164,54 @@ class ResourceAdvisoryCases(ResourceBuildTests):
         self.assertEqual(cohorts[0].candidate_ids, ())
         self.assertEqual(cohorts[0].estimated_new_bytes, 0)
         self.assertIn("resources/rsp/boot.s", cohorts[0].write_paths)
+
+
+class CapturedCoordinatorCases(SingleWriterTests):
+    """Replay real source/word outcomes in the existing coordinator test harness.
+
+    alpha/beta are harness aliases; no invented ROM, fresh native proof or delivery credit.
+    """
+
+    def setUp(self):
+        super().setUp()
+        captured = payloads(B)["us"]
+        providers = json.loads(
+            (Path(__file__).parent / "fixtures/ragewars_retained_12670/provider-holders.json").read_text()
+        )
+        raw = bytes.fromhex(next(row for row in providers if row["version"] == "us")["words"])
+        self.captured_sources = {
+            "beta": source(B),
+            "alpha": (Path(__file__).parent / "fixtures/ragewars_retained_12670/provider.c").read_text(),
+        }
+        self.captured_compares = {
+            "beta": measure_words("us", packed(captured["target"]), packed(captured["candidate"])),
+            "alpha": measure_words("us", raw, raw),
+        }
+
+    def test_actual_nonexact_source_exhausts_methods_locally_while_exact_provider_leaves(self):
+        run = self.cycle(land_steps=[[]], search=lambda n, text, method: None)
+        self.assertEqual(self.methods(run), ["registers", "order", "permute"])
+        self.assertEqual(run.result.data["landed"], ["alpha"])
+        self.assertEqual(run.result.data["carryovers"], ["beta"])
+        self.assertNotIn("beta", run.published)
+        self.assertEqual((self.root / "work/beta/beta.c").read_text(), self.captured_sources["beta"])
+        self.assertEqual(run.names("fn.fuzzy_landed"), [])
+        self.assertEqual(run.names("fn.committed", "beta"), [])
+        queued = run.names("fn.queued", "beta")[0]
+        creative = run.names("fn.creative", "beta")[0]
+        self.assertEqual(queued["subsystem_ref"], creative["subsystem_ref"])
+        self.assertEqual(creative["best_percent"], self.captured_compares["beta"].percent)
+        file = self.root / "work/beta/beta.c"
+        context = sub.aggregate(sub.Facts(missing_inputs=("actual replay unknown semantics",)))
+        current = ladder.Ladder(best=self.captured_compares["beta"].percent, hints=hints.for_subject("beta", context))
+        with patch.object(ladder, "target_assembly", return_value="captured target retained elsewhere"):
+            trouble = ladder.write_trouble(object(), object(), "beta", file, current, "captured word mismatch")
+        self.assertIn(context.evidence_key, trouble.read_text())
+        self.assertIn("unknown context", trouble.read_text())
+
+    def test_actual_unavailable_comparison_keeps_best_captured_source_local(self):
+        run = self.cycle(land_steps=[[]], compare_fault=True)
+        self.assertNotIn("beta", run.published)
+        self.assertEqual((self.root / "work/beta/beta.c").read_text(), self.captured_sources["beta"])
+        self.assertEqual(run.names("fn.fuzzy_landed"), [])
+        self.assertIsNone(run.names("fn.compare.done", "beta")[0]["best_percent"])

@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import json
 import queue
-import tempfile
 import threading
 import time
 from collections.abc import Callable
@@ -61,8 +60,6 @@ class Row:
     sha256: str = ""
     held: bool = False
     commit: str = ""
-    fuzzy: bool = False
-    fuzzy_final: str = "needs creative"
     # The bytes of the last generated draft: a draft still holding them is drafted again after the steps change.
     drafted_sha: str = ""
     # Where the mechanical search ladder stands; a fresh compare of the tree or a human edit starts it over.
@@ -428,6 +425,12 @@ def run(
             )
         )
     started += steps.ensure(project, host, DRAFT_STEPS)
+    from unbake.layout import subsystems
+    from unbake.work import hints, plan
+
+    advisory = subsystems.snapshot(project, subjects=frozenset(row.function for row in picked))
+    proposals = plan.cohorts(picked, advisory)
+    cohort_by_name = {name: row.id for row in reversed(proposals) for name in row.candidate_ids}
     tui.line(f"Cycle on {len(picked)} functions: {', '.join(row.function for row in picked)}")
     emitter = Emitter(events)
     rows = {c.function: Row(c.function, c.bytes, c.versions, c.carryover, best_percent=c.best_percent) for c in picked}
@@ -475,12 +478,11 @@ def run(
         stop=stopper.condition,
     )
     landed: list[str] = []
-    fuzzy_landed: list[str] = []
     # The task each row has in the pool; its result is read only while it is still the row's task.
     inflight: dict[str, tuple[Future[attempts.Outcome], Task]] = {}
     # Tasks held back while a land waits for the pool to drain; they start after the land's steps.
     deferred: dict[str, Task] = {}
-    # Exact or best retained source waiting for the same drained writer boundary.
+    # Exact source waiting for the same drained writer boundary.
     ready: list[str] = []
     watcher_stop = threading.Event()
     from unbake.cycle import watcher
@@ -511,9 +513,13 @@ def run(
 
     def bring_current(names: tuple[str, ...]) -> list[str]:
         """Run steps on this thread; a held step ends the cycle (drafts must never read a half-current tree)."""
-        nonlocal steps_error
+        nonlocal steps_error, advisory, cohort_by_name
         try:
-            return [done.step for done in steps.ensure(project, host, names, report=report) if done.ran]
+            ran = [done.step for done in steps.ensure(project, host, names, report=report) if done.ran]
+            advisory = subsystems.snapshot(project, subjects=frozenset(row.function for row in picked))
+            proposals = plan.cohorts(picked, advisory)
+            cohort_by_name = {name: row.id for row in reversed(proposals) for name in row.candidate_ids}
+            return ran
         except Held as error:
             steps_error = error.reason
             emitter.emit(
@@ -576,8 +582,7 @@ def run(
         def start(row: Row, *, redraft: bool = False) -> None:
             if row.held:
                 return
-            row.ladder = ladder.Ladder()
-            row.fuzzy = False
+            row.ladder = ladder.Ladder(hints=hints.for_subject(row.function, advisory))
             file = project.work / row.function / f"{row.function}.c"
             if redraft:
                 row.stage, row.sha256 = "drafting", ""
@@ -610,49 +615,6 @@ def run(
         def finish_land(row: Row) -> None:
 
             current_project = config.load(project.root)
-            if row.fuzzy:
-                saved = ladder.snapshot_path(Path(row.file))
-                content = saved.read_text() if saved.is_file() else Path(row.file).read_text()
-                proof: dict[str, Any] = {}
-
-                def committed(record: dict[str, Any]) -> None:
-                    proof.update(record.get("proof", {}))
-                    emitter.emit("fn.committed", **record)
-
-                try:
-                    with tempfile.TemporaryDirectory(prefix=".carry-", dir=project.work) as temporary:
-                        candidate = Path(temporary) / f"{row.function}.c"
-                        atomic_files.text(candidate, content)
-                        row.commit = land.land(current_project, host, candidate, fuzzy=True, on_commit=committed)
-                except Held as error:
-                    row.stage = row.fuzzy_final
-                    row.diagnostic = error.reason if row.stage != "held" else f"{row.diagnostic}; {error.reason}"
-                    emitter.emit(
-                        "fn.land_failed",
-                        function=row.function,
-                        versions=list(row.versions),
-                        diagnostic=error.reason,
-                        fault=capture(
-                            error,
-                            cause=cause_named(
-                                "cycle.engine.unexpected", str(error), owner="cycle.engine", stage="cycle"
-                            ),
-                        ).document(),
-                        returned_to_worker=False,
-                    )
-                    return
-                row.stage = row.fuzzy_final
-                if row.function not in fuzzy_landed:
-                    fuzzy_landed.append(row.function)
-                emitter.emit(
-                    "fn.fuzzy_landed",
-                    function=row.function,
-                    commit=row.commit,
-                    versions=list(row.versions),
-                    bytes=row.bytes,
-                    best_percent=proof.get("score"),
-                )
-                return
             message = land.subject(project, row.function)
             started = time.monotonic()
             try:
@@ -675,8 +637,7 @@ def run(
                     start(row)
                 else:
                     row.stage = "waiting for edit"
-                    retain(row)
-                return
+                    return
             row.stage, row.commit = "landed", commit
             landed.append(row.function)
             unchecked.append(row.function)
@@ -700,15 +661,10 @@ def run(
             emitter.emit("fn.search.start", function=row.function, method=method)
             submit(row.function, Task("search", row.file, method=method))
 
-        def retain(row: Row) -> None:
-            """Keep the best admitted draft even when comparison or a search tool is unavailable."""
-            row.fuzzy_final = row.stage
-            row.fuzzy, row.stage = True, "landing"
-            ready.append(row.function)
-            drain()
-
         def creative(row: Row) -> None:
             file = Path(row.file)
+            current_context = subsystems.snapshot(project, subjects=frozenset(item.function for item in picked))
+            row.ladder.hints = hints.for_subject(row.function, current_context)
             row.stage = "needs creative"
             row.best_percent = row.ladder.best
             trouble = ladder.write_trouble(project, host, row.function, file, row.ladder, row.diagnostic)
@@ -718,8 +674,9 @@ def run(
                 best_percent=row.ladder.best,
                 methods={**row.ladder.tried, **{name: f"skipped: {why}" for name, why in row.ladder.skipped.items()}},
                 trouble=str(trouble),
+                subsystem_ref=current_context.evidence_key,
+                **({"cohort_id": cohort_by_name[row.function]} if row.function in cohort_by_name else {}),
             )
-            retain(row)
 
         def restore(row: Row) -> None:
             """A method that gained nothing leaves the best text in the file."""
@@ -737,7 +694,7 @@ def run(
                 current.tried[method] = percent
                 if not gained:
                     restore(row)
-                    creative(row)
+                    search_next(row)
                     return
             current.best = percent
             atomic_files.text(ladder.snapshot_path(file), file.read_text(), encoding="utf-8")
@@ -768,7 +725,6 @@ def run(
                     **({"fault": result["fault"]} if "fault" in result else {}),
                     next=next_words("search-variants", row.file, "--method", method),
                 )
-                retain(row)
                 return
             if not result["mutations"]:
                 # Nothing to mutate (no pseudo register to move, no statement to reorder): the method does not
@@ -781,7 +737,7 @@ def run(
             if best.read_bytes() == file.read_bytes():
                 current.tried[method] = current.best
                 current.method = ""
-                creative(row)
+                search_next(row)
                 return
             # The method's best text is compared like any edit; the watcher's event for this write matches the
             # recorded digest and is ignored.
@@ -854,6 +810,8 @@ def run(
                 versions=list(row.versions),
                 carryover=row.carryover,
                 best_percent=row.best_percent,
+                subsystem_ref=advisory.evidence_key,
+                **({"cohort_id": cohort_by_name[row.function]} if row.function in cohort_by_name else {}),
             )
             start(row)
         try:
@@ -887,7 +845,6 @@ def run(
                     else:
                         outcome = _compared(rows[function], _result(done, task.operation, project), emitter, stopper)
                         if outcome == "exact":
-                            rows[function].fuzzy = False
                             rows[function].ladder.best = 100.0
                             file = Path(rows[function].file)
                             atomic_files.text(ladder.snapshot_path(file), file.read_text())
@@ -909,8 +866,6 @@ def run(
                                 row.ladder.best = 100.0
                                 atomic_files.text(ladder.snapshot_path(Path(row.file)), Path(row.file).read_text())
                                 creative(row)
-                            else:
-                                retain(row)
                     if function in deferred and not ready:
                         submit(function, deferred[function])
                 elif kind == "edit":
@@ -923,7 +878,7 @@ def run(
                     if sha == row.sha256:
                         continue
                     row.file, row.sha256 = str(path), sha
-                    row.ladder = ladder.Ladder()
+                    row.ladder = ladder.Ladder(hints=hints.for_subject(row.function, advisory))
                     stopper.note_activity()
                     emitter.emit("fn.edit", function=row.function, file=row.file, sha256=sha)
                     old = inflight.get(row.function)
@@ -980,7 +935,6 @@ def run(
         carryovers=carry,
         exit=exit_code,
         next=following,
-        fuzzy=fuzzy_landed,
     )
     atomic_files.text(
         state_path(project),
@@ -988,7 +942,6 @@ def run(
     )
     data = {
         "landed": landed,
-        "fuzzy": fuzzy_landed,
         "held": held,
         "carryovers": carry,
         "regressed": regressed,

@@ -15,6 +15,7 @@ from unbake import land, pool, steps
 from unbake.config import Held
 from unbake.cycle import engine, ladder
 from unbake.inputs import DependencySet
+from unbake.layout import subsystems
 from unbake.process import named
 from unbake.work import attempts
 from unbake.work.score import measure_words
@@ -85,7 +86,7 @@ class SingleWriterTests(TempCase):
             file.parent.mkdir(parents=True, exist_ok=True)
             if file.is_file() and not replace:
                 raise AssertionError(f"{function}: a draft replaced a file without replace")
-            file.write_text(f"/* draft {drafts[function]} */\n")
+            file.write_text(getattr(self, "captured_sources", {}).get(function, f"/* draft {drafts[function]} */\n"))
             return {"ok": True, "file": str(file), "seconds": 0.0}
 
         def compare_task(spec):
@@ -101,6 +102,12 @@ class SingleWriterTests(TempCase):
                 inboxes[0].put(("edit", str(path)))  # saved by hand after this compare started
                 path.write_text("/* edited by hand */\n")
                 return {**result(exact=False), "sha256": hashlib.sha256(b"/* draft 1 */\n").hexdigest()}
+            captured = getattr(self, "captured_compares", {}).get(function)
+            if captured is not None:
+                return {
+                    **result(exact=captured.exact, percent=captured.percent),
+                    "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                }
             percent = 100.0 if exact else 50.0 + 10.0 * text.count("better") - 10.0 * text.count("worse")
             return {**result(exact=exact, percent=percent), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
 
@@ -264,6 +271,13 @@ class SingleWriterTests(TempCase):
             patch.object(
                 engine, "task_dependencies", return_value=DependencySet((), {"dependencies_unknown": True}, {})
             ),
+            patch.object(
+                subsystems,
+                "snapshot",
+                return_value=subsystems.aggregate(
+                    subsystems.Facts(missing_inputs=("coordinator capture replay; no semantic ground truth",))
+                ),
+            ),
             patch.object(engine, "_draft_task", draft_task),
             patch.object(engine, "_compare_task", compare_task),
             patch.object(engine, "_search_task", search_task),
@@ -373,11 +387,11 @@ class SingleWriterTests(TempCase):
     def methods(self, run: Run) -> list[str]:
         return [e["method"] for e in run.names("fn.search.start", "beta")]
 
-    def test_a_method_that_gains_nothing_ends_the_ladder_at_once(self) -> None:
+    def test_a_method_that_gains_nothing_continues_the_ladder(self) -> None:
         run = self.cycle(land_steps=[[]], search=lambda n, text, method: None)
-        self.assertEqual(self.methods(run), ["registers"])
+        self.assertEqual(self.methods(run), ["registers", "order", "permute"])
         creative = run.names("fn.creative", "beta")[0]
-        self.assertEqual(creative["methods"], {"registers": 50.0})
+        self.assertEqual(creative["methods"], {"registers": 50.0, "order": 50.0, "permute": 50.0})
         self.assertEqual(creative["best_percent"], 50.0)
         self.assertEqual(run.result.data["carryovers"], ["beta"])
 
@@ -388,17 +402,19 @@ class SingleWriterTests(TempCase):
         self.assertEqual(creative["methods"], {"registers": 60.0, "order": 70.0, "permute": 80.0})
         self.assertEqual((self.root / "work" / "beta" / "beta.c").read_text().count("better"), 3)
 
-    def test_a_middle_method_without_gain_stops_before_the_rest(self) -> None:
+    def test_a_middle_method_without_gain_continues_the_rest(self) -> None:
         run = self.cycle(land_steps=[[]], search=lambda n, text, method: text + "better\n" if n == 1 else None)
-        self.assertEqual(self.methods(run), ["registers", "order"])
-        self.assertEqual(run.names("fn.creative", "beta")[0]["methods"], {"registers": 60.0, "order": 60.0})
+        self.assertEqual(self.methods(run), ["registers", "order", "permute"])
+        self.assertEqual(
+            run.names("fn.creative", "beta")[0]["methods"], {"registers": 60.0, "order": 60.0, "permute": 60.0}
+        )
 
     def test_a_worse_result_leaves_the_best_text_in_the_file(self) -> None:
         run = self.cycle(land_steps=[[]], search=lambda n, text, method: text + ("better\n" if n == 1 else "worse\n"))
         text = (self.root / "work" / "beta" / "beta.c").read_text()
         self.assertEqual((text.count("better"), text.count("worse")), (1, 0))
         creative = run.names("fn.creative", "beta")[0]
-        self.assertEqual(creative["methods"], {"registers": 60.0, "order": 50.0})
+        self.assertEqual(creative["methods"], {"registers": 60.0, "order": 50.0, "permute": 50.0})
         self.assertEqual(creative["best_percent"], 60.0)
 
     def test_an_exact_search_result_lands_like_any_exact_compare(self) -> None:
@@ -417,12 +433,13 @@ class SingleWriterTests(TempCase):
         held = run.names("fn.held", "beta")[0]
         self.assertEqual(held["reason"], "search.registers: registers broke")
         self.assertEqual(run.result.data["held"], ["beta"])
-        self.assertEqual(run.result.data["fuzzy"], ["beta"])
-        self.assertIn("draft 1", run.published["beta"])
+        self.assertNotIn("fuzzy", run.result.data)
+        self.assertNotIn("beta", run.published)
+        self.assertIn("draft 1", (self.root / "work/beta/beta.c").read_text())
 
     def test_a_method_with_nothing_to_mutate_is_skipped_and_the_next_one_runs(self) -> None:
         run = self.cycle(land_steps=[[]], search=lambda n, text, method: "SKIP" if n == 1 else None)
-        self.assertEqual(self.methods(run), ["registers", "order"])
+        self.assertEqual(self.methods(run), ["registers", "order", "permute"])
         skipped = [e for e in run.names("fn.search.done", "beta") if e.get("diagnostic")]
         self.assertEqual([e["method"] for e in skipped], ["registers"])
         creative = run.names("fn.creative", "beta")[0]
@@ -440,21 +457,23 @@ class SingleWriterTests(TempCase):
         run = self.cycle(land_steps=[[]], search=lambda n, text, method: None)
         self.assertLess(run.log.index("land alpha"), run.log.index("search beta registers"))
 
-    def test_best_source_is_published_fuzzy_at_the_drained_boundary(self) -> None:
+    def test_best_source_remains_local_at_the_drained_boundary(self) -> None:
         run = self.cycle(land_steps=[[]], search=lambda n, text, method: text + ("better\n" if n == 1 else "worse\n"))
-        self.assertEqual(run.result.data["fuzzy"], ["beta"])
+        self.assertNotIn("fuzzy", run.result.data)
         self.assertEqual(run.result.data["landed"], ["alpha"])
         self.assertEqual(run.names("cycle.end")[0]["landed_bytes"], 8)
-        self.assertEqual(run.published["beta"], (self.root / "work/beta/beta.ladder.c").read_text())
-        self.assertIn("better", run.published["beta"])
-        self.assertNotIn("worse", run.published["beta"])
-        self.assertEqual(run.names("fn.fuzzy_landed")[0]["commit"], "commit-beta")
-        self.assertEqual(run.names("fn.committed", "beta")[0]["proof"]["kind"], "fuzzy")
-        self.assertFalse(any(line.startswith("ensure ") for line in run.log[run.log.index("fuzzy beta") + 1 :]))
+        source = (self.root / "work/beta/beta.c").read_text()
+        self.assertEqual(source, (self.root / "work/beta/beta.ladder.c").read_text())
+        self.assertIn("better", source)
+        self.assertNotIn("worse", source)
+        self.assertNotIn("beta", run.published)
+        self.assertEqual(run.names("fn.fuzzy_landed"), [])
+        self.assertEqual(run.names("fn.committed", "beta"), [])
 
-    def test_unavailable_comparison_still_offers_source_to_fuzzy_admission(self) -> None:
+    def test_unavailable_comparison_keeps_source_local(self) -> None:
         run = self.cycle(land_steps=[[]], compare_fault=True)
-        self.assertEqual(run.result.data["fuzzy"], ["beta"])
+        self.assertNotIn("fuzzy", run.result.data)
+        self.assertNotIn("beta", run.published)
         self.assertEqual(run.result.data["landed"], ["alpha"])
         self.assertEqual(run.searches, [])
         self.assertEqual(run.names("fn.compare.done", "beta")[0]["best_percent"], None)
