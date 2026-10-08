@@ -115,7 +115,7 @@ def capture_inputs(
     project: Project, source: Path, version: str, command: list[str], *, compiler: str, non_matching: bool
 ) -> inputs.DependencySet:
     """Capture retained-source and native recipe inputs before preprocessing, never from a later source."""
-    from unbake.project.headers import Graph
+    from unbake.project.headers import Graph, scan
 
     graph = Graph.capture(project)
     closure = graph.closure((source,), command)
@@ -143,7 +143,9 @@ def capture_inputs(
             "version": version,
             "compiler": compiler,
             "non_matching": non_matching,
-            "dependencies_unknown": closure.unknown,
+            "dependencies_unknown": any(
+                include.unknown for path in (source, *closure.paths) for include in scan(graph.read(path).decode())
+            ),
         },
         {
             **closure.dependency_set.recipes,

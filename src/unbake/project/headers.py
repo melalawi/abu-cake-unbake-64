@@ -675,7 +675,9 @@ class Graph:
         if attempts.guard_present(raw.decode()):
             return {}
         closure = self.closure((source,))
-        if closure.unknown:
+        # Pin every literal branch provider. Conditional includes are complete
+        # conservative inputs; a computed include still lacks source authority.
+        if any(include.unknown for path in (source, *closure.paths) for include in scan(self.read(path).decode())):
             return {}
         typedefs = set()
         providers = []
@@ -702,7 +704,12 @@ class Graph:
             return {}
         generator = c_generator.CGenerator()
         aliases = {}
-        if sizes is not None:
+        needs_aliases = any(
+            not isinstance(node.type, c_ast.ArrayDecl)
+            or re.sub(r"\bconst\b\s*", "", declarations.node_type(node.type.type)).strip() != "char"
+            for node in initializers
+        )
+        if sizes is not None and needs_aliases:
             for text in providers:
                 provider = cdecl.parser(typedefs).parse(declarations.cleaned_unit(text))
                 aliases.update(

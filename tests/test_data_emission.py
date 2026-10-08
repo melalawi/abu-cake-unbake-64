@@ -125,12 +125,14 @@ class DataEmissionTests(ProjectCase):
         layout = self.place()
         self.assertEqual(layout[0].symbols, ((NAME, 0, 4),))
         self.assertEqual((layout[0].address, layout[0].rom_offset, layout[0].size), (self.address, self.start, 8))
+        # The real candidate's named copy is not the referenced resident pool.
+        self.rom(bytes.fromhex("0044434C") + VALUE)
         self.capture()
         self.linked(layout)
-        event = data.record_linked(self.project, self.host, self.source, "us", self.original, self.final, layout)
-        self.assertIsNotNone(event)
-        self.assertEqual(self.coverage().manifest["verified_bytes"], 4)
-        self.assertEqual(self.coverage().manifest["unmeasured_bytes"], 4)
+        self.assertIsNone(
+            data.record_linked(self.project, self.host, self.source, "us", self.original, self.final, layout)
+        )
+        self.assertEqual(self.coverage().manifest["verified_bytes"], 0)
 
     def test_actual_retained_data1_named_string_original_placed_and_final_native_elf_produce_nine_bytes(self):
         fixture = FIXTURE / "data1"
