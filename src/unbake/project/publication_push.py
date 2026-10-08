@@ -71,7 +71,8 @@ def admission(project: Project, host: Host, head: str, base: str) -> dict[str, A
         )
         for resource, source_name in current_resources.items():
             source = project.root / source_name
-            if source_name in changed or resource not in previous_resources:
+            resource_headers = {p.relative_to(project.root).as_posix() for p in buildfiles.resource_inputs(project)}
+            if source_name in changed or resource not in previous_resources or changed & resource_headers:
                 resource_scopes.append((version, resource))
                 selected_sources.add(source)
     from unbake.decomp import checks

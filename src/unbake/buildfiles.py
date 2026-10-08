@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+import shlex
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -26,7 +27,7 @@ from unbake.layout import split
 from unbake.process import named as cause_named
 
 # Bump when this step's output changes for the same inputs. Keys never digest the tool's code.
-SCHEMA = 12
+SCHEMA = 13
 
 # CI pins: full commit SHAs and an image digest (tool data, never config).
 CHECKOUT = ("actions/checkout", "11d5960a326750d5838078e36cf38b85af677262", "v4.4.0")
@@ -68,6 +69,9 @@ class Resource(Unit):
     execution_address: int = 0
     section: str = ""
     asflags: tuple[str, ...] = ()
+    assembler: str = "gnu"
+    output: str = ""
+    cppflags: tuple[str, ...] = ()
 
 
 def relative(project: Project, path: Path) -> str:
@@ -219,11 +223,33 @@ def resource_bindings(project: Project, version: str, *, text: str | None = None
                     )
                 )
             name = "_".join(source.relative_to(resources).with_suffix("").parts)
-            split.name(name, "resource name")
             fields = segment.fields
+            assembler = fields.get("resource_assembler", "gnu")
+            output = fields.get("resource_output", "")
+            if assembler not in {"gnu", "armips"} or (assembler == "armips" and output not in {"code", "data"}):
+                raise Held(
+                    cause_named(
+                        "buildfiles.resource",
+                        "unsupported resource assembler/output",
+                        owner="buildfiles",
+                        stage="buildfiles",
+                    )
+                )
+            if assembler == "armips":
+                name += "_" + output
+            elif output:
+                raise Held(
+                    cause_named(
+                        "buildfiles.resource",
+                        "GNU resource uses a native section",
+                        owner="buildfiles",
+                        stage="buildfiles",
+                    )
+                )
+            split.name(name, "resource name")
             execution = split.number(fields.get("execution_vram"), "resource execution_vram")
             section = fields.get("resource_section", "")
-            if not re.fullmatch(r"\.[A-Za-z_][A-Za-z_0-9.]*", section):
+            if assembler == "gnu" and not re.fullmatch(r"\.[A-Za-z_][A-Za-z_0-9.]*", section):
                 raise Held(
                     cause_named(
                         "buildfiles.resource",
@@ -232,8 +258,18 @@ def resource_bindings(project: Project, version: str, *, text: str | None = None
                         stage="buildfiles",
                     )
                 )
-            flags = tuple(fields.get("resource_asflags", "").split())
-            words(flags)
+            try:
+                flags = tuple(shlex.split(fields.get("resource_asflags", "")))
+                cppflags = tuple(shlex.split(fields.get("resource_cppflags", "")))
+            except ValueError as error:
+                raise Held(
+                    cause_named("buildfiles.resource", str(error), owner="buildfiles", stage="buildfiles")
+                ) from error
+            if assembler == "gnu":
+                words(flags)
+            else:
+                resource_args(flags)
+            words(cppflags)
             size = split.end(row) - row.start
             address = split.address(row, path)
             if size <= 0 or execution + size > 2**32 or address + size > 2**32:
@@ -251,9 +287,65 @@ def resource_bindings(project: Project, version: str, *, text: str | None = None
                         "buildfiles.resource", "duplicate resource output name", owner="buildfiles", stage="buildfiles"
                     )
                 )
-            resource = Resource(name, address, row.start, size, "resource", row.path, execution, section, flags)
+            resource = Resource(
+                name,
+                address,
+                row.start,
+                size,
+                "resource",
+                row.path,
+                execution,
+                section,
+                flags,
+                assembler,
+                output,
+                cppflags,
+            )
             result[resource] = row.path
+    for code, data in resource_pairs(tuple(result)):
+        if (code.asflags, code.cppflags) != (data.asflags, data.cppflags):
+            raise Held(
+                cause_named(
+                    "buildfiles.resource", "paired resource options differ", owner="buildfiles", stage="buildfiles"
+                )
+            )
     return result
+
+
+def resource_args(args: tuple[str, ...]) -> str:
+    """Quote assembler arguments without admitting Make expansions or line/comment syntax."""
+    if any(any(character in argument for character in "$#\n\r") for argument in args):
+        raise Held(
+            cause_named("buildfiles.resource", "unsafe resource argument", owner="buildfiles", stage="buildfiles")
+        )
+    return " ".join(shlex.quote(argument) for argument in args)
+
+
+def resource_pairs(resources: tuple[Resource, ...]) -> list[tuple[Resource, Resource]]:
+    grouped: dict[str, dict[str, Resource]] = {}
+    for resource in resources:
+        if resource.assembler == "armips":
+            grouped.setdefault(resource.source, {})[resource.output] = resource
+    result = []
+    for outputs in grouped.values():
+        if set(outputs) != {"code", "data"}:
+            raise Held(
+                cause_named(
+                    "buildfiles.resource",
+                    "armips source needs code and data rows",
+                    owner="buildfiles",
+                    stage="buildfiles",
+                )
+            )
+        result.append((outputs["code"], outputs["data"]))
+    return result
+
+
+def resource_inputs(project: Project) -> tuple[Path, ...]:
+    """The retained assembler include/header inputs also determine resource freshness."""
+    return tuple(
+        sorted(p for p in (project.root / "resources").rglob("*") if p.suffix in {".h", ".inc"} and p.is_file())
+    )
 
 
 def resource_link_script(project: Project, version: str, resource: Resource) -> str:
@@ -371,7 +463,7 @@ def slices_mk(project: Project, version: str) -> str:
         lines.append(f"{version}.{namespace}.{unit.name} := 0x{unit.address:X}:0x{unit.start:X}:0x{unit.size:X}\n")
         directory = {"c": "units", "hasm": "hasm", "data": "data", "resource": "resources"}[unit.kind]
         pieces.append(f"{build}/{directory}/{unit.name}.bin")
-        if isinstance(unit, Resource):
+        if isinstance(unit, Resource) and unit.assembler == "gnu":
             lines.append(f"{version}.R.{unit.name}.ASFLAGS := {words(unit.asflags)}\n")
             lines.append(
                 f"{build}/resources/{unit.name}.bin: {unit.source} Makefile versions/{version}/slices.mk "
@@ -392,6 +484,22 @@ def slices_mk(project: Project, version: str) -> str:
         lines.append(f"{version}.S.{cursor:08X} := {cursor} {rom_size - cursor}\n")
         pieces.append(f"{build}/slices/{cursor:08X}.bin")
     lines.append(f"{version}.PIECES := \\\n" + " \\\n".join(f"  {piece}" for piece in pieces) + "\n")
+    dependencies = words([relative(project, p) for p in resource_inputs(project)])
+    for code, data in resource_pairs(tuple(resource_bindings(project, version))):
+        code_target = f"{build}/resources/{code.name}.bin"
+        data_target = f"{build}/resources/{data.name}.bin"
+        base = code.name.removesuffix("_code")
+        expanded = f"{build}/resources/{base}.S"
+        preprocessor = f"$(CPP) {words(code.cppflags)} {code.source} > {expanded} && " if code.cppflags else ""
+        lines.append(
+            f"{code_target} {data_target} &: {code.source} {dependencies} Makefile versions/{version}/slices.mk "
+            f"| {build}/resources\n"
+            f"\t$(Q){preprocessor}$(ARMIPS) {expanded if code.cppflags else code.source} "
+            f"-strequ CODE_FILE {code_target}.tmp -strequ DATA_FILE {data_target}.tmp {resource_args(code.asflags)} && "
+            f'[ "$$(wc -c < {code_target}.tmp)" -eq {code.size} ] && '
+            f'[ "$$(wc -c < {data_target}.tmp)" -eq {data.size} ] && '
+            f"mv {code_target}.tmp {code_target} && mv {data_target}.tmp {data_target}\n"
+        )
     return "".join(lines)
 
 
@@ -606,7 +714,7 @@ def makefile(project: Project, host: Host) -> str:
         f"VERSIONS := {' '.join(project.versions)}\n",
         "ROMS := $(foreach v,$(VERSIONS),build/$v/$(NAME).z64)\n",
         "CPP := cpp\nAS := mips-linux-gnu-as\nLD := mips-linux-gnu-ld\n",
-        "N64LINK := n64link\nOBJCOPY := mips-linux-gnu-objcopy\n",
+        "N64LINK := n64link\nOBJCOPY := mips-linux-gnu-objcopy\nARMIPS := armips\n",
         f"INCLUDES := {words(includes)}\n",
         f"CPPFLAGS := {words(list(project.cppflags))}\n",
         f"PREPROCESS_FLAGS = $(INCLUDES) {words(list(default_preprocess))} $(VERSION_DEFINES) $(CONSUMER)\n",
@@ -798,7 +906,10 @@ def generate(project: Project, host: Host, *, receipts: dict[str, dict[str, Any]
         files[directory / f"{project.name}.ld"] = link_script(project, version)
         files[directory / f"{project.name}.data.ld"] = data_link_script(project, version)
         for resource in resource_bindings(project, version):
-            files[directory / "resources" / f"{resource.name}.ld"] = resource_link_script(project, version, resource)
+            if resource.assembler == "gnu":
+                files[directory / "resources" / f"{resource.name}.ld"] = resource_link_script(
+                    project, version, resource
+                )
         files[directory / "baserom.sha1"] = f"{meta.baserom_sha1}  {rom}\n"
         files[directory / f"{project.name}.sha1"] = f"{meta.baserom_sha1}  build/{version}/{project.name}.z64\n"
     return {**{path: text.encode() for path, text in files.items()}, project.root / verify.BUNDLE: payload}
@@ -824,6 +935,7 @@ def input_key(project: Project, host: Host) -> str:
     parts.extend(sorted(project.src.glob("*.c")))
     parts.extend(sorted(project.src.glob("*.s")))
     parts.extend(sorted((project.root / "resources").rglob("*.s")))
+    parts.extend(resource_inputs(project))
     parts.append(cache.serialized(attempts.ledger(project).fuzzy_sources()))
     from unbake.project import hygiene
 

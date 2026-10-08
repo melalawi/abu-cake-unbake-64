@@ -596,11 +596,14 @@ def resource_opcodes(source: Path) -> list[GuardFinding]:
             executable = True
         if re.match(r"\s*\.(?:data|rodata|rdata|sdata)\b", content):
             executable = False
+        create = re.match(r"\s*\.create\s+(CODE_FILE|DATA_FILE)\b", content)
+        if create:
+            executable = create[1] == "CODE_FILE"
         section = re.match(r'\s*\.section\s+([^,\s]+)(?:\s*,\s*"([^"]*)")?', content)
         if section:
             executable = "x" in (section[2] or "") or section[1] == ".text"
         if re.search(r"\.incbin\b", content) or (
-            executable and re.search(r"\.(?:word|byte|half|short|long|dword|[248]byte|insn)\b", content)
+            executable and re.search(r"\.(?:word|byte|half|short|long|dword|[248]byte|d[whb]|insn)\b", content)
         ):
             result.append(GuardFinding("resource-opcodes", line, content.strip(), None))
     return result
