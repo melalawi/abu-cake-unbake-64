@@ -24,7 +24,7 @@ class SearchTests(TempCase):
     def test_public_creative_search_replays_four_retained_combinations_through_option_layer(self):
         # AST-equivalent local/tail arms replay their retained experiment outputs.
         # This public workflow replay is explicitly NOT newly compiled exactness.
-        source = expanded_baseline()
+        source = retained("bt-baseline.c").decode()
         project, host, file = gcc_project(self.root, content=source)
         base = project.recipe_for(B).document()
         base["options"]["compile"] = ["-G8"]
@@ -50,7 +50,7 @@ class SearchTests(TempCase):
             native_replay(project, output, calls),
             patch(
                 "unbake.compilers.drivers.run_preprocess",
-                side_effect=lambda p, command, stage, **kw: kw["unit"].read_text(),
+                side_effect=lambda p, command, stage, **kw: expanded_baseline(),
             ),
             patch.object(core.explain, "allocation", side_effect=AssertionError("creative needs no allocator")),
         ):

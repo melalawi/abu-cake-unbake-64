@@ -485,13 +485,13 @@ def admission(
 
 
 def resolve_conflicts(project: Project, host: Host) -> bool:
-    """Regenerate build projections and merge owned reports during the existing rebase.
+    """Merge proof storage and build projections in the existing rebase.
 
-    Authored/source conflicts retain Git's refusal. README is eligible only if
-    both branches agree outside the owning progress section.
+    Report and README conflicts belong to their report writer. Source publishers
+    never regenerate or stage those union projections while reconciling proofs.
     """
     from unbake import buildfiles
-    from unbake.report import progress, readme_layout, verify
+    from unbake.report import verify
 
     conflicts = tuple(p for p in _git(project, "diff", "--name-only", "--diff-filter=U", "-z").split("\0") if p)
     build_generated = {
@@ -503,11 +503,8 @@ def resolve_conflicts(project: Project, host: Host) -> bool:
     generated = {verify.BUNDLE, ".github/workflows/progress.yml", ".gitlab-ci.yml"}
     allowed = {
         attempts.PATH,
-        verify.MANIFEST,
-        "README.md",
         *build_generated,
         *generated,
-        *("versions/" + v + "/report.json" for v in project.versions),
     }
     if not conflicts or set(conflicts) - allowed:
         return False
@@ -530,31 +527,10 @@ def resolve_conflicts(project: Project, host: Host) -> bool:
                         stage="publish",
                     )
                 )
-        if "README.md" in conflicts:
-            ours, theirs = (_git(project, "show", ":" + str(stage) + ":README.md") for stage in (2, 3))
-            left, _, right = readme_layout.section(ours)
-            other_left, _, other_right = readme_layout.section(theirs)
-            if (left, right) != (other_left, other_right):
-                raise Held(
-                    cause_named(
-                        "publish.readme_conflict",
-                        "authored README sections conflict; preserve both branches",
-                        owner="project.publication_push",
-                        stage="publish",
-                    )
-                )
-            atomic.text(project.root / "README.md", ours)
-        if verify.MANIFEST in conflicts:
-            # The old report manifest is a projection, never history authority.
-            atomic.text(project.root / verify.MANIFEST, _git(project, "show", ":2:" + verify.MANIFEST))
-        for name in conflicts:
-            if name.startswith("versions/") and name.endswith("/report.json"):
-                atomic.text(project.root / name, _git(project, "show", ":2:" + name))
         current = config.load(project.root)
         written = buildfiles.write(current, host) if set(conflicts) & build_generated else []
         if set(conflicts) - build_generated:
             written.extend(buildfiles.write_progress(current, publish_branch=host.publish_branch))
-            written.extend(progress.write(current, host, source_only=True))
         written.extend(attempts.storage_paths(current))
         _git(project, "add", "--", *sorted({*conflicts, *(p.relative_to(project.root).as_posix() for p in written)}))
     return True

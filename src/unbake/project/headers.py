@@ -703,7 +703,7 @@ class Graph:
                 providers.append(text)
         cleaned = declarations.cleaned_unit(raw.decode())
         try:
-            active = source_views.version_source(project, cleaned, version, source.stem)
+            active = source_views.version_source(project, cleaned, version, source.relative_to(project.root).as_posix())
         except Held as error:
             if error.key != "source.conditions":
                 raise

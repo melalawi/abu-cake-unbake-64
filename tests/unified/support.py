@@ -62,6 +62,9 @@ def gcc_project(root, *, function=B, content=None, target=None):
 
     for name in ("types.h", "vec3.h"):
         (project.include[-1] / name).write_bytes((FIXTURES / name).read_bytes())
+    for name in ("types.h", "gfx.h", "gbi.h", "menu_render.h"):
+        if f'"{name}"' in file.read_text():
+            (project.include[-1] / name).write_bytes(retained("bt-" + name))
     return project, host, file
 
 

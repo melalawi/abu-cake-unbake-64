@@ -119,11 +119,25 @@ def propose(source: str, trial: Compared, ctx: Context) -> Iterator[Mutation]:
         tree = cdecl.parse(cleaned)
     except cdecl.ParseError:
         return  # unproved syntax stays a manual source hint
+    # Edit authored syntax when available. Expanded macros are analysis inputs,
+    # never a replacement source body: emitting them would discard provider
+    # calls and introduce raw SDK register writes. Header typedefs seed parsing
+    # without copying their declarations into the authored translation unit.
+    evidence_tree = tree
+    original = getattr(ctx, "source", None)
+    if original is not None:
+        try:
+            tree = cdecl.parse(
+                cdecl.declaration_source(original.read_text()),
+                typedefs={node.name for node in walk(tree) if isinstance(node, c_ast.Typedef)},
+            )
+        except cdecl.ParseError:
+            return
     functions = [node for node in tree.ext if isinstance(node, c_ast.FuncDef) and node.decl.name == trial.function]
     if len(functions) != 1:
         return
     function = functions[0]
-    safety = _Safety(function, c_ast, tree)
+    safety = _Safety(function, c_ast, evidence_tree)
     strategies = [(node, "conversion-scope", change) for node, change in _conversions(function, c_ast, safety)]
     strategies += [(node, "tail-duplicate", change) for node, _, change in _terminal_tails(function, c_ast, safety)]
     printer = c_generator.CGenerator()

@@ -76,7 +76,9 @@ class RebaseLedgerReaderTests(ProjectCase):
                 patch.object(publication_push, "_git", side_effect=git),
                 patch.object(history, "_refresh", side_effect=refresh),
                 patch.object(buildfiles, "write_progress", return_value=[]),
-                patch.object(progress, "write", return_value=[]),
+                patch.object(
+                    progress, "write", side_effect=AssertionError("source/proof publisher must not write union reports")
+                ),
             ):
                 publication_push.rebase(self.project, self.host)
             history._refresh()

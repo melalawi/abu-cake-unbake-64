@@ -147,6 +147,34 @@
       "sha256": "db0a2e6cacaef40622b5c1281fab623e98d73a0c812623ce55799c3e670193fe",
       "bytes": 309437,
       "evidence_class": "retained historical input; replay is not new native proof"
+    },
+    {
+      "path": "bt-types.h.gz",
+      "source": "tool-impl-unified-astra/audit-inputs/bt/include/types.h",
+      "sha256": "1d8918b28b3228c8ddd7ca1fe44e7166231b6d8277087a7070cbca1418554c4e",
+      "bytes": 308,
+      "evidence_class": "retained historical provider; replay is not new native proof"
+    },
+    {
+      "path": "bt-gfx.h.gz",
+      "source": "tool-impl-unified-astra/audit-inputs/bt/include/gfx.h",
+      "sha256": "b1b8e8f3e3b62fb92fbf91e6d44b546b235ca3be080cc369d5197dad7e02c66c",
+      "bytes": 184,
+      "evidence_class": "retained historical provider; replay is not new native proof"
+    },
+    {
+      "path": "bt-gbi.h.gz",
+      "source": "tool-impl-unified-astra/audit-inputs/bt/include/gbi.h",
+      "sha256": "b75732e39ebd8e07ba0fbd2ec7c871939b03073dd73b7124c0e38148cb3549aa",
+      "bytes": 58753,
+      "evidence_class": "retained historical provider; replay is not new native proof"
+    },
+    {
+      "path": "bt-menu_render.h.gz",
+      "source": "tool-impl-unified-astra/audit-inputs/bt/include/menu_render.h",
+      "sha256": "5c87b5d519ef4defae9203df21a04a94954156a1f9c6115351dc3d361c938894",
+      "bytes": 1235,
+      "evidence_class": "retained historical provider; replay is not new native proof"
     }
   ],
   "counterfactuals": "Named mutations in tests are counterfactual inputs, never native success."

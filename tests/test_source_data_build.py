@@ -251,7 +251,15 @@ class SourceDataBuildTests(ProjectCase):
         self.concurrent_data_push(bad_source=True)
 
     def test_generated_build_conflicts_refuse_authored_paths_without_writes(self):
-        for authored in ("src/alpha.c", "versions/us/game.yaml", "config.toml", "versions/us/custom.ld"):
+        for authored in (
+            "src/alpha.c",
+            "versions/us/game.yaml",
+            "config.toml",
+            "versions/us/custom.ld",
+            "README.md",
+            "versions/us/report.json",
+            "report-state.json",
+        ):
             with (
                 self.subTest(authored=authored),
                 patch.object(publication_push, "_git", return_value="units.mk\0" + authored),

@@ -73,7 +73,9 @@ def inventory(project: Project, *, receipts: dict[str, dict[str, Any]] | None = 
         names: set[str] = set()
         parsed_views: dict[str, set[str]] = {}
         for version in project.versions:
-            view = source_views.version_source(project, text, version, unit, non_matching=guarded)
+            view = source_views.version_source(
+                project, text, version, path.relative_to(project.root).as_posix(), non_matching=guarded
+            )
             clean = cdecl.declaration_source(view)
             if clean not in parsed_views:
                 try:
