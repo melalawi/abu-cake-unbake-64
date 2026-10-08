@@ -44,6 +44,48 @@ class UnresolvedSectionsTests(unittest.TestCase):
             rodata.trial_fragment(['.rodata") }'])
 
 
+class AlignedBaseTests(unittest.TestCase):
+    NOP = 0
+    HI, LO = 0x3C010000, 0xC4200000
+
+    def object(self, directory, words, section=".rdata"):
+        return Object(
+            write_object(
+                Path(directory) / "unit.o",
+                {".text": struct.pack(f">{len(words)}I", *words), section: bytes.fromhex("4F000000")},
+                [("literal", section, 0, 0, 3)],
+                relocations=[
+                    (".text", 4 * (len(words) - 2), 5, "literal"),
+                    (".text", 4 * (len(words) - 1), 6, "literal"),
+                ],
+            )
+        )
+
+    def test_inserted_instruction_does_not_hide_the_pair_base(self):
+        # Target has no leading nop, so the pair sits one word later in the candidate than in the ROM.
+        target = struct.pack(">II", 0x3C01800C, 0xC42086C0)
+        with TemporaryDirectory() as temporary:
+            obj = self.object(temporary, [self.NOP, self.HI, self.LO])
+            self.assertEqual(rodata.aligned_bases(obj, [".rdata"], target), {".rdata": 0x800B86C0})
+
+    def test_same_offset_pair_and_jump_table_style_section_name(self):
+        target = struct.pack(">II", 0x3C01800D, 0xC4208000 | 0x1234)
+        with TemporaryDirectory() as temporary:
+            obj = self.object(temporary, [self.HI, self.LO], ".rodata")
+            self.assertEqual(rodata.aligned_bases(obj, [".rodata"], target), {".rodata": 0x800C9234})
+
+    def test_unmatched_pair_leaves_section_unplaced(self):
+        target = struct.pack(">II", 0x00000000, 0x00000000)
+        with TemporaryDirectory() as temporary:
+            obj = self.object(temporary, [self.HI, self.LO])
+            self.assertEqual(rodata.aligned_bases(obj, [".rdata"], target), {})
+
+    def test_trial_fragment_places_inferred_sections_and_zeroes_the_rest(self):
+        text = rodata.trial_fragment([".rdata", ".lit8"], {".rdata": 0x800B86C0})
+        self.assertIn(".trial_0 0x800B86C0 (NOLOAD)", text)
+        self.assertIn(".trial_1 0 (NOLOAD)", text)
+
+
 class TrialLinkTests(ProjectCase):
     def setUp(self):
         super().setUp()
@@ -116,6 +158,7 @@ class TrialLinkTests(ProjectCase):
 
         with (
             patch.object(runner, "place", side_effect=place),
+            patch.object(runner.split, "words", return_value=self.code),
             patch.object(runner.process, "run_tool", side_effect=self.native),
         ):
             data, problems = runner.link_function(self.project, self.host, obj, "us", self.row, self.source)
@@ -124,3 +167,31 @@ class TrialLinkTests(ProjectCase):
         self.assertEqual(problems, [".rdata: no proved resident address"])
         measured.typed["relocation"] += len(problems)
         self.assertFalse(measured.exact)
+
+    def test_shifted_reference_links_at_the_aligned_base_not_zero(self):
+        shifted = struct.pack(">III", 0, 0x3C010000, 0xC4200000)
+        obj = write_object(
+            self.work / "placed.o",
+            {".text": shifted, ".rdata": bytes.fromhex("4F000000")},
+            [("literal", ".rdata", 0, 0, 3)],
+            relocations=[(".text", 4, 5, "literal"), (".text", 8, 6, "literal")],
+        )
+        target = struct.pack(">II", 0x3C01800C, 0xC42086C0)
+
+        def place(project, host, original, version, row, output, **kwargs):
+            atomic.copyfile(original, output)
+            return [
+                ".rdata reference at .text+0x4/0x8: opcode differs from the ROM",
+                ".rdata: no proved resident address",
+            ]
+
+        with (
+            patch.object(runner, "place", side_effect=place),
+            patch.object(runner.split, "words", return_value=target),
+            patch.object(runner.process, "run_tool", side_effect=self.native),
+        ):
+            _, problems = runner.link_function(self.project, self.host, obj, "us", self.row, self.source)
+        used, text = self.seen_scripts[-1]
+        self.assertEqual(used.name, "trial.ld")
+        self.assertIn(".trial_0 0x800B86C0 (NOLOAD)", text)
+        self.assertIn(".rdata: no proved resident address", problems)

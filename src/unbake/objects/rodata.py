@@ -374,18 +374,60 @@ def unresolved_sections(obj: Object) -> list[str]:
     return [obj.names[index] for index in sorted(retained)]
 
 
-def trial_fragment(sections: Iterable[str]) -> str:
-    """Keep unplaced constants at zero solely to link a nonexact score trial.
+def trial_fragment(sections: Iterable[str], addresses: Mapping[str, int] | None = None) -> str:
+    """Keep unplaced constants solely to link a nonexact score trial.
 
     These NOLOAD bytes never enter the extracted .text or replace ROM data.
-    Zero supplies no inferred resident address; native placement owns that proof.
+    A section sits at zero unless addresses carries its aligned-reference base
+    (aligned_bases); native placement still owns the exactness proof.
     """
     result = []
     for index, section in enumerate(sections):
         if not re.fullmatch(r"\.[\w.$-]+", section):
             raise ValueError(f"linker section: invalid name {section!r}")
-        result.append(f'  .trial_{index} 0 (NOLOAD) : SUBALIGN(1) {{ *("{section}") }}')
+        address = (addresses or {}).get(section)
+        place = "0" if address is None else f"0x{address & 0xFFFFFFFF:08X}"
+        result.append(f'  .trial_{index} {place} (NOLOAD) : SUBALIGN(1) {{ *("{section}") }}')
     return "\n".join(result)
+
+
+def aligned_bases(obj: Object, sections: Iterable[str], target: bytes) -> dict[str, int]:
+    """Score-mode base of each unplaced constant section, from its HI16/LO16 pairs.
+
+    The native placer compares a reference with the ROM at the same text offset,
+    so any inserted or deleted instruction before it leaves the section unplaced
+    and its pair linking as lui 0. Align the candidate's words with the target's
+    (relocated operand fields masked), then vote the section base from the pairs
+    whose opcodes match. Only a unanimous section is returned; an ambiguous one
+    stays out and links at zero.
+    """
+    from unbake.work.score import align_words
+
+    text = obj.section(".text")
+    if text is None or len(target) % 4:
+        return {}
+    code = obj.content(text)
+    candidate = [int(word[0]) for word in struct.iter_unpack(">I", code)]
+    reference = [int(word[0]) for word in struct.iter_unpack(">I", target)]
+    masks = {
+        offset // 4: 0xFFFF if kind in (5, 6) else 0x03FFFFFF
+        for offset, kind, _ in obj.relocations(text)
+        if kind in (4, 5, 6) and offset % 4 == 0 and offset // 4 < len(candidate)
+    }
+    matched: dict[int, int | None] = {offset: None for offset in masks}
+    for tag, a, b, c, _ in align_words(reference, candidate, masks):
+        if tag == "equal":
+            for index in masks.keys() & set(range(c, c + b - a)):
+                matched[index] = reference[a + index - c]
+    result = {}
+    for section in sections:
+        try:
+            base, dissent = placement(obj, section, {index * 4: word for index, word in matched.items()})
+        except ValueError:
+            continue
+        if dissent == 0:
+            result[section] = base
+    return result
 
 
 def defer_bss(script: str) -> str:

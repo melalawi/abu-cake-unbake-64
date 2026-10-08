@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import os
 import re
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
@@ -335,6 +335,7 @@ def link(
     original: Path | None = None,
     *,
     score: bool = False,
+    trial_bases: Mapping[str, int] | None = None,
 ) -> bytes:
     """Link the placed object alone at its address and return its .text bytes; a link failure is a refusal
     naming SOURCE."""
@@ -385,7 +386,9 @@ def link(
                 )
             )
         trial = work / "trial.ld"
-        atomic_files.text(trial, rodata.insert_fragment(script.read_text(), rodata.trial_fragment(sections)))
+        atomic_files.text(
+            trial, rodata.insert_fragment(script.read_text(), rodata.trial_fragment(sections, trial_bases))
+        )
         script = trial
     missing = undefined(placed)
     known = provided(symbols_file(project, version))
@@ -464,7 +467,9 @@ def link_function(
             for section in rodata.unresolved_sections(Object(placed))
             if section not in emitted
         )
-        linked = link(project, host, placed, version, row, work, source, obj, score=True)
+        pending = [name for name in rodata.unresolved_sections(Object(placed)) if name not in emitted]
+        bases = rodata.aligned_bases(Object(placed), pending, split.words(project, row)) if pending else {}
+        linked = link(project, host, placed, version, row, work, source, obj, score=True, trial_bases=bases)
         if capture_info is not None:
             capture_info.update(
                 {
