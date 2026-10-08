@@ -11,6 +11,7 @@ from unbake import cdecl, config, inputs, process
 from unbake.config import Held
 from unbake.layout import split
 from unbake.objects.elf import Object
+from unbake.project.headers import Graph
 from unbake.report import data, progress, state
 from unbake.work import attempts
 
@@ -65,7 +66,9 @@ class DataProgressTests(ProjectCase):
             "source_sha256": self.sources["constants"][0],
             "bytes_sha256": hashlib.sha256(bytes_).hexdigest(),
             "rom_bytes_sha256": hashlib.sha256(BT_BYTES[: len(bytes_)]).hexdigest(),
-            "definition_proof_id": data.digest({"source": self.sources["constants"][0], "version": version}),
+            "definition_proof_id": Graph.capture(self.project).initialized_definitions(
+                self.project, self.project.src / "constants.c", version
+            )["D_800723B0"],
         }
         return {
             "schema": 1,
@@ -134,7 +137,7 @@ class DataProgressTests(ProjectCase):
             }
         native.assert_not_called()
         tool.assert_not_called()
-        self.assertEqual((scans.call_count, parses.call_count, snapshots.call_count), (5, 1, 1))
+        self.assertEqual((scans.call_count, parses.call_count, snapshots.call_count), (5, 6, 1))
         for version, report in reports.items():
             self.assertEqual((report["measures"]["total_code"], report["measures"]["matched_code"]), (36, 0))
             self.assertEqual(

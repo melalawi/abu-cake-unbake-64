@@ -333,30 +333,9 @@ def _with_compiler(project: Project, function: str, ident: str) -> Project:
     return replace(project, units=units)
 
 
-def _compiler_config(project: Project, function: str, ident: str, before: bytes) -> bytes:
-    """Keep the proved unit options and refuse config edits outside this publication's scope."""
-    path = project.root / "config.toml"
-    if path.read_bytes() != before:
-        raise Held(
-            cause_named("land.config", "land.config: config.toml changed since proof", owner="land", stage="land")
-        )
+def _unit_config(project: Project, function: str, ident: str, before: bytes) -> bytes:
+    """Change only the selected unit's options in an explicit config image."""
     data = toml.loads(before.decode())
-    if "config.toml" in dirty(project):
-        committed = toml.loads(_git(project, "show", "HEAD:config.toml"))
-
-        def other_options(document: dict[str, Any]) -> dict[str, Any]:
-            units = {name: row for name, row in document.get("units", {}).items() if name != function}
-            return {**{key: value for key, value in document.items() if key != "units"}, "units": units}
-
-        if other_options(data) != other_options(committed):
-            raise Held(
-                cause_named(
-                    "land.config",
-                    f"land.config: {function}: unproved config changes outside its unit options",
-                    owner="land",
-                    stage="land",
-                )
-            )
     units = dict(data.get("units", {}))
     flags = project.unit_flags.get(function, ())
     if ident != project.default_compiler or flags:
@@ -369,8 +348,65 @@ def _compiler_config(project: Project, function: str, ident: str, before: bytes)
         data["units"] = dict(sorted(units.items()))
     else:
         data.pop("units", None)
-    text: str = toml.dumps(data)
-    return text.encode()
+    return toml.dumps(data).encode()
+
+
+def _compiler_config(
+    project: Project, function: str, ident: str, before: bytes, *, staged_before: bytes | None = None
+) -> bytes:
+    """Project only the proved unit onto HEAD; unrelated staged unit edits remain local."""
+    path = project.root / "config.toml"
+    if path.read_bytes() != before:
+        raise Held(
+            cause_named("land.config", "land.config: config.toml changed since proof", owner="land", stage="land")
+        )
+    data = toml.loads(before.decode())
+    if "config.toml" in dirty(project):
+        committed_bytes = _git(project, "show", "HEAD:config.toml").encode()
+        committed = toml.loads(committed_bytes.decode())
+        staged_bytes = _git(project, "show", ":config.toml").encode()
+        if staged_before is not None and staged_bytes != staged_before:
+            raise Held(cause_named("land.config", "config index changed since proof", owner="land", stage="land"))
+        staged = toml.loads(staged_bytes.decode())
+
+        def other_units(document: dict[str, Any]) -> dict[str, Any]:
+            return {name: row for name, row in document.get("units", {}).items() if name != function}
+
+        if (
+            {key: value for key, value in data.items() if key != "units"}
+            != {key: value for key, value in committed.items() if key != "units"}
+            or {key: value for key, value in staged.items() if key != "units"}
+            != {key: value for key, value in committed.items() if key != "units"}
+            or other_units(data) != other_units(staged)
+        ):
+            raise Held(
+                cause_named(
+                    "land.config",
+                    f"land.config: {function}: unproved config changes outside its unit options",
+                    owner="land",
+                    stage="land",
+                )
+            )
+        before = committed_bytes
+    return _unit_config(project, function, ident, before)
+
+
+def _restore_compiler_config(project: Project, host: Host, local: bytes, staged: bytes) -> None:
+    """Restore unrelated config work through the existing journal and Git index boundary."""
+    path = project.root / "config.toml"
+    if path.read_bytes() == local and _git(project, "show", ":config.toml").encode() == staged:
+        return
+    index = Path(_git(project, "rev-parse", "--git-path", "index").strip())
+    if not index.is_absolute():
+        index = project.root / index
+    with journal.transaction(project) as transaction:
+        transaction.save([path, index])
+        atomic_files.write(path, local)
+        with scratch.temporary(host, project, "land", prefix="config-index-") as temporary:
+            image = Path(temporary) / "config.toml"
+            atomic_files.write(image, staged)
+            blob = _git(project, "hash-object", "-w", str(image)).strip()
+            _git(project, "update-index", "--cacheinfo", "100644", blob, "config.toml")
 
 
 def _builds_row(spec: tuple[Project, Project, Host, str, Path, str]) -> tuple[bool, set[Path]]:
@@ -384,7 +420,7 @@ def _builds_row(spec: tuple[Project, Project, Host, str, Path, str]) -> tuple[bo
         work = Path(temporary)
         placed = work / "placed.o"
         runner.place(project, host, obj, version, row, placed, score=False)
-        linked = runner.link(project, host, placed, version, row, work, file)
+        linked = runner.link(project, host, placed, version, row, work, file, obj)
     equal = linked == split.words(project, row)
     return equal, runner.dependencies(view, host, file, version, unit=function) if equal else set()
 
@@ -940,6 +976,7 @@ def land(
     ident = (attempt.compiler if attempt is not None else "") or project.compiler_reference(function)
     config_path = project.root / "config.toml"
     config_before = config_path.read_bytes()
+    config_staged_before = _git(project, "show", ":config.toml").encode()
     project = _with_compiler(project, function, ident)
     # The writer admits new measured split rows before fold's strict ownership read.
     # Admission checks above still refuse invalid requests without changing the map.
@@ -1063,7 +1100,9 @@ def land(
             )
     finally:
         shutil.rmtree(stage, ignore_errors=True)
-    config_content = _compiler_config(project, function, ident, config_before)
+    config_content = _compiler_config(project, function, ident, config_before, staged_before=config_staged_before)
+    config_local = _unit_config(project, function, ident, config_before)
+    config_staged = _unit_config(project, function, ident, config_staged_before)
     # A private work directory can retain declarations from an abandoned draft.
     # Only native prerequisites follow the source; explicit shared fold edits
     # still belong to their separately validated consumers.
@@ -1146,7 +1185,7 @@ def land(
     for edit in [] if fuzzy else [*folded.split_edits, *_row_edits(project, function, versions)]:
         current = Path(edit.path).read_text() if Path(edit.path).is_file() else ""
         atomic_files.write(Path(edit.path), (edit.after if current == edit.before else current).encode())
-    # Unchanged dirty options still supplied the proof and must travel with the source.
+    # Generate and commit from the scoped config; unrelated staged unit options stay local.
     atomic_files.write(config_path, config_content)
     from unbake import config
 
@@ -1173,6 +1212,7 @@ def land(
         committed=False,
     )
     _commit(project, host, sorted({*written, *generated, *dependencies, project.root / attempts.PATH}), message)
+    _restore_compiler_config(project, host, config_local, config_staged)
     commit = _git(project, "rev-parse", "HEAD").strip()
     if on_commit is not None:
         on_commit(

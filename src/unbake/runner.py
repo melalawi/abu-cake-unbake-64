@@ -7,11 +7,13 @@ sources for the same unit/version cannot overwrite one another's link input.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from unbake import atomic as atomic_files
 from unbake import cache, inputs, process, scratch
@@ -21,6 +23,9 @@ from unbake.config import Held, Host, Project
 from unbake.layout import split
 from unbake.process import capture
 from unbake.process import named as cause_named
+
+if TYPE_CHECKING:
+    from unbake.objects.rodata import InitializedSection
 
 
 def tools(host: Host) -> drivers.Tools:
@@ -63,6 +68,17 @@ def compile_unit(
         )
     source = str(file.relative_to(project.root)) if file.is_relative_to(project.root) else str(file)
     commands = drivers.steps(project, version, unit, source, tools(host), non_matching=non_matching)
+    from unbake.report import data as data_evidence
+
+    compiler_pins = _compiler_pins(project, unit)
+    captured = (
+        data_evidence.capture_inputs(
+            project, file, version, list(commands.preprocess), compiler=compiler_pins, non_matching=non_matching
+        )
+        if file.is_relative_to(project.src)
+        else None
+    )
+    linked_tools = data_evidence.link_tools(host) if captured is not None else None
     try:
         preprocessed = drivers.run_preprocess(
             project,
@@ -92,7 +108,7 @@ def compile_unit(
         preprocessed,
         "\0".join(compile_argv[1:]),
         "\0".join(commands.assemble[1:] if commands.assemble else ()),
-        _compiler_pins(project, unit),
+        compiler_pins,
         inputs.digest(Path(host.n64link), algorithm="sha256", reuse=retention.configured())
         if commands.assemble
         else "",
@@ -144,6 +160,18 @@ def compile_unit(
                     ),
                 )
             ) from error
+        if captured is not None:
+            data_evidence.assert_inputs(project, captured)
+            captured = inputs.DependencySet(
+                captured.files,
+                {
+                    **captured.values,
+                    "object_sha256": inputs.digest(output, algorithm="sha256"),
+                    "link_tools": linked_tools,
+                },
+                captured.recipes,
+            )
+            atomic_files.text(output.with_suffix(".inputs.json"), json.dumps(captured.document()))
         yield output
 
 
@@ -242,6 +270,34 @@ def derived_symbols(names: set[str], known: frozenset[str], version: str, source
     return [f"--defsym={name}=0x{buildfiles.named_address(name):08X}" for name in missing]
 
 
+def initialized_layout(
+    project: Project, original: Path, placed: Path, source: Path, version: str
+) -> tuple[InitializedSection, ...]:
+    from unbake.objects import rodata
+    from unbake.objects.elf import Object
+    from unbake.project.headers import Graph
+
+    sizes: dict[str, int] = {}
+    obj = Object(original)
+    has_labels = any(
+        symbol["info"] & 15 == 0
+        and symbol["name"]
+        and 0 < symbol["section"] < len(obj.sections)
+        and obj.sections[symbol["section"]][1] == 1
+        and not obj.sections[symbol["section"]][2] & 4
+        for table in obj.symbols.values()
+        for symbol in table
+    )
+    if has_labels and source.is_relative_to(project.src):
+        Graph.capture(project).initialized_definitions(project, source, version, sizes=sizes)
+    return rodata.initialized_sections(
+        obj,
+        Object(placed),
+        tuple(tuple(int(part, 16) for part in value.split(":")) for value in windows(project, version)),
+        definition_sizes=sizes,
+    )
+
+
 def link(
     project: Project,
     host: Host,
@@ -250,6 +306,7 @@ def link(
     row: split.Function,
     work: Path,
     source: Path,
+    original: Path | None = None,
     *,
     score: bool = False,
 ) -> bytes:
@@ -270,7 +327,27 @@ def link(
     from unbake.objects import rodata
     from unbake.objects.elf import Object
 
-    sections = rodata.unresolved_sections(Object(placed))
+    layout = initialized_layout(project, original, placed, source, version) if original is not None else ()
+    sections = [
+        name for name in rodata.unresolved_sections(Object(placed)) if name not in {item.name for item in layout}
+    ]
+    if layout:
+        process.run_tool(
+            [
+                str(host.mips_objcopy),
+                *(word for item in layout for word in ("--set-section-flags", item.name + "=alloc,load,data")),
+                str(placed),
+            ],
+            project.root,
+            "link",
+            context={"source": str(source), "version": version},
+        )
+        declarations = "\n".join(
+            f'  {item.output_name} 0x{item.address:08X} : SUBALIGN(1) {{ *("{item.name}") }}' for item in layout
+        )
+        emitted_script = work / "emitted.ld"
+        atomic_files.text(emitted_script, rodata.insert_fragment(script.read_text(), declarations))
+        script = emitted_script
     if sections:
         if not score:
             raise Held(
@@ -326,7 +403,12 @@ def link(
         "link",
         context={"source": str(source), "function": row.name, "version": version, "address": row.address},
     )
-    return binary.read_bytes()
+    linked = binary.read_bytes()
+    if layout and original is not None and source.is_relative_to(project.src) and linked == split.words(project, row):
+        from unbake.report import data
+
+        data.record_linked(project, host, source, version, original, elf, layout)
+    return linked
 
 
 def link_function(
@@ -342,10 +424,14 @@ def link_function(
         problems = place(project, host, obj, version, row, placed, score=True)
         # Even if native placement omits a diagnostic, placeholder addresses
         # must never make this trial eligible for an exact comparison.
+        layout = initialized_layout(project, obj, placed, source, version)
+        emitted = {item.name for item in layout}
         problems.extend(
-            f"{section}: no proved resident address" for section in rodata.unresolved_sections(Object(placed))
+            f"{section}: no proved resident address"
+            for section in rodata.unresolved_sections(Object(placed))
+            if section not in emitted
         )
-        return link(project, host, placed, version, row, work, source, score=True), problems
+        return link(project, host, placed, version, row, work, source, obj, score=True), problems
 
 
 def build_unit(project: Project, host: Host, unit: str, version: str, *, source: Path | None = None) -> bytes:
@@ -369,7 +455,7 @@ def build_unit(project: Project, host: Host, unit: str, version: str, *, source:
         work = Path(temporary)
         placed = work / "placed.o"
         place(project, host, obj, version, row, placed, score=False)
-        data = link(project, host, placed, version, row, work, file)
+        data = link(project, host, placed, version, row, work, file, obj)
     if len(data) != row.end - row.start:
         raise Held(
             cause_named(

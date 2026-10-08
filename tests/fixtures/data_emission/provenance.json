@@ -1,0 +1,11 @@
+{
+  "scope": "Actual DATA2 named compiler object and candidate vs retained sources; actual BT6 HEAD and staged config. Placed/link results are mocked external boundaries, never game proof.",
+  "bt_head": "5a01eaed3ec9bfa32eaea921186c823253e74347",
+  "files": {
+    "bt-head.toml": "56203fcb3cf5022017d32a76784c914b83cb6dfda1182101027f78fbab2e77af",
+    "bt-staged.toml": "4d709779205a569018ef5c6b9488d53cbf19c551b8851c9ddeb699aa69c92ef0",
+    "named-original.elf32": "052e5ee5200e2efaeb34c7f4e1b6458b67e0d0f7d2594ad81ff832001eb8a839",
+    "named.c": "6f961d9f5aaabea1aa95d6717b5745cec763b18f8693641e507ab071464b13a2",
+    "unnamed.c": "60d6dcfc991c596d27112e2a3a7faca8388f71c34f3ecdeffb37ea0596f410c7"
+  }
+}

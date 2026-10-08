@@ -5,9 +5,12 @@ import struct
 from collections import Counter
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
+from itertools import pairwise
 
 from unbake.compilers.families import constant_sections
+from unbake.config import Held
 from unbake.objects.elf import Object
+from unbake.process import named as cause_named
 
 
 @dataclass(frozen=True)
@@ -208,6 +211,115 @@ def fragment(rows: Iterable[Mapping[str, object]]) -> str:
             raise ValueError("rodata.address: expected 32-bit address")
         result.append(f"  .resident_{address:08X} 0x{address:08X} (NOLOAD) : SUBALIGN(1) {{ {name}({section}) }}")
     return "\n".join(result)
+
+
+@dataclass(frozen=True)
+class InitializedSection:
+    name: str
+    address: int
+    rom_offset: int
+    size: int
+    symbols: tuple[tuple[str, int, int], ...]
+
+    @property
+    def output_name(self) -> str:
+        return f".resident_{self.address:08X}{self.name}"
+
+
+def initialized_sections(
+    original: Object,
+    placed: Object,
+    windows: Iterable[tuple[int, int, int]],
+    *,
+    definition_sizes: Mapping[str, int] | None = None,
+) -> tuple[InitializedSection, ...]:
+    """Bind emitted object bounds to the native placer's proved absolute symbols.
+
+    Anonymous pools and BSS do not supply initialized-definition ownership.
+    A complete section, including compiler padding, must have one mapped base.
+    Final relocated byte equality remains the link consumer's obligation.
+    """
+    absolute = {(symbol["table"], symbol["index"]): symbol for table in placed.symbols.values() for symbol in table}
+    result = []
+    mappings = tuple(windows)
+    definition_sizes = definition_sizes or {}
+    for index, (name, row) in enumerate(zip(original.names, original.sections, strict=True)):
+        if (
+            row[1] != 1
+            or row[2] & 4
+            or not row[5]
+            or not (row[2] & 2 or name in constant_sections())
+            or name == ".text"
+        ):
+            continue
+        symbols = [
+            symbol
+            for table in original.symbols.values()
+            for symbol in table
+            if symbol["section"] == index
+            and (
+                (symbol["info"] & 15 == 1 and symbol["size"] > 0)
+                or (symbol["info"] & 15 == 0 and symbol["name"] in definition_sizes)
+            )
+        ]
+        if not symbols:
+            continue
+        if re.fullmatch(r"\.[A-Za-z0-9_.]+", name) is None:
+            raise Held(cause_named("native.data.section", "unsafe section name", owner="objects.rodata", stage="data"))
+        bases = set()
+        bounds = []
+        for symbol in symbols:
+            size = symbol["size"] or definition_sizes.get(symbol["name"], 0)
+            if size <= 0 or symbol["value"] + size > row[5]:
+                raise Held(
+                    cause_named(
+                        "native.data.bounds",
+                        f"{name}: symbol exceeds initialized section",
+                        owner="objects.rodata",
+                        stage="data",
+                    )
+                )
+            target = absolute.get((symbol["table"], symbol["index"]))
+            if (
+                target is None
+                or target["name"] != symbol["name"]
+                or target["size"] != symbol["size"]
+                or target["section"] != 0xFFF1
+            ):
+                continue
+            bases.add(target["value"] - symbol["value"])
+            bounds.append((symbol["name"], symbol["value"], size))
+        if not bounds:
+            continue
+        if len(bases) != 1:
+            raise Held(
+                cause_named(
+                    "native.data.placement",
+                    f"{name}: conflicting native symbol placements",
+                    owner="objects.rodata",
+                    stage="data",
+                )
+            )
+        address = bases.pop()
+        offsets = {
+            rom + address - vram for vram, rom, size in mappings if vram <= address and address + row[5] <= vram + size
+        }
+        if len(offsets) != 1:
+            raise Held(
+                cause_named(
+                    "native.data.mapping",
+                    f"{name}: missing or ambiguous complete ROM mapping",
+                    owner="objects.rodata",
+                    stage="data",
+                )
+            )
+        result.append(InitializedSection(name, address, offsets.pop(), row[5], tuple(sorted(bounds))))
+    for left, right in pairwise(sorted(result, key=lambda row: row.rom_offset)):
+        if left.rom_offset + left.size > right.rom_offset:
+            raise Held(
+                cause_named("native.data.overlap", "initialized sections overlap", owner="objects.rodata", stage="data")
+            )
+    return tuple(result)
 
 
 def insert_fragment(script: str, sections: str) -> str:

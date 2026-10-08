@@ -1,0 +1,496 @@
+schema = 1
+
+[project]
+layout_cap = 32
+id = "0f342a96-54f7-425f-b9b3-052d53c072b1"
+state = "ready"
+name = "BattleTanx"
+title = "BATTLETANX"
+names_from = "us"
+versions = [ "us",]
+default_compiler = "gcc-2.7.2-kmc"
+
+[build]
+asflags = [ "-march=vr4300", "-mabi=32", "-EB", "--no-pad-sections",]
+cppflags = [ "-P", "-undef", "-nostdinc", "-D_LANGUAGE_C", "-DF3DEX_GBI_2", "-D__GNUC__=2",]
+sn64_asflags = [ "-mips3",]
+
+[build.resident_mappings]
+[[build.resident_mappings.us]]
+address = 2147946496
+end = 24576
+start = 4096
+table_entry_bias = 0
+
+[[build.resident_mappings.us]]
+address = 2147971224
+end = 28944
+start = 28824
+table_entry_bias = 0
+
+[[build.resident_mappings.us]]
+address = 2147973896
+end = 31504
+start = 31496
+table_entry_bias = 0
+
+[[build.resident_mappings.us]]
+address = 2147980712
+end = 38320
+start = 38312
+table_entry_bias = 0
+
+[[build.resident_mappings.us]]
+address = 2147996716
+end = 54320
+start = 54316
+table_entry_bias = 0
+
+[[build.resident_mappings.us]]
+address = 2148000056
+end = 57664
+start = 57656
+table_entry_bias = 0
+
+[[build.resident_mappings.us]]
+address = 2148033340
+end = 91000
+start = 90940
+table_entry_bias = 0
+
+[[build.resident_mappings.us]]
+address = 2148052236
+end = 109840
+start = 109836
+table_entry_bias = 0
+
+[[build.resident_mappings.us]]
+address = 2148077272
+end = 134880
+start = 134872
+table_entry_bias = 0
+
+[[build.resident_mappings.us]]
+address = 2148079468
+end = 137156
+start = 137068
+table_entry_bias = 0
+
+[[build.resident_mappings.us]]
+address = 2148089132
+end = 146736
+start = 146732
+table_entry_bias = 0
+
+[[build.resident_mappings.us]]
+address = 2148089948
+end = 147552
+start = 147548
+table_entry_bias = 0
+
+[[build.resident_mappings.us]]
+address = 2148101748
+end = 159360
+start = 159348
+table_entry_bias = 0
+
+[[build.resident_mappings.us]]
+address = 2148140024
+end = 197632
+start = 197624
+table_entry_bias = 0
+
+[[build.resident_mappings.us]]
+address = 2148142292
+end = 201072
+start = 199892
+table_entry_bias = 0
+
+[[build.resident_mappings.us]]
+address = 2148151112
+end = 209008
+start = 208712
+table_entry_bias = 0
+
+[[build.resident_mappings.us]]
+address = 2148163556
+end = 221168
+start = 221156
+table_entry_bias = 0
+
+[[build.resident_mappings.us]]
+address = 2148169288
+end = 226896
+start = 226888
+table_entry_bias = 0
+
+[[build.resident_mappings.us]]
+address = 2148178964
+end = 236576
+start = 236564
+table_entry_bias = 0
+
+[[build.resident_mappings.us]]
+address = 2148340740
+end = 398652
+start = 398340
+table_entry_bias = 0
+
+[[build.resident_mappings.us]]
+address = 2148390808
+end = 448880
+start = 448408
+table_entry_bias = 0
+
+[[build.resident_mappings.us]]
+address = 2148407828
+end = 465440
+start = 465428
+table_entry_bias = 0
+
+[[build.resident_mappings.us]]
+address = 2148422300
+end = 479904
+start = 479900
+table_entry_bias = 0
+
+[[build.resident_mappings.us]]
+address = 2148453380
+end = 511004
+start = 510980
+table_entry_bias = 0
+
+[[build.resident_mappings.us]]
+address = 2148559700
+end = 617312
+start = 617300
+table_entry_bias = 0
+
+[[build.resident_mappings.us]]
+address = 2148587588
+end = 645200
+start = 645188
+table_entry_bias = 0
+
+[[build.resident_mappings.us]]
+address = 2148589912
+end = 656512
+start = 647512
+table_entry_bias = 2147483648
+
+[[build.resident_mappings.us]]
+address = 2148682044
+end = 739648
+start = 739644
+table_entry_bias = 0
+
+[[build.resident_mappings.us]]
+address = 2148683448
+end = 741056
+start = 741048
+table_entry_bias = 0
+
+[[build.resident_mappings.us]]
+address = 2148684868
+end = 742480
+start = 742468
+table_entry_bias = 0
+
+[[build.resident_mappings.us]]
+address = 2148684956
+end = 742560
+start = 742556
+table_entry_bias = 0
+
+[[build.resident_mappings.us]]
+address = 2148685136
+end = 880704
+start = 742736
+table_entry_bias = 0
+
+[version.us]
+baserom = "roms/baserom.us.z64"
+baserom_sha1 = "535860d941738ac1210c20a9b80114fea0e0ff17"
+split = "versions/us/BattleTanx.yaml"
+symbols = "versions/us/symbol_addrs.txt"
+macros = [ "VERSION_US",]
+cartridge_id = "NUS-NBXE-0"
+region = "North America"
+description = "NTSC release."
+
+[compilers."gcc-2.7.2-kmc"]
+cflags = [ "-G0", "-mips3", "-mgp32", "-mfp32", "-O2",]
+
+[compilers."gcc-2.8.1-sn64"]
+cflags = [ "-G0", "-mips3", "-O2", "-mgas", "-meb", "-mcpu=VR4300", "-mhard-float", "-mgp32", "-mfp64", "-mno-fix4300",]
+
+[compilers."ido-5.3"]
+cflags = [ "-c", "-G0", "-non_shared", "-mips2", "-O2",]
+
+[compilers."ido-7.1"]
+cflags = [ "-c", "-G0", "-non_shared", "-mips2", "-O2",]
+
+[units.func_8007967C]
+compiler = "ido-7.1"
+
+[units.func_80079684]
+compiler = "ido-7.1"
+
+[units.func_8007C298]
+compiler = "ido-7.1"
+
+[units.func_8007C33C]
+compiler = "ido-7.1"
+
+[units.func_800805D0]
+compiler = "ido-7.1"
+
+[units.func_80085460]
+compiler = "ido-7.1"
+
+[units.func_80085468]
+compiler = "ido-7.1"
+
+[units.func_800917C4]
+compiler = "ido-7.1"
+
+[units.func_80093F34]
+compiler = "ido-7.1"
+
+[units.func_800949B8]
+compiler = "ido-7.1"
+
+[units.func_80096784]
+compiler = "gcc-2.8.1-sn64"
+
+[units.func_80097C24]
+compiler = "ido-7.1"
+
+[units.func_8009E39C]
+compiler = "ido-7.1"
+
+[units.func_800A424C]
+compiler = "ido-7.1"
+
+[units.func_800A42BC]
+compiler = "ido-7.1"
+
+[units.func_800A4D1C]
+compiler = "ido-7.1"
+
+[units.func_800A66C0]
+compiler = "ido-7.1"
+
+[units.func_800A7548]
+compiler = "ido-7.1"
+
+[units.func_800A76A0]
+compiler = "ido-7.1"
+
+[units.func_800AB200]
+compiler = "ido-7.1"
+
+[units.func_800ABFA0]
+compiler = "ido-7.1"
+
+[units.func_800E3460]
+compiler = "ido-7.1"
+
+[units.func_800E3470]
+compiler = "ido-7.1"
+
+[units.func_800E3480]
+compiler = "ido-7.1"
+
+[units.func_800E349C]
+compiler = "ido-7.1"
+
+[units.func_800E3C18]
+compiler = "ido-7.1"
+
+[units.func_800E480C]
+compiler = "ido-7.1"
+
+[units.func_800E4814_us]
+compiler = "ido-7.1"
+
+[units.func_800E5198]
+compiler = "ido-7.1"
+
+[units.func_800E566C]
+compiler = "ido-7.1"
+
+[units.func_800E99D4]
+compiler = "ido-7.1"
+
+[units.func_800EA1B0]
+compiler = "ido-7.1"
+
+[units.func_800EBBB4_us]
+compiler = "ido-7.1"
+
+[units.func_80106D00]
+compiler = "ido-7.1"
+
+[units.func_80106D08_us]
+compiler = "ido-7.1"
+
+[units.func_80107168_us]
+compiler = "ido-7.1"
+
+[units.func_80107704_us]
+compiler = "ido-7.1"
+
+[units.func_80109354]
+compiler = "ido-7.1"
+
+[units.func_8010BC08]
+compiler = "ido-7.1"
+
+[units.func_801109B8_us]
+compiler = "ido-7.1"
+
+[units.func_80110AAC_us]
+compiler = "ido-7.1"
+
+[units.func_80110CA0]
+compiler = "ido-7.1"
+flags = [ "-O1",]
+
+[units.func_801145D0]
+compiler = "ido-7.1"
+flags = [ "-O1",]
+
+[units.func_801147A0]
+compiler = "ido-7.1"
+
+[units.func_80114828]
+compiler = "ido-7.1"
+
+[units.func_80115474]
+compiler = "ido-7.1"
+flags = [ "-O1",]
+
+[units.func_8011588C]
+compiler = "ido-7.1"
+flags = [ "-O1",]
+
+[units.func_80115C80]
+compiler = "ido-7.1"
+flags = [ "-O1",]
+
+[units.func_8011954C]
+compiler = "ido-7.1"
+
+[units.func_80119568_us]
+compiler = "ido-7.1"
+
+[units.func_80119570_us]
+compiler = "ido-7.1"
+
+[units.func_80119B60]
+compiler = "ido-7.1"
+
+[units.func_80119BB4]
+compiler = "ido-7.1"
+
+[units.func_80119C34]
+compiler = "ido-7.1"
+
+[units.func_80119CE8_us]
+compiler = "ido-7.1"
+
+[units.func_80119F70]
+compiler = "ido-7.1"
+
+[units.func_8011A134]
+compiler = "ido-7.1"
+
+[units.func_8011AB74_us]
+compiler = "ido-7.1"
+
+[units.func_8011B1A0]
+compiler = "ido-7.1"
+
+[units.func_8011B2A4]
+compiler = "ido-7.1"
+
+[units.func_8011B7BC]
+compiler = "ido-7.1"
+
+[units.func_8011B8F0]
+compiler = "ido-7.1"
+
+[units.func_8011B9E0]
+compiler = "ido-7.1"
+
+[units.func_8011BDE4]
+compiler = "ido-7.1"
+
+[units.func_8011C150]
+compiler = "ido-7.1"
+
+[units.func_8011C180]
+compiler = "ido-7.1"
+
+[units.func_8011C300]
+compiler = "ido-7.1"
+
+[units.func_8011C39C_us]
+compiler = "ido-7.1"
+
+[units.func_8011C3A4_us]
+compiler = "ido-7.1"
+
+[units.func_8011D0E0]
+compiler = "ido-7.1"
+
+[units.func_8011D100]
+compiler = "ido-7.1"
+flags = [ "-O1",]
+
+[units.func_8011D3DC]
+compiler = "ido-7.1"
+
+[units.func_8011D6D0]
+compiler = "ido-7.1"
+
+[units.func_8011DC00_us]
+compiler = "ido-7.1"
+
+[units.func_8011DC60]
+compiler = "ido-7.1"
+
+[units.func_8011DC98]
+compiler = "ido-7.1"
+
+[units.func_8011DD40_us]
+compiler = "ido-7.1"
+
+[units.func_8011E3F0]
+compiler = "ido-7.1"
+
+[units.func_8011E434]
+compiler = "ido-7.1"
+
+[units.func_8011E488]
+compiler = "ido-7.1"
+
+[units.func_8011E564]
+compiler = "ido-7.1"
+
+[units.func_8011E6B0_us]
+compiler = "ido-5.3"
+
+[units.func_8011ECA4]
+compiler = "ido-7.1"
+
+[units.func_8011F7F0]
+compiler = "ido-7.1"
+
+[units.func_80120E48_us]
+compiler = "ido-7.1"
+
+[units.func_80121F10]
+compiler = "ido-7.1"
+flags = [ "-O1",]

@@ -655,6 +655,80 @@ class Graph:
             )
         return self._projections[path]
 
+    def initialized_definitions(
+        self, project: Any, source: Path, version: str, *, sizes: dict[str, int] | None = None
+    ) -> dict[str, str]:
+        """Current retained, version-active named initializers through the owning C parser."""
+        from pycparser import c_ast, c_generator
+
+        from unbake import cdecl
+        from unbake.fold import source_views
+        from unbake.layout.structs_types import SCALARS
+        from unbake.typemap import declarations
+        from unbake.work import attempts
+
+        if not source.is_relative_to(project.src) or source.suffix != ".c" or source not in self.view.files:
+            return {}
+        raw = self.read(source)
+        if attempts.guard_present(raw.decode()):
+            return {}
+        closure = self.closure((source,))
+        if closure.unknown:
+            return {}
+        typedefs = set()
+        providers = []
+        for path in closure.paths:
+            if path != source:
+                text = self.read(path).decode()
+                typedefs.update(cdecl.declarations(text).typedefs)
+                providers.append(text)
+        active = source_views.version_source(project, raw.decode(), version, source.stem)
+        try:
+            tree = cdecl.parser(typedefs).parse(declarations.cleaned_unit(active), filename=str(source))
+        except cdecl.ParseError as error:
+            raise Held(cause_named("data.definition", str(error), owner="project.headers", stage="data")) from error
+        initializers = [
+            node
+            for node in tree.ext
+            if isinstance(node, c_ast.Decl)
+            and node.name
+            and node.init is not None
+            and "typedef" not in node.storage
+            and "volatile" not in node.quals
+        ]
+        if not initializers:
+            return {}
+        generator = c_generator.CGenerator()
+        aliases = {}
+        if sizes is not None:
+            for text in providers:
+                provider = cdecl.parser(typedefs).parse(declarations.cleaned_unit(text))
+                aliases.update(
+                    {
+                        node.name: declarations.node_type(node.type)
+                        for node in provider.ext
+                        if isinstance(node, c_ast.Typedef)
+                    }
+                )
+            aliases.update(
+                {node.name: declarations.node_type(node.type) for node in tree.ext if isinstance(node, c_ast.Typedef)}
+            )
+        result = {}
+        for node in initializers:
+            result[node.name] = cache.key(
+                self.view.logical(source).name,
+                version,
+                node.name,
+                generator.visit(node),
+                inputs.bytes_digest(raw, algorithm="sha256"),
+                closure.dependency_set.digest,
+            )
+            if sizes is not None:
+                spelling = declarations.canonical(declarations.node_type(node.type), aliases)
+                if spelling in SCALARS:
+                    sizes[node.name] = SCALARS[spelling][0]
+        return result
+
     def included(self, source: Path, text: str) -> set[str]:
         graph = Graph(self.view.overlay({source: text}), self.search)
         return set().union(*(graph.projection(path).names for path in graph.closure((source,)).paths))
