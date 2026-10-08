@@ -126,9 +126,11 @@ class ResourceBuildTests(ProjectCase):
             self.registered.replace('"resources/rsp/boot.s"', '"resources/../../outside.s"'),
             self.registered.replace("execution_vram: 0x04001000", "execution_vram: -1"),
             self.registered.replace("resource_section: .rsp.boot", "resource_section: *"),
-            self.registered.replace("resource_asflags:", "unused:")
-            .replace('"-EB -mips1"', '""')
-            .replace("0xDD910]", '0xDD900, resource, "resources/rsp/boot.s"]\n  - [0xDD910]'),
+            self.registered.replace(
+                '      - [0xDD840, resource, "resources/rsp/boot.s"]',
+                '      - [0xDD840, resource, "resources/rsp/boot.s"]\n'
+                '      - [0xDD900, resource, "resources/rsp/boot.s"]',
+            ),
         ):
             meta.split.write_text(bad)
             with self.assertRaises(Held):
