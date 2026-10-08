@@ -12,6 +12,7 @@ from unbake.cdecl import LayoutParser
 from unbake.config import Held
 from unbake.fold import declarations, source_views
 from unbake.inputs import DependencySet
+from unbake.process import named
 from unbake.work import compare
 
 VERSIONS = ("us", "jp", "eu", "au")
@@ -165,3 +166,39 @@ class DependenciesOncePerState(unittest.TestCase):
     def test_a_retained_answer_is_a_copy(self) -> None:
         reads, _ = self.read(["tree state"])
         self.assertIsNot(reads[0], reads[1])
+
+
+class IncluderProofJobs(unittest.TestCase):
+    """The header includer proof is one pool job per includer, version and branch, not a serial loop."""
+
+    def test_jobs_are_includer_version_branch_and_a_failure_names_its_job(self) -> None:
+        from unbake.layout import structs_fold
+
+        self.assertTrue(getattr(structs_fold._prove_job, "_pool_worker", False))
+        project = MagicMock()
+        project.root = Path("/p")
+        project.compiler_for.return_value.id = "cc"
+        project.compiler_for.return_value.cc = "cc1"
+        project.cppflags = ()
+        overlay = Path("/o")
+        calls: list[list[str]] = []
+        commands = MagicMock(preprocess=("cpp",), compile=("cc",), assemble=None)
+        with (
+            patch("unbake.compilers.drivers.from_flags", return_value=commands),
+            patch("unbake.compilers.drivers.assembly_flags", return_value=()),
+            patch("unbake.compilers.drivers.Tools"),
+            patch("unbake.process.run_tool", side_effect=lambda argv, *a, **k: calls.append(argv) or ""),
+            patch("unbake.atomic.text"),
+        ):
+            ok = structs_fold._prove_job((project, MagicMock(), overlay), (0, Path("/p/src/a.c"), "us", [], False))
+            self.assertIsNone(ok)
+            self.assertEqual([["cpp"], ["cc"]], calls)
+        with (
+            patch("unbake.compilers.drivers.from_flags", return_value=commands),
+            patch("unbake.compilers.drivers.assembly_flags", return_value=()),
+            patch("unbake.compilers.drivers.Tools"),
+            patch("unbake.process.run_tool", side_effect=Held(named("t", "boom", owner="t", stage="t"))),
+            patch("unbake.atomic.text"),
+        ):
+            reason = structs_fold._prove_job((project, MagicMock(), overlay), (1, Path("/p/src/a.c"), "jp", [], True))
+        self.assertIn("VERSION jp NON_MATCHING=1", reason or "")

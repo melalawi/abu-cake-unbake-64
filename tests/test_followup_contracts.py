@@ -131,6 +131,7 @@ class FollowupContracts(ProjectCase):
             patch.dict(os.environ, {"TMPDIR": str(self.root)}),
             patch("unbake.compilers.registry.verify"),
             patch.object(process, "run_tool", side_effect=run),
+            patch("unbake.pool.run", side_effect=lambda host, fn, items, shared=None: [fn(shared, i) for i in items]),
             patch(
                 "unbake.compilers.drivers.run_preprocess",
                 side_effect=lambda project, argv, phase, **kw: run(argv, project.root, phase, **kw),

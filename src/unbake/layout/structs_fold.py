@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from unbake import atomic as atomic_files
-from unbake import scratch
+from unbake import pool, scratch, tui
 from unbake.cdecl import LayoutParser
 from unbake.config import Held, Host, Project
 from unbake.layout import shared
@@ -717,6 +717,40 @@ def _prove_includers(project: Project, edits: list[Edit], policy: Host, republis
         held(label, f"header compile proof unavailable: {error}")
 
 
+@pool.cpu
+def _prove_job(state: tuple[Project, Host, Path], job: tuple[int, Path, str, list[str], bool]) -> str | None:
+    """Preprocess, compile and assemble one includer in one VERSION and branch; the failure reason, else None."""
+    from unbake.compilers import drivers
+    from unbake.process import run_tool
+
+    project, policy, overlay = state
+    index, source, version, flags, nonmatching = job
+    compiler = project.compiler_for(source)
+    options = [*flags, "-DNON_MATCHING=1"] if nonmatching else [*flags, "-UNON_MATCHING"]
+    staged = overlay / source.relative_to(project.root)
+    output = overlay / f"proof-{index}-{int(nonmatching)}.o"
+    try:
+        commands = drivers.from_flags(
+            compiler.id,
+            str(compiler.cc),
+            tuple(options),
+            project.cppflags,
+            drivers.assembly_flags(project, compiler.id),
+            output.stem,
+            str(staged),
+            drivers.Tools(str(policy.cpp), str(policy.mips_as), str(policy.n64link)),
+        )
+        expanded = run_tool(list(commands.preprocess), overlay, "structs")
+        atomic_files.text(overlay / f"{output.stem}.i", expanded)
+        run_tool(list(commands.compile), overlay, "structs")
+        if commands.assemble is not None:
+            run_tool(list(commands.assemble), overlay, "structs")
+    except Held as error:
+        where = f"{source} VERSION {version} NON_MATCHING={int(nonmatching)}"
+        return f"header compile proof failed for {where}: {error.reason}"
+    return None
+
+
 def _compile_includers(project: Project, edits: list[Edit], policy: Host, republished: Path | None = None) -> None:
     """Compile all possible includers in a physical overlay before returning edits.
 
@@ -727,7 +761,6 @@ def _compile_includers(project: Project, edits: list[Edit], policy: Host, republ
     from unbake.compilers import drivers
     from unbake.compilers import registry as toolchain
     from unbake.decomp.explain import _absolute_includes
-    from unbake.process import run_tool
 
     changed = {edit.path.resolve() for edit in edits}
     graph: dict[Path, set[Path]] = {}
@@ -845,6 +878,7 @@ def _compile_includers(project: Project, edits: list[Edit], policy: Host, republ
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 atomic_files.text(destination, edit.after)
             verified = set()
+            jobs: list[tuple[int, Path, str, list[str], bool]] = []
             for index, (source, version, flags) in enumerate(includers):
                 compiler = project.compiler_for(source)
                 if compiler.id not in verified:
@@ -855,31 +889,12 @@ def _compile_includers(project: Project, edits: list[Edit], policy: Host, republ
                     verified.add(compiler.id)
                 drivers.templates(compiler.kind)
                 flags = [flag.replace(str(project.root) + "/", str(overlay) + "/") for flag in flags]
-                for nonmatching in (False, True):
-                    options = [*flags, "-DNON_MATCHING=1"] if nonmatching else [*flags, "-UNON_MATCHING"]
-                    staged = overlay / source.relative_to(project.root)
-                    output = overlay / f"proof-{index}-{int(nonmatching)}.o"
-                    try:
-                        commands = drivers.from_flags(
-                            compiler.id,
-                            str(compiler.cc),
-                            tuple(options),
-                            project.cppflags,
-                            drivers.assembly_flags(project, compiler.id),
-                            output.stem,
-                            str(staged),
-                            drivers.Tools(str(policy.cpp), str(policy.mips_as), str(policy.n64link)),
-                        )
-                        expanded = run_tool(list(commands.preprocess), overlay, "structs")
-                        atomic_files.text(overlay / f"{output.stem}.i", expanded)
-                        run_tool(list(commands.compile), overlay, "structs")
-                        if commands.assemble is not None:
-                            run_tool(list(commands.assemble), overlay, "structs")
-                    except Held as error:
-                        held(
-                            label,
-                            f"header compile proof failed for {source} VERSION {version} "
-                            f"NON_MATCHING={int(nonmatching)}: {error.reason}",
-                        )
+                jobs.extend((index, source, version, flags, nonmatching) for nonmatching in (False, True))
+            # One pool job per includer, version and branch; each compiles in its own output names.
+            with tui.task("Compiling header includers"):
+                failures = pool.run(policy, _prove_job, jobs, (project, policy, overlay))
+            for reason in failures:
+                if reason is not None:
+                    held(label, reason)
     except (OSError, ValueError) as error:
         held(label, f"header compile proof unavailable: {error}")
