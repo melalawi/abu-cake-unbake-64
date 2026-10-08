@@ -2,12 +2,13 @@
 
 import gzip
 import hashlib
+import importlib
 import io
 import json
 import os
 import struct
-import subprocess
 import sys
+import sysconfig
 import zipfile
 from pathlib import Path
 from unittest.mock import patch
@@ -196,7 +197,8 @@ class MixedDataTests(ProjectCase):
         self.assertNotIn("BASEROM", recipe[recipe.index("MIXED_TOOL =") : recipe.index("RESOURCE_NAME =")])
         # The Make helper runs directly from the canonical pinned zip on plain
         # Python, with no source checkout or installed third-party packages.
-        generated = buildfiles.generate(self.project, self.host)
+        with patch.object(buildfiles, "n64link_pin", return_value="fixture native tool pin\n"):
+            generated = buildfiles.generate(self.project, self.host)
         payload = generated[self.project.tools / verify.BUNDLE.removeprefix("tools/")]
         with zipfile.ZipFile(io.BytesIO(payload)) as archive:
             self.assertEqual(archive.read("unbake/objects/mixed.py"), Path(mixed.__file__).read_bytes())
@@ -219,21 +221,29 @@ class MixedDataTests(ProjectCase):
             "0x8021E27C",
         ]
         self.native_link_outcome()
-        for operation, paths in (
-            ("prepare", ["--placed", str(self.placed), "--output", str(self.root / "bundled.o")]),
-            (
-                "extract",
-                ["--final", str(self.final), "--code", str(self.code), "--output", str(self.root / "bundled.bin")],
-            ),
+        stdlib = sysconfig.get_path("stdlib")
+        modules = {
+            name: module for name, module in sys.modules.items() if name != "unbake" and not name.startswith("unbake.")
+        }
+        # In-process zipimport isolation respects the unit runner's ban on
+        # external processes while actually executing the packaged CLI/closure.
+        with (
+            patch.dict(sys.modules, modules, clear=True),
+            patch.object(sys, "path", [str(bundle), stdlib, str(Path(stdlib) / "lib-dynload")]),
         ):
-            result = subprocess.run(
-                [sys.executable, "-S", "-m", "unbake.objects.mixed", operation, *arguments, *paths],
-                cwd=self.root,
-                env={**os.environ, "PYTHONPATH": str(bundle)},
-                capture_output=True,
-                text=True,
-            )
-            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            bundled = importlib.import_module("unbake.objects.mixed")
+            for operation, paths in (
+                ("prepare", ["--placed", str(self.placed), "--output", str(self.root / "bundled.o")]),
+                (
+                    "extract",
+                    ["--final", str(self.final), "--code", str(self.code), "--output", str(self.root / "bundled.bin")],
+                ),
+            ):
+                with patch.object(sys, "argv", ["unbake.objects.mixed", operation, *arguments, *paths]):
+                    bundled.main()
+            for name, module in sys.modules.items():
+                if name == "unbake" or name.startswith("unbake."):
+                    self.assertTrue(str(module.__file__).startswith(str(bundle) + "/"), name)
         self.assertEqual((self.root / "bundled.o").read_bytes(), self.derived.read_bytes())
         self.assertEqual((self.root / "bundled.bin").read_bytes(), self.data_bin.read_bytes())
         self.assertEqual(generated[self.project.root / f"versions/us-rev1/data/{self.name}.ld"].decode(), script)
