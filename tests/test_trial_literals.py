@@ -13,7 +13,7 @@ from unbake import atomic, buildfiles, runner
 from unbake.config import Held
 from unbake.objects import rodata
 from unbake.objects.elf import Object
-from unbake.work.score import measure_words
+from unbake.work.score import Measurement, measure_words
 
 
 class UnresolvedSectionsTests(unittest.TestCase):
@@ -163,10 +163,12 @@ class TrialLinkTests(ProjectCase):
         ):
             data, problems = runner.link_function(self.project, self.host, obj, "us", self.row, self.source)
         measured = measure_words("us", self.code, data)
-        self.assertTrue(measured.exact)
-        self.assertEqual(problems, [".rdata: no proved resident address"])
-        measured.typed["relocation"] += len(problems)
-        self.assertFalse(measured.exact)
+        # Exactness also needs the strict native proof; grant it so only the unplaced pool decides.
+        with patch.object(Measurement, "provenance_valid", True):
+            self.assertTrue(measured.exact)
+            self.assertEqual(problems, [".rdata: no proved resident address"])
+            measured.typed["relocation"] += len(problems)
+            self.assertFalse(measured.exact)
 
     def test_shifted_reference_links_at_the_aligned_base_not_zero(self):
         shifted = struct.pack(">III", 0, 0x3C010000, 0xC4200000)

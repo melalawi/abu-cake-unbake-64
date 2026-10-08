@@ -1,5 +1,7 @@
 """The per-unit link: missing address-named symbols resolve at their address; anything else is a refusal."""
 
+import shutil
+import tempfile
 import unittest
 from contextlib import nullcontext
 from pathlib import Path
@@ -52,7 +54,7 @@ class LinkRefusalTests(ProjectCase):
         source.parent.mkdir(parents=True, exist_ok=True)
         source.write_text("void func_800C3EF0_us(void) {}\n")
         with (
-            patch.object(compare, "function_of", return_value="func_800C3EF0_us"),
+            patch("unbake.work.source_scope.admit_source", return_value=SimpleNamespace(subject="func_800C3EF0_us")),
             patch.object(compare.split, "holding_versions", return_value=("us",)),
             patch.object(compare, "view_for", return_value=self.project),
             patch.object(compare, "row_of", return_value=row),
@@ -69,10 +71,13 @@ class LinkRefusalTests(ProjectCase):
             named("link.undefined", f"link.undefined: {SOURCE}: VERSION us: gMissing", owner="fixture", stage="link")
         )
         project = SimpleNamespace(compiler_reference=lambda function: "gcc")
+        source = Path(tempfile.mkdtemp()) / SOURCE.name
+        self.addCleanup(shutil.rmtree, source.parent)
+        source.write_text("void func_800C3EF0_us(void) {}\n")
         with (
             patch.object(candidates.choice, "alternatives") as alternatives,
             self.assertRaises(Held) as caught,
         ):
-            candidates.resolve(project, SimpleNamespace(), SOURCE, refusal)
+            candidates.resolve(project, SimpleNamespace(), source, refusal)
         self.assertIs(caught.exception, refusal)
         alternatives.assert_not_called()

@@ -257,7 +257,7 @@ class FunctionAddressPublication(ProjectCase):
             self.assertEqual(self.header.read_text(), HEADER)
             yield self.root / "native.o"
 
-        def link(project, host, obj, version, row, source):
+        def link(project, host, obj, version, row, source, capture_info=None):
             return split.words(project, row), []
 
         with (
@@ -266,7 +266,13 @@ class FunctionAddressPublication(ProjectCase):
             patch.object(runner, "link_function", side_effect=link) as linked,
         ):
             measured = compare.measure(self.project, self.host, self.source)
-        self.assertTrue(measured.exact)
+        # The mock link supplies no native digest chain, so strict exactness is out of scope here: every
+        # holding version's words must match the target.
+        for version, compared in measured.compares.items():
+            with self.subTest(version=version):
+                self.assertEqual(compared.identical_words, compared.target_words)
+                self.assertFalse(any(compared.typed.values()))
+        self.assertEqual(set(measured.compares), set(self.versions))
         self.assertEqual(native.call_count, len(self.versions))
         self.assertEqual(linked.call_count, len(self.versions))
         self.assertEqual([version for _path, version in seen], list(self.versions))
