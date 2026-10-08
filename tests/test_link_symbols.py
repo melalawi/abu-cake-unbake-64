@@ -9,7 +9,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from tests.project_fixture import ProjectCase
-from unbake import runner
+from unbake import buildfiles, runner
 from unbake.compilers import candidates
 from unbake.config import Held
 from unbake.process import named
@@ -84,6 +84,51 @@ class OtherVersionNameTests(unittest.TestCase):
             with self.subTest(label), self.assertRaises(Held) as caught:
                 runner.derived_symbols({name}, frozenset(), "de", SOURCE, project)
             self.assertIn(f"VERSION de: {name}", caught.exception.reason)
+
+
+class SymbolsLdOtherVersionTests(OtherVersionNameTests):
+    """symbols.ld provides the same address for a version-suffixed name as the probe link does."""
+
+    def render(self, project: SimpleNamespace, version: str, suffixed: dict[str, str]) -> str:
+        with patch("unbake.compilers.runtime.bindings", return_value={}):
+            return buildfiles.symbols_ld(project, version, {}, suffixed)  # type: ignore[arg-type]
+
+    def test_the_final_link_agrees_with_the_probe_link(self) -> None:
+        project = self.project(
+            {
+                "eu": {"gA": 0x100, "gB": 0x200, "D_80000150_eu": 0x150},
+                "de": {"gA": 0x110, "gB": 0x210},
+            }
+        )
+        text = self.render(project, "de", {"D_80000150_eu": "src/a.c"})
+        self.assertIn("PROVIDE(D_80000150_eu = 0x00000160);\n", text)
+        self.assertEqual(
+            runner.derived_symbols({"D_80000150_eu"}, frozenset(), "de", SOURCE, project),  # type: ignore[arg-type]
+            ["--defsym=D_80000150_eu=0x00000160"],
+        )
+        self.assertIn("PROVIDE(D_80000150_eu = 0x00000150);\n", self.render(project, "eu", {"D_80000150_eu": "a.c"}))
+
+    def test_unanchored_is_refused_naming_source_version_symbol_and_unlisted_names_are_not_references(self) -> None:
+        project = self.project(
+            {
+                "eu": {"gA": 0x100, "gB": 0x200, "gC": 0x300, "D_80000150_eu": 0x150},
+                "de": {"gA": 0x110, "gB": 0x230, "gC": 0x330},
+            }
+        )
+        with self.assertRaises(Held) as caught:
+            self.render(project, "de", {"D_80000150_eu": "src/a.c"})
+        for part in ("src/a.c", "VERSION de", "D_80000150_eu"):
+            self.assertIn(part, caught.exception.reason)
+        self.assertNotIn("func_80001000_de", self.render(project, "de", {"func_80001000_de": "src/a.c"}))
+
+    def test_the_source_scan_finds_suffixed_names_apart_from_address_names(self) -> None:
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root)
+        source = root / "a.c"
+        source.write_text("u8 *p = &D_80000150_eu; u8 *q = &D_80000150; void func_80001000_us(void);\n")
+        named, suffixed = buildfiles._address_names([source])
+        self.assertEqual(named, {"D_80000150": 0x80000150})
+        self.assertEqual(suffixed, {"D_80000150_eu": str(source), "func_80001000_us": str(source)})
 
 
 class LinkRefusalTests(ProjectCase):

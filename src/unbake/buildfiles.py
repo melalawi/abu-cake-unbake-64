@@ -472,6 +472,7 @@ def windows(project: Project, version: str) -> list[tuple[int, int, int]]:
 
 _LINKER_ALIAS = re.compile(r"^//\s*unbake linker alias:\s*([A-Za-z_]\w*)\s*=\s*0x([0-9A-Fa-f]+);", re.M)
 _ADDRESS_NAMED = re.compile(r"\b(?:D|func)_([0-9A-F]{8})\b")
+_SUFFIXED_NAMED = re.compile(r"\b(?:D|func)_[0-9A-F]{8}_[A-Za-z0-9_]+\b")
 
 
 def named_address(name: str) -> int | None:
@@ -480,24 +481,75 @@ def named_address(name: str) -> int | None:
     return int(match[1], 16) if match else None
 
 
-def _address_names(chunk: list[Path]) -> dict[str, int]:
+def _address_names(chunk: list[Path]) -> tuple[dict[str, int], dict[str, str]]:
+    """(address-named symbols, version-suffixed address names with the first source spelling each)."""
     names: dict[str, int] = {}
+    suffixed: dict[str, str] = {}
     for path in chunk:
-        for match in _ADDRESS_NAMED.finditer(path.read_text(errors="replace")):
+        text = path.read_text(errors="replace")
+        for match in _ADDRESS_NAMED.finditer(text):
             names[match[0]] = int(match[1], 16)
-    return names
+        for match in _SUFFIXED_NAMED.finditer(text):
+            suffixed.setdefault(match[0], str(path))
+    return names, suffixed
+
+
+def scan_names(project: Project, host: Host | None = None) -> tuple[dict[str, int], dict[str, str]]:
+    """Names splat derives from a vram (D_XXXXXXXX, func_XXXXXXXX) that published C or headers spell, and the
+    version-suffixed ones (D_XXXXXXXX_eu: named after another version's address) with their source file."""
+    paths = sorted([*project.src.glob("*.c"), *(p for root in project.include for p in root.rglob("*.h"))])
+    chunks = [paths[start : start + 64] for start in range(0, len(paths), 64)]
+    with tui.task("Scanning sources for address-named symbols", len(paths)):
+        found = [_address_names(c) for c in chunks] if host is None else pool.run(host, _address_names, chunks)
+    named: dict[str, int] = {}
+    suffixed: dict[str, str] = {}
+    for part_named, part_suffixed in found:
+        named.update(part_named)
+        for name, source in part_suffixed.items():
+            suffixed.setdefault(name, source)
+    return named, suffixed
 
 
 def address_named(project: Project, host: Host | None = None) -> dict[str, int]:
     """Names splat derives from a vram (D_XXXXXXXX, func_XXXXXXXX) that published C or headers spell."""
-    paths = [*project.src.glob("*.c"), *(p for root in project.include for p in root.rglob("*.h"))]
-    chunks = [paths[start : start + 64] for start in range(0, len(paths), 64)]
-    with tui.task("Scanning sources for address-named symbols", len(paths)):
-        found = [_address_names(c) for c in chunks] if host is None else pool.run(host, _address_names, chunks)
-    return {name: address for part in found for name, address in part.items()}
+    return scan_names(project, host)[0]
 
 
-def symbols_ld(project: Project, version: str, named: dict[str, int] | None = None) -> str:
+def other_version_names(project: Project, version: str, suffixed: dict[str, str]) -> dict[str, int]:
+    """Each referenced version-suffixed name that another VERSION lists and VERSION does not, at the address
+    the probe link gives it (data_symbols.in_version); refused naming source, VERSION and symbol when no
+    shared-name anchors agree. A suffixed name no VERSION lists is the source's own definition, not a reference."""
+    from unbake.layout import data_symbols
+
+    own = split.symbols(project.version(version).symbols)[1]
+    listed: set[str] = set()
+    for origin in dict.fromkeys((project.names_from, *project.versions)):
+        listed.update(split.symbols(project.version(origin).symbols)[1])
+    result: dict[str, int] = {}
+    for name, source in sorted(suffixed.items()):
+        if name in own or name not in listed:
+            continue
+        found = data_symbols.in_version(project, name, version)
+        if found is None:
+            raise Held(
+                cause_named(
+                    "symbols.other_version",
+                    f"symbols.other_version: {source}: VERSION {version}: {name} "
+                    f"has no unambiguous address through the shared-name anchors",
+                    owner="buildfiles",
+                    stage="buildfiles",
+                )
+            )
+        result[name] = found
+    return result
+
+
+def symbols_ld(
+    project: Project,
+    version: str,
+    named: dict[str, int] | None = None,
+    suffixed: dict[str, str] | None = None,
+) -> str:
     """Every known symbol as PROVIDE, so a unit linked alone resolves its external references.
 
     Data that stays a raw ROM slice has no label in any object. An address-named symbol the sources spell
@@ -510,7 +562,13 @@ def symbols_ld(project: Project, version: str, named: dict[str, int] | None = No
     # A shared name whose address already has another splat symbol in this version is kept as a comment.
     for name, address in _LINKER_ALIAS.findall(path.read_text()):
         provided.setdefault(name, int(address, 16))
-    for name, address in (address_named(project) if named is None else named).items():
+    if named is None or suffixed is None:
+        scanned_named, scanned_suffixed = scan_names(project)
+        named = scanned_named if named is None else named
+        suffixed = scanned_suffixed if suffixed is None else suffixed
+    for name, address in named.items():
+        provided.setdefault(name, address)
+    for name, address in other_version_names(project, version, suffixed).items():
         provided.setdefault(name, address)
     from unbake.compilers.runtime import bindings
 
@@ -1057,15 +1115,15 @@ def driver_identity() -> str:
     return "".join(f"{hashlib.sha256((root / name).read_bytes()).hexdigest()}  {name}\n" for name in names)
 
 
-def _version_files(shared: tuple[Project, dict[str, int]], version: str) -> dict[Path, str]:
+def _version_files(shared: tuple[Project, dict[str, int], dict[str, str]], version: str) -> dict[Path, str]:
     """One version's build files; versions are independent, so they render in pool workers."""
-    project, named = shared
+    project, named, suffixed = shared
     files: dict[Path, str] = {}
     directory = project.root / "versions" / version
     meta = project.version(version)
     rom = relative(project, meta.baserom)
     files[directory / "slices.mk"] = slices_mk(project, version)
-    files[directory / "symbols.ld"] = symbols_ld(project, version, named)
+    files[directory / "symbols.ld"] = symbols_ld(project, version, named, suffixed)
     files[directory / f"{project.name}.ld"] = link_script(project, version)
     files[directory / f"{project.name}.data.ld"] = data_link_script(project, version)
     for unit in data_units(project, version):
@@ -1106,9 +1164,9 @@ def generate(project: Project, host: Host) -> dict[Path, bytes]:
         project.root / ".github/workflows/progress.yml": github_progress(project, host, verifier_payload=payload),
         project.root / ".gitlab-ci.yml": gitlab_progress(project, verifier_payload=payload),
     }
-    named = address_named(project, host)
+    named, suffixed = scan_names(project, host)
     with tui.task("Rendering per-version build files", len(project.versions)):
-        rendered = pool.run(host, _version_files, list(project.versions), (project, named))
+        rendered = pool.run(host, _version_files, list(project.versions), (project, named, suffixed))
     for part in rendered:
         files.update(part)
     return {**{path: text.encode() for path, text in files.items()}, project.root / verify.BUNDLE: payload}
