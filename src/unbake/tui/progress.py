@@ -26,6 +26,9 @@ class Task:
     parent: Task | None = None
     # Words the owner adds to the done line (the types step: what changed).
     note: str = ""
+    # What this task's finished children account for (effort.NUMERIC), so the rest is its own work.
+    kids: dict[str, float] = field(default_factory=dict)
+    kid_count: int = 0
 
     def advance(self, n: int = 1) -> None:
         with _lock:
@@ -38,6 +41,10 @@ class Task:
             self.total = n
         if _renderer is not None:
             _renderer.progress(self)
+
+    @property
+    def path(self) -> str:
+        return self.label if self.parent is None else f"{self.parent.path} > {self.label}"
 
     @property
     def depth(self) -> int:
@@ -96,11 +103,24 @@ def task(label: str, total: int | None = None) -> Iterator[Task]:
         with _lock:
             _stack.remove(opened)
         spent = effort.since(mark)
-        effort.record_stage(label, spent.wall, spent.cpu)
-        if effort.parent_only(label, opened.total or 0, bool(spent.pool), spent.wall, spent.cpu):
-            effort.record_stage(
-                f"{effort.PARENT_ONLY}{label} ({opened.total or 0} items)", spent.wall, spent.cpu
-            )
+        path = opened.path
+        whole = effort.stage_detail(path, spent)
+        if not spent.pools:
+            whole["items"] = opened.total or 0
+        effort.record_detail(path, whole)
+        if effort.parent_only(path, opened.total or 0, bool(spent.pool), spent.wall, spent.cpu):
+            effort.record_stage(f"{effort.PARENT_ONLY}{path} ({opened.total or 0} items)", spent.wall, spent.cpu)
+        if opened.kid_count:
+            own = effort.own_detail(f"{path} (own)", whole, opened.kids)
+            own_cpu = effort.record_detail(f"{path} (own)", own)
+            own_wall, own_pool = float(own["wall_seconds"]), float(own["worker_cpu_seconds"])  # type: ignore[arg-type]
+            if effort.parent_only(f"{path} (own)", 0, own_pool > 0, own_wall, own_cpu):
+                effort.record_stage(f"{effort.PARENT_ONLY}{path} (own)", own_wall, own_cpu)
+        if opened.parent is not None:
+            with _lock:
+                opened.parent.kid_count += 1
+                for key, value in effort.numbers(whole).items():
+                    opened.parent.kids[key] = opened.parent.kids.get(key, 0.0) + value
         if _renderer is not None:
             cores = spent.cpu / spent.wall if spent.wall > 0 else 0.0
             _renderer.done(opened, spent.wall, cores, _cache(spent) + opened.note)

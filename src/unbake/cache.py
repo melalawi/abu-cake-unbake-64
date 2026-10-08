@@ -397,6 +397,7 @@ def memo(
         found = _memo.get(identity)
         if found is not None:
             _memo.move_to_end(identity)
+            effort.count("memo." + kind, 1, 1)
             return cast(T, copy_out(found[0]))
         running = _memo_flights.get(identity)
         owner = running is None
@@ -407,6 +408,7 @@ def memo(
             assert running is not None
             running.waiters += 1
     assert running is not None
+    effort.count("memo." + kind, int(not owner), 1)
     if not owner:
         return cast(T, copy_out(running.future.result()))
     try:

@@ -58,7 +58,7 @@ class PooledStepRegistry(unittest.TestCase):
             finally:
                 effort.stage_log(None)
             names = [json.loads(line)["stage"] for line in log.read_text().splitlines()]
-        self.assertEqual(["Beta", "Alpha"], names)
+        self.assertEqual(["Alpha > Beta", "Alpha", "Alpha (own)"], names)
 
 
 if __name__ == "__main__":

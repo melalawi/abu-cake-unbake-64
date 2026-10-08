@@ -6,10 +6,12 @@ import contextlib
 import hashlib
 import json
 import os
+import resource
 import select
 import signal
 import subprocess
 import sys
+import time
 import traceback
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
@@ -354,7 +356,27 @@ def run_native(
     """The one native result/fault boundary, retaining both streams and exact invocation."""
     from unbake import effort
 
-    effort.count("native.calls", 1, 1)
+    began, spent = time.monotonic(), _children_cpu()
+    try:
+        return _run_native(argv, work, phase, context, env, temporary_root, stdin)
+    finally:
+        effort.native_call(time.monotonic() - began, _children_cpu() - spent)
+
+
+def _children_cpu() -> float:
+    usage = resource.getrusage(resource.RUSAGE_CHILDREN)
+    return usage.ru_utime + usage.ru_stime
+
+
+def _run_native(
+    argv: list[str],
+    work: Path,
+    phase: str,
+    context: dict[str, Any] | None,
+    env: dict[str, str] | None,
+    temporary_root: Path | None,
+    stdin: str | None,
+) -> NativeResult:
     environment = dict(temporary_environment(work if temporary_root is None else temporary_root, env), LC_ALL="C")
     key = f"{phase}.{Path(argv[0]).name}"
     native_input: dict[str, Any] = {"input": stdin} if stdin is not None else {}

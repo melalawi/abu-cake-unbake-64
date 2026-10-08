@@ -14,9 +14,10 @@ import os
 import resource
 import threading
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NamedTuple
 
 if TYPE_CHECKING:
     from unbake.config import Host
@@ -29,7 +30,22 @@ _lock = threading.Lock()
 _ledger: dict[str, list[float]] = {}
 # name -> [done, total], summed (facts: source units extracted of all)
 _counts: dict[str, list[int]] = {}
-_stages: list[tuple[str, float, float]] = []
+
+
+class Stage(NamedTuple):
+    """One finished stage: its full path, wall, all-process CPU and the detail record (see stage_detail)."""
+
+    name: str
+    wall: float
+    cpu: float
+    detail: dict[str, object]
+
+
+_stages: list[Stage] = []
+# One record per pool.run: action, items, workers, wall, worker CPU, worker peak RSS.
+_pools: list[dict[str, object]] = []
+# pool action -> worker peak RSS seen since its run began
+_run_rss: dict[str, int] = {}
 # per memory window: [main peak, worker peak] in bytes; the last window is open
 _windows: list[list[int]] = [[0, 0]]
 
@@ -92,6 +108,7 @@ def charge(name: str, seconds: float, rss: int = 0, counts: dict[str, tuple[int,
         row[0] += seconds
         row[1] += 1
         _windows[-1][1] = max(_windows[-1][1], rss)
+        _run_rss[name.removesuffix(".failed")] = max(_run_rss.get(name.removesuffix(".failed"), 0), rss)
         for kind, (done, total) in (counts or {}).items():
             added = _counts.setdefault(kind, [0, 0])
             added[0] += done
@@ -136,16 +153,180 @@ def stage_log(path: Path | None) -> None:
     _sink = path
 
 
-def record_stage(name: str, wall: float, cpu: float) -> None:
-    """One finished stage: its wall seconds and the CPU seconds all processes spent in it."""
-    with _lock:
-        _stages.append((name, wall, cpu))
-        sink = _sink
+def _append(record: dict[str, object]) -> None:
+    sink = _sink
     if sink is not None:
         with contextlib.suppress(OSError), sink.open("a") as handle:
-            handle.write(
-                json.dumps({"stage": name, "wall_seconds": round(wall, 3), "cpu_seconds": round(cpu, 3)}) + "\n"
-            )
+            handle.write(json.dumps(record) + "\n")
+
+
+def record_stage(name: str, wall: float, cpu: float, **detail: object) -> None:
+    """One finished stage (NAME is its full path): wall seconds, CPU seconds all processes spent, and its detail."""
+    with _lock:
+        _stages.append(Stage(name, wall, cpu, dict(detail)))
+    _append({"stage": name, "wall_seconds": round(wall, 3), "cpu_seconds": round(cpu, 3), **detail})
+
+
+def pool_start(action: str) -> tuple[str, float, float]:
+    """Open the record of one pool.run of ACTION; pass the result to pool_end."""
+    with _lock:
+        _run_rss[action] = 0
+        spent = _ledger_cpu(action)
+    return action, time.monotonic(), spent
+
+
+def _ledger_cpu(action: str) -> float:
+    return sum(_ledger.get(name, [0.0])[0] for name in (action, action + ".failed"))
+
+
+def pool_end(token: tuple[str, float, float], items: int, workers: int) -> None:
+    """Close a pool.run record: items, workers actually used, wall, worker CPU and worker peak RSS."""
+    action, began, cpu_before = token
+    wall = time.monotonic() - began
+    with _lock:
+        record: dict[str, object] = {
+            "pool": action,
+            "items": items,
+            "workers": workers,
+            "wall_seconds": round(wall, 3),
+            "worker_cpu_seconds": round(_ledger_cpu(action) - cpu_before, 3),
+            "worker_rss_bytes": _run_rss.get(action, 0),
+        }
+        _pools.append(record)
+    _append(record)
+
+
+def native_call(wall: float, cpu: float) -> None:
+    """One native tool call (compiler, assembler, linker, preprocessor): counted and summed, never a line each."""
+    wall_us, cpu_us = round(wall * 1e6), round(cpu * 1e6)
+    count("native.calls", 1, 1)
+    count("native.wall_us", wall_us, wall_us)
+    count("native.cpu_us", cpu_us, cpu_us)
+
+
+# Numeric stage detail that a parent's children account for; the rest of the parent is its "(own)" work.
+NUMERIC = (
+    "wall_seconds",
+    "parent_cpu_seconds",
+    "tools_cpu_seconds",
+    "worker_cpu_seconds",
+    "items",
+    "jobs",
+    "native_calls",
+    "native_wall_seconds",
+    "native_cpu_seconds",
+)
+PARALLEL_CORES = 1.5
+
+
+def stage_detail(path: str, spent: Effort, own: bool = False) -> dict[str, object]:
+    """The record of a stage: path, depth, wall, parent/tools/worker CPU, cores, pool items/jobs/workers, natives."""
+    worker = sum(seconds for seconds, _ in spent.pool.values())
+    native = spent.counts
+    return {
+        "path": path,
+        "depth": path.count(" > "),
+        "own": own,
+        "wall_seconds": spent.wall,
+        "parent_cpu_seconds": spent.main,
+        "tools_cpu_seconds": spent.tools,
+        "worker_cpu_seconds": worker,
+        "cores": _cores(spent.main + spent.tools + worker, spent.wall),
+        "items": sum(int(run["items"]) for run in spent.pools),  # type: ignore[call-overload]
+        "jobs": len(spent.pools),
+        "workers": max((int(run["workers"]) for run in spent.pools), default=0),  # type: ignore[call-overload]
+        "native_calls": native.get("native.calls", (0, 0))[0],
+        "native_wall_seconds": native.get("native.wall_us", (0, 0))[0] / 1e6,
+        "native_cpu_seconds": native.get("native.cpu_us", (0, 0))[0] / 1e6,
+        # Cache and memo hits of all (misses = total less hits): per-process memos miss again in every worker.
+        "cache": {
+            name: [done, total]
+            for name, (done, total) in sorted(native.items())
+            if name.startswith(("cache.", "memo."))
+        },
+    }
+
+
+def _cores(cpu: float, wall: float) -> float:
+    return cpu / wall if wall > 0 else 0.0
+
+
+def own_detail(path: str, whole: dict[str, object], children: dict[str, float]) -> dict[str, object]:
+    """The part of a stage no child stage accounts for: its numbers less its children's, with its own cores."""
+    own: dict[str, object] = dict(whole, path=path, own=True, cache={})
+    for key, value in numbers(whole).items():
+        own[key] = max(0.0, value - children.get(key, 0.0))
+    own["cores"] = _cores(detail_cpu(own), float(own["wall_seconds"]))  # type: ignore[arg-type]
+    return own
+
+
+def numbers(detail: dict[str, object]) -> dict[str, float]:
+    """The numeric fields of a detail record."""
+    return {key: float(detail[key]) for key in NUMERIC}  # type: ignore[arg-type]
+
+
+def detail_cpu(detail: dict[str, object]) -> float:
+    figures = numbers(detail)
+    return figures["parent_cpu_seconds"] + figures["tools_cpu_seconds"] + figures["worker_cpu_seconds"]
+
+
+def record_detail(name: str, detail: dict[str, object]) -> float:
+    """Record a stage from its detail record (wall and CPU come from it); returns its CPU seconds."""
+    cpu = detail_cpu(detail)
+    record_stage(name, float(detail["wall_seconds"]), cpu, **detail)  # type: ignore[arg-type]
+    return cpu
+
+
+def summary(stages: Sequence[Stage], top: int = 10) -> list[str]:
+    """The TOP stages by wall (a stage run twice counts once, summed), each tagged serial or parallel by its cores."""
+    rows: dict[str, list[float]] = {}
+    for stage in stages:
+        if stage.name.startswith(PARENT_ONLY):
+            continue
+        row = rows.setdefault(stage.name, [0.0, 0.0])
+        row[0] += stage.wall
+        row[1] += stage.cpu
+    ranked = sorted(rows.items(), key=lambda item: -item[1][0])[:top]
+    return [
+        f"{wall:9.1f} s  {_cores(cpu, wall):5.1f} cores  {_tag(_cores(cpu, wall)):8}  {name}"
+        for name, (wall, cpu) in ranked
+    ]
+
+
+def _tag(cores: float) -> str:
+    return "parallel" if cores >= PARALLEL_CORES else "serial"
+
+
+def stage_tree(stages: Sequence[Stage]) -> list[dict[str, object]]:
+    """The stages as a tree by path: each node has its numbers (summed over runs) and its children."""
+    roots: list[dict[str, object]] = []
+    nodes: dict[str, dict[str, object]] = {}
+    for stage in stages:
+        if stage.name.startswith(PARENT_ONLY):
+            continue
+        node = nodes.get(stage.name)
+        if node is None:
+            node = {"name": stage.name.rsplit(" > ", 1)[-1], "path": stage.name, "runs": 0, "wall_seconds": 0.0}
+            node["cpu_seconds"] = 0.0
+            node["children"] = []
+            nodes[stage.name] = node
+        node["runs"] = int(node["runs"]) + 1  # type: ignore[call-overload]
+        node["wall_seconds"] = round(float(node["wall_seconds"]) + stage.wall, 3)  # type: ignore[arg-type]
+        node["cpu_seconds"] = round(float(node["cpu_seconds"]) + stage.cpu, 3)  # type: ignore[arg-type]
+        for key in ("items", "jobs", "workers", "native_calls"):
+            if key in stage.detail:
+                node[key] = max(int(node.get(key, 0)), int(stage.detail[key]))  # type: ignore[call-overload]
+    for path, node in nodes.items():
+        node["cores"] = _cores(float(node["cpu_seconds"]), float(node["wall_seconds"]))  # type: ignore[arg-type]
+        node["cores"] = round(float(node["cores"]), 2)  # type: ignore[arg-type]
+        if path.endswith(" (own)"):
+            parent = path.removesuffix(" (own)")
+        else:
+            parent = path.rsplit(" > ", 1)[0] if " > " in path else ""
+        owner = nodes.get(parent)
+        kin: list[dict[str, object]] = roots if owner is None else owner["children"]  # type: ignore[assignment]
+        kin.append(node)
+    return roots
 
 
 def count(name: str, done: int, total: int) -> None:
@@ -172,6 +353,7 @@ class Mark:
     counts: dict[str, tuple[int, int]] = field(default_factory=dict)
     host: float = 0.0
     stage: int = 0
+    pools: int = 0
 
 
 def mark() -> Mark:
@@ -182,6 +364,7 @@ def mark() -> Mark:
         counts = {name: (row[0], row[1]) for name, row in _counts.items()}
         opened = len(_windows) - 1
         staged = len(_stages)
+        pooled = len(_pools)
     return Mark(
         time.monotonic(),
         own.ru_utime + own.ru_stime,
@@ -191,6 +374,7 @@ def mark() -> Mark:
         counts,
         host_busy(),
         staged,
+        pooled,
     )
 
 
@@ -205,7 +389,8 @@ class Effort:
     counts: dict[str, tuple[int, int]] = field(default_factory=dict)
     # CPU-seconds other processes on the host used meanwhile (host busy time less this command's).
     external: float = 0.0
-    stages: tuple[tuple[str, float, float], ...] = ()
+    stages: tuple[Stage, ...] = ()
+    pools: tuple[dict[str, object], ...] = ()
 
     @property
     def cpu(self) -> float:
@@ -214,7 +399,7 @@ class Effort:
     def stage_rows(self) -> list[dict[str, object]]:
         """Each named stage once, in first-seen order: runs, wall seconds and cores used (CPU over wall)."""
         rows: dict[str, list[float]] = {}
-        for name, wall, cpu in self.stages:
+        for name, wall, cpu, _ in self.stages:
             row = rows.setdefault(name, [0, 0.0, 0.0])
             row[0] += 1
             row[1] += wall
@@ -253,6 +438,8 @@ class Effort:
                 for name, (seconds, tasks) in sorted(self.pool.items(), key=lambda item: -item[1][0])[:TOP]
             },
             "stages": self.stage_rows(),
+            "stage_tree": stage_tree(self.stages),
+            "pool_runs": list(self.pools),
             "external_cpu_seconds": round(self.external, 3),
             "external_cores": round(self.external_cores, 2),
         }
@@ -282,7 +469,8 @@ def since(start: Mark) -> Effort:
     external = max(0.0, end.host - start.host - spent.cpu) if start.host and end.host else 0.0
     with _lock:
         staged = tuple(_stages[start.stage :])
-    return replace(spent, external=external, stages=staged)
+        pooled = tuple(_pools[start.pools :])
+    return replace(spent, external=external, stages=staged, pools=pooled)
 
 
 def step_findings(name: str, spent: Effort, budgets: Host) -> list[str]:

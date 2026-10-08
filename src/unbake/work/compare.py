@@ -262,6 +262,10 @@ def measure(
                     "refusals": problems,
                 }
             )
+            if score_cache is not None:
+                from unbake import effort
+
+                effort.count("memo.compare.score", int(equivalence in score_cache), 1)
             if score_cache is not None and equivalence in score_cache:
                 result = copy.deepcopy(score_cache[equivalence])
             else:

@@ -186,11 +186,16 @@ def main(argv: list[str] | None = None) -> int:
     finally:
         tui.stop()
     # Every result says what the command cost: wall, CPU of this process, its tools and its pool work by function.
-    measured = effort.since(started).document()
+    spent = effort.since(started)
+    measured = spent.document()
     if admission.receipt:
         measured["admission"] = dict(admission.receipt)
     result = replace(result, effort=measured)
     code = emit(result, stdout, tui.stderr())
+    # The slowest stages, so no run is blind about where time went or whether it ran in parallel.
+    lines = effort.summary(spent.stages)
+    if lines:
+        print("Slowest stages:", *lines, sep="\n  ", file=tui.stderr())
     return code
 
 

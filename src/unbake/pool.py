@@ -890,6 +890,15 @@ class Pool:
         fn(shared, item). The file is removed when run returns."""
         from unbake import effort
 
+        token = effort.pool_start(effort.name_of(fn))
+        try:
+            return self._run(fn, items, shared)
+        finally:
+            effort.pool_end(token, len(items), self.size)
+
+    def _run(self, fn: Callable[..., R], items: Sequence[T], shared: Any = None) -> list[R]:
+        from unbake import effort
+
         size = min(ITEMS_PER_JOB, width(len(items), self.size))
         if size > self._work_per_job:
             self._work_per_job = size
