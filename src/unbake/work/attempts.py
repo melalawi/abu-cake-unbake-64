@@ -120,8 +120,10 @@ def _load(project: Project, identity: str) -> Any:
     if not isinstance(identity, str) or re.fullmatch(r"[0-9a-f]{64}", identity) is None:
         raise ValueError("ledger.blob_identity")
     current = _current.get()
-    store = current.storage if current is not None and current.project.root == project.root else cache.Cache(
-        project.root / STORAGE
+    store = (
+        current.storage
+        if current is not None and current.project.root == project.root
+        else cache.Cache(project.root / STORAGE)
     )
     path = store.path("ledger", identity)
     try:
@@ -461,6 +463,16 @@ class Ledger:
         self.offset = 0
         self.prefix_reads = 0
         self.incremental_updates = 0
+
+    def invalidate(self) -> None:
+        """Forget append offsets after a controlled external history rewrite.
+
+        Do not read the working root here: Git may have installed conflict
+        markers. The next strict read follows stage union or successful rebase.
+        """
+        self.inode = None
+        self.signature = None
+        self.offset = 0
 
     def _refresh(self) -> None:
         if not self.path.exists():
@@ -1104,6 +1116,7 @@ _T = TypeVar("_T")
 
 def with_ledger(function: Callable[_P, _T]) -> Callable[_P, _T]:
     """Direct APIs share the same incremental reader already owned by CLI commands."""
+
     @wraps(function)
     def call(*args: _P.args, **kwargs: _P.kwargs) -> _T:
         project = cast(Project, args[0] if args else kwargs["project"])

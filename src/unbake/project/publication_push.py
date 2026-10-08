@@ -402,6 +402,7 @@ def resolve_conflicts(project: Project, host: Host) -> bool:
             atomic.write(project.root / attempts.PATH, merged)
             # Strict readback owns both project identity and current-source projection.
             history = attempts.ledger(project)
+            history.invalidate()
             history._refresh()
             expected = {row["event_id"] for row in attempts.read_records(merged, project)}
             if set(history.events) != expected:
@@ -445,13 +446,19 @@ def resolve_conflicts(project: Project, host: Host) -> bool:
 
 def rebase(project: Project, host: Host) -> None:
     try:
-        _git(project, "rebase", "FETCH_HEAD")
+        try:
+            _git(project, "rebase", "FETCH_HEAD")
+        finally:
+            attempts.ledger(project).invalidate()
         return
     except Held as error:
         current = error
     while resolve_conflicts(project, host):
         try:
-            _git(project, "-c", "core.editor=true", "rebase", "--continue")
+            try:
+                _git(project, "-c", "core.editor=true", "rebase", "--continue")
+            finally:
+                attempts.ledger(project).invalidate()
             return
         except Held as error:
             current = error
