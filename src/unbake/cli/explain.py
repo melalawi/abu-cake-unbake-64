@@ -9,7 +9,8 @@ from unbake.cli.output import Result
 
 NAME = "explain"
 HELP = "Explain where FUNC or FILE stands: status, types, rodata, needs, order, similar."
-SECTIONS = ("status", "types", "rodata", "needs", "order", "similar")
+DEFAULT_SECTIONS = ("status", "types", "rodata", "needs", "order", "similar")
+SECTIONS = (*DEFAULT_SECTIONS, "subsystems", "hints")
 DESCRIPTION = """\
 Explain one function or draft file. Without --section, every section is shown.
 
@@ -20,6 +21,7 @@ Sections: status (versions, sizes, best attempt, cycle eligibility before the si
 types (the solved type context the draft uses),
 rodata (which constants the function owns), needs (missing declarations and fields),
 order (instruction order differences), similar (already matched functions that look alike).
+Opt-in sections: subsystems (advisory memberships), hints (provider-aware source hypotheses).
 """
 PROJECT = "ready"
 
@@ -36,7 +38,7 @@ def register(parser: argparse.ArgumentParser) -> None:
 def run(context: Context) -> Result:
     from unbake.work import explain
 
-    sections = tuple(context.args.section or SECTIONS)
+    sections = tuple(context.args.section or DEFAULT_SECTIONS)
     report = explain.explain(context.project(), context.require_host(), context.args.subject, sections)
     return Result.ok(
         NAME, report.document(), report.lines(), context.cmd(*report.next_words) if report.next_words else None

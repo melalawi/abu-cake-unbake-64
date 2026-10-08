@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import re
+from dataclasses import asdict
 
 from unbake.cli.args import Context, positive
 from unbake.cli.output import Result
@@ -74,11 +75,16 @@ def run(context: Context) -> Result:
         return Result.ok(NAME, engine.status(context.project()), [], None)
     if args.list:
         rows = engine.ranked(context.project(), context.require_host())
+        from unbake.layout import subsystems
+        from unbake.work import plan
+
+        snapshot = subsystems.snapshot(context.project())
+        proposals = plan.cohorts(rows, snapshot)
         for row in rows:
             engine.emit_row(context.stdout, row)
         return Result.ok(
             NAME,
-            {"candidates": len(rows)},
+            {"candidates": len(rows), "cohorts": [asdict(row) for row in proposals]},
             [f"{len(rows)} candidates"],
             context.cmd("cycle", "--pick", "5", "--stop", "idle:900"),
         )

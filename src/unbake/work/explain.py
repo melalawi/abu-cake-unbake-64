@@ -118,6 +118,11 @@ def _similar(project: Project, host: Host, function: str) -> list[dict[str, Any]
 def explain(project: Project, host: Host, subject: str, sections: tuple[str, ...]) -> Report:
     function, file = subject_of(project, subject)
     report = Report(function)
+    advisory = None
+    if set(sections) & {"subsystems", "hints"}:
+        from unbake.layout import subsystems
+
+        advisory = subsystems.snapshot(project, subjects=frozenset({function}))
     for name in sections:
         if name == "status":
             report.sections[name] = _status(project, function, file)
@@ -129,6 +134,16 @@ def explain(project: Project, host: Host, subject: str, sections: tuple[str, ...
             report.sections[name] = _needs(project, host, function)
         elif name == "order":
             report.sections[name] = _order(project, host, function, file)
+        elif name == "subsystems" and advisory is not None:
+            report.sections[name] = {
+                "snapshot_key": advisory.evidence_key,
+                "memberships": [dataclasses.asdict(row) for row in advisory.for_subject(function)],
+                "missing_inputs": list(advisory.missing_inputs),
+            }
+        elif name == "hints" and advisory is not None:
+            from unbake.work import hints
+
+            report.sections[name] = [row.document() for row in hints.for_subject(function, advisory)]
         elif name == "similar":
             report.sections[name] = _similar(project, host, function)
         else:

@@ -15,6 +15,7 @@ from unbake.work import attempts, inventory, shape
 
 if TYPE_CHECKING:
     from unbake.compilers.families.mips import Shape
+    from unbake.layout.subsystems import Snapshot
     from unbake.project.flow import ProviderRecord
 
 from unbake.compilers.registry import specification
@@ -269,3 +270,108 @@ def next_action(project: Project, host: Host, *, undrafted: bool) -> Action:
         reason = f"{row.function}: {row.bytes} bytes in {', '.join(row.versions)}"
         return Action(("draft", row.function), reason, row.function)
     return Action(None, "no unit is ready to draft", None)
+
+
+@dataclass(frozen=True)
+class Cohort:
+    """A manual assignment proposal. It neither claims paths nor dispatches work."""
+
+    id: str
+    snapshot_key: str
+    family_ids: tuple[str, ...]
+    candidate_ids: tuple[str, ...]
+    provider_ids: tuple[str, ...]
+    write_paths: tuple[str, ...]
+    read_dependencies: tuple[str, ...]
+    affected_consumers: tuple[str, ...]
+    required_versions: tuple[str, ...]
+    estimated_new_bytes: int
+    primary_label: str | None
+    state: str
+    ownership_conflicts: tuple[str, ...]
+    omitted_candidates: tuple[str, ...]
+    basis: str = "existing candidate rank; delivered elapsed observations unavailable"
+    estimated_wall_seconds: float | None = None
+
+
+def cohorts(
+    candidates: list[rank.Candidate],
+    snapshot: Snapshot,
+    claims: dict[str, str] | None = None,
+    *,
+    owner: str | None = None,
+) -> tuple[Cohort, ...]:
+    """Overlapping provider/module families in existing rank order; unknown rows remain selectable.
+
+    Candidates are already admitted by the existing route. A family may recommend other
+    consumers, but never adds them to an explicit function selection or assigns their writer.
+    """
+    from unbake import cache
+
+    by_name = {row.function: row for row in candidates}
+    entities = {row.id: row for row in snapshot.entities}
+    memberships = {row.entity_id: row for row in snapshot.memberships}
+    positions = {row.function: index for index, row in enumerate(candidates)}
+    families = list(snapshot.families)
+    covered = {key for row in families for key in row.members}
+    for entity in snapshot.entities:
+        if entity.kind == "function" and entity.id not in covered and entity.name in by_name:
+            from unbake.layout.subsystems import Family
+
+            families.append(Family("single:" + entity.id, entity.id, (entity.id,), "ungrouped function"))
+    proposals = []
+    for family in families:
+        members = [entities[key] for key in family.members]
+        picked = sorted(
+            {row.name for row in members if row.kind == "function" and row.name in by_name}, key=positions.__getitem__
+        )
+        producer = [row for row in members if row.kind in {"data", "resource"}]
+        if not picked and not producer:
+            continue
+        providers = tuple(sorted(row.id for row in members if row.kind == "provider"))
+        paths = tuple(
+            sorted(
+                {row.path for row in members if row.path and row.kind in {"provider", "function", "data", "resource"}}
+            )
+        )
+        conflicts = tuple(
+            sorted(
+                f"{path}: owned by {writer}"
+                for path, writer in (claims or {}).items()
+                if path in paths and (owner is None or writer != owner)
+            )
+        )
+        support = [memberships[row.id] for row in members if row.id in memberships and row.kind != "provider"]
+        labels = {row.primary for row in support if row.primary}
+        state = (
+            "mixed"
+            if len(labels) > 1 or any(row.state == "mixed" for row in support)
+            else ("assigned" if labels else "unknown")
+        )
+        proposals.append(
+            Cohort(
+                "cohort:" + cache.key(family.id),
+                snapshot.evidence_key,
+                (family.id,),
+                tuple(picked),
+                providers,
+                paths,
+                providers,
+                tuple(sorted(row.id for row in members if row.kind == "function")),
+                tuple(sorted({row.version for row in members if row.version})),
+                sum(by_name[name].bytes for name in picked),
+                next(iter(labels)) if len(labels) == 1 and state == "assigned" else None,
+                state,
+                conflicts,
+                tuple(sorted({row.name for row in members if row.kind == "function" and row.name not in by_name})),
+            )
+        )
+    return tuple(
+        sorted(
+            proposals,
+            key=lambda row: (
+                min((positions[name] for name in row.candidate_ids), default=len(positions)),
+                row.id,
+            ),
+        )
+    )
