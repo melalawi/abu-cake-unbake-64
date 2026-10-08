@@ -686,7 +686,7 @@ class Graph:
                 text = self.read(path).decode()
                 typedefs.update(cdecl.declarations(text).typedefs)
                 providers.append(text)
-        active = source_views.version_source(project, raw.decode(), version, source.stem)
+        active = source_views.version_source(project, declarations.cleaned_unit(raw.decode()), version, source.stem)
         try:
             tree = cdecl.parser(typedefs).parse(declarations.cleaned_unit(active), filename=str(source))
         except cdecl.ParseError as error:
