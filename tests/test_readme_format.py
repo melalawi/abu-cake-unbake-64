@@ -54,7 +54,7 @@ class ReadmeFormatTests(unittest.TestCase):
                     rendered = progress.render(template, reports, descriptions=labels)
                 generate.assert_not_called()
                 self.assertEqual(replace.call_count, 2 * count + 1 if count > 1 else 1)
-                self.assertEqual(figures.call_count, 5 * count + 1 if count > 1 else 4)
+                self.assertEqual(figures.call_count, 6 * count + 1 if count > 1 else 5)
                 self.assertEqual(layout(rendered), layout(template))
                 self.assertEqual(len(NUMBERS.findall(rendered)), 4 * count + 1 if count > 1 else 3)
                 self.assertNotEqual(rendered, template)
@@ -71,6 +71,25 @@ class ReadmeFormatTests(unittest.TestCase):
                     self.assertIn("| eu-mul (", rendered)
                     self.assertNotIn("| eu-x (", rendered)
                     self.assertIn("697,768 of 1,115,312", rendered)
+
+    def test_actual_five_rom_overall_weights_code_and_verified_initialized_data(self):
+        # Canonical RageWars 7d17ee3: only us-rev1 has verified DATA (89,714).
+        reports = payload("ragewars-7d17")
+        reference = (FIXTURES / "exampletwo-reference.golden").read_text()
+        template = "# Owner\r\n\r\n## Progress\r\n\r\n" + reference.replace("\n", "\r\n")
+        template += "\r\n## Footer\r\nKeep owner prose.\r\n"
+        labels = descriptions(reference, reports)
+        rendered = progress.render(template, reports, descriptions=labels)
+        self.assertEqual(layout(rendered), layout(template))
+        self.assertEqual(progress._figures(progress._aggregate(reports), "all")[:2], (3566938, 6857872))
+        self.assertIn("52.01% (~52.34%)  3,566,938 of 6,857,872 bytes", rendered)
+        self.assertIn("89,714 of 254,468", rendered)
+        self.assertEqual(rendered.count("<code>data"), 5)
+        self.assertIn("778,116 of 1,132,124", rendered)
+        self.assertEqual(progress.render(rendered, reports, descriptions=labels), rendered)
+        self.assertEqual(reports, payload("ragewars-7d17"))
+        generated = progress.progress(reports, labels)
+        self.assertIn("3,566,938 of 6,857,872 bytes", generated)
 
     def test_new_section_generates_the_reference_format_without_accounting_prose(self):
         for name in ("exampleone", "exampletwo"):

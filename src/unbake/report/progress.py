@@ -19,7 +19,7 @@ from unbake.report import files, readme_layout
 from unbake.work import attempts
 
 # Bump when this step's output changes for the same inputs. Keys never digest the tool's code.
-SCHEMA = 7
+SCHEMA = 8
 # Only C earns exact matched credit. Original assembly remains a separate denominator category.
 DONE = {"c": ("c", "Matched C", ".c")}
 
@@ -255,7 +255,13 @@ def _replace_figures(content: str, document: dict[str, Any], version: str, table
 
 
 def _aggregate(reports: dict[str, dict[str, Any]]) -> dict[str, Any]:
-    figures = [_figures(document, version) for version, document in reports.items()]
+    # Overall bytes include initialized DATA using the canonical exact-credit
+    # counters. DATA contributes only verified similarity to the fuzzy figure.
+    figures = [
+        _figures(document, version, data=data)
+        for version, document in reports.items()
+        for data in (False, True)
+    ]
     matched = sum(row[0] for row in figures)
     total = sum(row[1] for row in figures)
     fuzzy = sum(row[1] * row[3] for row in figures) / total if total else 0.0
