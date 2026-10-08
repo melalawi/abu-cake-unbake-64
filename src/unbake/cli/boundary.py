@@ -21,6 +21,7 @@ Edit where functions and data start and end. Every form previews the change; add
   unbake boundary data NAME --version V --start 0x2000 --end 0x2010 [--apply]
   unbake boundary code-in-data FUNC --version V --start 0x3000 --end 0x3080 [--apply]
   unbake boundary import FILE [--apply]          # JSON list of boundary edits
+  unbake boundary prelude [FUNC ...] [--version V ...] [--apply]   # split dead leading bytes off a function
   unbake boundary same-symbol FILE [--apply]     # assert placements in several versions are one symbol
   unbake boundary name-data NAME --version V --address 0x80100000 [--rename-from OLD] [--apply]
 """
@@ -43,6 +44,10 @@ def register(parser: argparse.ArgumentParser) -> None:
     imported = verbs.add_parser("import", help="Apply a JSON file of boundary edits.")
     imported.add_argument("file", type=Path, metavar="FILE")
     imported.add_argument("--apply", action="store_true")
+    lead = verbs.add_parser("prelude", help="Split dead leading bytes, jump thunks and pre-frame stubs.")
+    lead.add_argument("subject", nargs="*", metavar="FUNC")
+    lead.add_argument("--version", action="append", default=[], metavar="V")
+    lead.add_argument("--apply", action="store_true")
     same = verbs.add_parser("same-symbol", help="Assert placements in several versions are one symbol.")
     same.add_argument("file", type=Path, metavar="FILE")
     same.add_argument("--apply", action="store_true")
@@ -65,6 +70,10 @@ def run(context: Context) -> Result:
         words = ["boundary", args.verb]
         if args.verb in ("import", "same-symbol"):
             words.append(str(args.file))
+        elif args.verb == "prelude":
+            words.extend(args.subject)
+            for version in args.version:
+                words.extend(("--version", version))
         else:
             words.append(args.subject)
             for option in ("version", "start", "end", "address", "rename_from"):
@@ -80,6 +89,8 @@ def run(context: Context) -> Result:
         prepared.assert_current(project)
     if args.verb == "import":
         outcome = boundary_ops.import_file(project, host, args.file, apply=args.apply)
+    elif args.verb == "prelude":
+        outcome = boundary_ops.prelude(project, host, args.subject, args.version, apply=args.apply)
     elif args.verb == "same-symbol":
         outcome = boundary_ops.same_symbol(project, host, args.file, apply=args.apply)
     elif args.verb == "name-data":

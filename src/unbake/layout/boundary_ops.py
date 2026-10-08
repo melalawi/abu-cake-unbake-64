@@ -80,6 +80,19 @@ def import_file(project: Project, host: Host, path: Path, *, apply: bool) -> Out
     return Outcome(text.splitlines(), versions, proved.lines() if proved is not None else ["no edits"])
 
 
+def prelude(project: Project, host: Host, names: list[str], versions: list[str], *, apply: bool) -> Outcome:
+    """Split dead leading bytes, jump thunks and stubs ahead of a frame opening into their own units."""
+    from unbake.layout import dead_prelude
+
+    found = dead_prelude.select(dead_prelude.census(project, versions or None), names, versions)
+    extra = [
+        f"{item.version} {item.name}: {item.size} B {item.shape} before 0x{item.new_address:08X} "
+        f"({item.function_size} B unit; {', '.join(item.references)})"
+        for item in found
+    ]
+    return _finish(project, host, dead_prelude.plan(project, found), apply, extra)
+
+
 def same_symbol(project: Project, host: Host, path: Path, *, apply: bool) -> Outcome:
     from unbake.layout import symbol_join
 
