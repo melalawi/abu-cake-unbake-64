@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import math
 import uuid
+from collections.abc import Iterable
 from contextlib import closing
 from dataclasses import asdict
 from pathlib import Path
@@ -722,6 +724,30 @@ def imported(project: Project, migration: dict[str, Any]) -> tuple[bytes, dict[s
     return b"".join(encoded(row) + b"\n" for row in events), summaries
 
 
+def current_receipts(
+    project: Project, receipts: dict[str, dict[str, Any]], publications: Iterable[str] = ()
+) -> tuple[dict[str, dict[str, Any]], list[str]]:
+    """Split ledger receipts into current ones and stale fuzzy publications, in one pass.
+
+    A fuzzy publication whose source was edited and committed since (a regenerated unit) proves an older
+    body: it is history, and the retained source takes a fresh unverified receipt instead of failing the whole
+    migration. Any other receipt that disagrees with its source stays in the first result for validation to refuse."""
+    published = set(publications)
+    fresh: dict[str, dict[str, Any]] = {}
+    stale: list[str] = []
+    for name, receipt in sorted(receipts.items()):
+        source = project.src / (name + ".c")
+        if (
+            name in published
+            and source.is_file()
+            and receipt.get("source_sha256") != hashlib.sha256(source.read_bytes()).hexdigest()
+        ):
+            stale.append(name)
+        else:
+            fresh[name] = receipt
+    return fresh, stale
+
+
 def apply(project: Project, migration: dict[str, Any]) -> dict[str, Any]:
     current = plan(project)
     if {k: v for k, v in migration.items() if k != "producer_certificates"} != {
@@ -788,8 +814,8 @@ def apply(project: Project, migration: dict[str, Any]) -> dict[str, Any]:
                     or len(history.order) != len(normalized)
                 ):
                     refuse("current-ledger representation readback differs; verified original backup retained")
-            known = dict(history.fuzzy_sources())
-            known.update({name: {} for name in history.publications()})
+            known, stale = current_receipts(project, history.fuzzy_sources(), history.publications())
+            known.update({name: {} for name in history.publications() if name not in stale})
             retained = retain(project, migration, known)
             for name, row in retained.items():
                 history.note(
@@ -829,7 +855,23 @@ def apply(project: Project, migration: dict[str, Any]) -> dict[str, Any]:
                     )
             from unbake.report import state
 
-            state.inventory(project, receipts=history.fuzzy_sources())
+            checked, unresolved = current_receipts(project, history.fuzzy_sources(), history.publications())
+            # A stale publication receipt is history; the retained row written above names the committed bytes.
+            for name, row in history.retained_sources().items():
+                if (
+                    name in unresolved
+                    and row["source_sha256"] == hashlib.sha256((project.src / (name + ".c")).read_bytes()).hexdigest()
+                ):
+                    checked[name] = {
+                        "source_sha256": row["source_sha256"],
+                        "compiler": row["compiler"],
+                        "score": None,
+                        "versions": {v: None for v in row["versions"]},
+                    }
+                    unresolved.remove(name)
+            if unresolved:
+                refuse("receipts still differ from retained source after refresh: " + ", ".join(unresolved))
+            state.inventory(project, receipts=checked)
         if changed:
             return {
                 "reused": False,
@@ -837,8 +879,9 @@ def apply(project: Project, migration: dict[str, Any]) -> dict[str, Any]:
                 "changed": changed,
                 "backup": migration["backup"],
                 "native_calls": 0,
+                **({"stale_receipts": stale} if stale else {}),
             }
-        return {"reused": True, "events": len(retained)}
+        return {"reused": True, "events": len(retained), **({"stale_receipts": stale} if stale else {})}
     content, expected = imported(project, migration)
     backup = project.root / migration["backup"]
     backup.mkdir(parents=True, exist_ok=True)

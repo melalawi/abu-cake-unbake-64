@@ -419,10 +419,10 @@ def run_native(
 
 def git_pathspec(argv: list[str]) -> tuple[list[str], str | None]:
     """Keep large add/commit path sets off argv, preserving one atomic Git operation."""
-    if "--" not in argv or not ({"add", "commit"} & set(argv[:argv.index("--")])):
+    if "--" not in argv or not ({"add", "commit"} & set(argv[: argv.index("--")])):
         return argv, None
     offset = argv.index("--")
-    paths = argv[offset + 1:]
+    paths = argv[offset + 1 :]
     # Leave ample room for the environment and pointer table on small ARG_MAX hosts.
     if sum(len(os.fsencode(value)) + 9 for value in argv) <= 32768:
         return argv, None

@@ -834,6 +834,7 @@ def land(
                 **{project.include[-1] / n: t.encode() for n, t in headers.items()},
                 **{edit.path: edit.after.encode() for edit in folded.source_edits},
             },
+            policy=host,
         )
     written = {
         project.src / f"{function}.c",

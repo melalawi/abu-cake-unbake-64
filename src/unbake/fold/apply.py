@@ -252,6 +252,7 @@ def fold(
             **{project.include[-1] / n: t.encode() for n, t in headers.items()},
             **{edit.path: edit.after.encode() for edit in source_edits},
         },
+        policy=host,
     )
     return Folded(function, folded, headers, tuple(split_edits), tuple(learned), source_edits, contract)
 

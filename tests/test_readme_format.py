@@ -15,7 +15,8 @@ FORBIDDEN = ("Retained drafts", "matching unknown", "Fuzzy % is known similarity
 
 
 def without_data(content):
-    return re.sub(r"<br><code>data +\[[^<]+</code>", "", content)
+    # The per-ROM total line is the one addition to the reference layout.
+    return re.sub(r"<code>total +\[[^<]+</code><br>", "", re.sub(r"<br><code>data +\[[^<]+</code>", "", content))
 
 
 def layout(content):
@@ -54,13 +55,13 @@ class ReadmeFormatTests(unittest.TestCase):
                 generate.assert_not_called()
                 self.assertEqual(replace.call_count, 2 * count + 1 if count > 1 else 1)
                 self.assertEqual(layout(rendered), layout(template))
-                self.assertEqual(len(NUMBERS.findall(rendered)), 4 * count + 1 if count > 1 else 3)
+                self.assertEqual(len(NUMBERS.findall(rendered)), 5 * count + 1 if count > 1 else 4)
                 self.assertNotEqual(rendered, template)
                 self.assert_art_only(rendered)
                 tables = re.findall(r"\| <pre>(.*?)</pre> \|", rendered, re.S)
                 self.assertEqual(len(tables), count)
                 for table in tables:
-                    self.assertEqual(re.findall(r"<code>(\w+) +\[", table), ["code", "data", "functions"])
+                    self.assertEqual(re.findall(r"<code>(\w+) +\[", table), ["total", "code", "data", "functions"])
                 if count == 1:
                     # Function accounting is preserved: actual definitions, rather than translation units.
                     self.assertIn("138 of 3,234", rendered)

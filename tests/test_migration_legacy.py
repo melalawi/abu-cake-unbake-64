@@ -245,3 +245,19 @@ class LegacyMigrationTests(ProjectCase):
         with self.assertRaisesRegex(Held, "inputs changed"):
             migrate_state.apply(self.project, planned)
         self.assertFalse((self.project.root / attempts.PATH).exists())
+
+
+class StaleReceiptTests(ProjectCase):
+    def test_every_stale_receipt_is_reported_in_one_pass_and_matching_ones_stay(self):
+        digest = hashlib.sha256
+        (self.project.src / "alpha.c").write_bytes(b"int a;\n")
+        (self.project.src / "beta.c").write_bytes(b"int b;\n")
+        (self.project.src / "gamma.c").write_bytes(b"int c;\n")
+        receipts = {
+            "alpha": {"source_sha256": digest(b"int a;\n").hexdigest()},
+            "beta": {"source_sha256": digest(b"older body\n").hexdigest()},
+            "gamma": {"source_sha256": digest(b"older body\n").hexdigest()},
+            "removed": {"source_sha256": "0" * 64},
+        }
+        fresh, stale = migrate_state.current_receipts(self.project, receipts, set(receipts))
+        self.assertEqual((sorted(fresh), stale), (["alpha", "removed"], ["beta", "gamma"]))

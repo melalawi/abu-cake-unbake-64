@@ -105,8 +105,14 @@ def _percentage(measures: dict[str, Any], field: str, name: str) -> float:
 
 
 def _figures(
-    document: dict[str, Any], name: str, functions: bool = False, *, data: bool = False
+    document: dict[str, Any], name: str, functions: bool = False, *, data: bool = False, total: bool = False
 ) -> tuple[int, int, float, float]:
+    if total:
+        # Whole-ROM bytes: code and initialized DATA together, DATA at its exact credit.
+        parts = [_figures(document, name), _figures(document, name, data=True)]
+        matched, size = sum(row[0] for row in parts), sum(row[1] for row in parts)
+        fuzzy = sum(row[1] * row[3] for row in parts) / size if size else 0.0
+        return matched, size, 100 * matched / size if size else 0.0, fuzzy
     measures = _measures(document, name)
     kind = "functions" if functions else "data" if data else "code"
     complete = _counter(measures, "matched_functions" if functions else "complete_" + kind, name)
@@ -131,10 +137,18 @@ def _bar(percent: float, fuzzy: float) -> str:
     return "█" * matched + "▒" * partial + "░" * (20 - matched - partial)
 
 
-def _line(label: str, document: dict[str, Any], version: str, functions: bool = False, *, data: bool = False) -> str:
-    matched, total, percent, fuzzy = _figures(document, version, functions, data=data)
+def _line(
+    label: str,
+    document: dict[str, Any],
+    version: str,
+    functions: bool = False,
+    *,
+    data: bool = False,
+    total: bool = False,
+) -> str:
+    matched, size, percent, fuzzy = _figures(document, version, functions, data=data, total=total)
     suffix = "" if functions or data else f" (~{fuzzy:.2f}%)"
-    return f"{label} [{_bar(percent, fuzzy)}]  {percent:5.2f}%{suffix}  {matched:,} of {total:,}"
+    return f"{label} [{_bar(percent, fuzzy)}]  {percent:5.2f}%{suffix}  {matched:,} of {size:,}"
 
 
 def progress(reports: dict[str, dict[str, Any]], descriptions: dict[str, str]) -> str:
@@ -162,12 +176,13 @@ def progress(reports: dict[str, dict[str, Any]], descriptions: dict[str, str]) -
                     stage="report",
                 )
             )
+        total_line = _line("total    ", document, version, total=True)
         byte_line = _line("code     ", document, version)
         data_line = _line("data     ", document, version, data=True)
         function_line = _line("functions", document, version, functions=True)
         blocks.append(
-            f"| {description} |\n|---|\n| <pre><code>{byte_line}</code><br><code>{data_line}</code>"
-            f"<br><code>{function_line}</code></pre> |"
+            f"| {description} |\n|---|\n| <pre><code>{total_line}</code><br><code>{byte_line}</code>"
+            f"<br><code>{data_line}</code><br><code>{function_line}</code></pre> |"
         )
     if len(reports) > 1:
         summaries = {"all": _aggregate(reports), **{v: _aggregate({v: row}) for v, row in reports.items()}}
@@ -191,7 +206,14 @@ _FIGURE = re.compile(
 def _replace_figures(content: str, document: dict[str, Any], version: str, table: bool) -> str:
     if table:
         content = re.sub(r"(<code>)bytes( +\[)", r"\1code \2", content)
-    expected = {"code", "data", "functions"} if table else {version}
+    if table and not re.search(r"<code>total +\[", content):
+        content = re.sub(
+            r"(<code>)code( +)(\[[^<]*)(</code>)",
+            lambda m: f"{m[1]}total{m[2][1:]}{m[3]}{m[4]}<br>{m[0]}",
+            content,
+            count=1,
+        )
+    expected = {"total", "code", "data", "functions"} if table else {version}
     if table and not re.search(r"<code>data +\[", content):
         pair = re.fullmatch(
             r"(?P<before>.*?<code>)(?P<bytes>code[^<]+)(?P<between></code>.*?<code>)(?P<functions>functions[^<]+)(?P<after></code>.*?)",
@@ -233,7 +255,9 @@ def _replace_figures(content: str, document: dict[str, Any], version: str, table
             )
         seen.append(label)
         functions = label == "functions"
-        matched, total, percent, fuzzy = _figures(document, version, functions, data=label == "data")
+        matched, total, percent, fuzzy = _figures(
+            document, version, functions, data=label == "data", total=label == "total"
+        )
         width = len(match["percent_pad"]) + len(match["percent"])
         percentage = f"{percent:.2f}"
         percentage = percentage.rjust(max(width, len(percentage) + 1))
