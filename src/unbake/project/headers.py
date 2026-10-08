@@ -762,6 +762,25 @@ class Graph:
                     sizes[node.name] = SCALARS[spelling][0]
                 elif (
                     isinstance(node.type, c_ast.ArrayDecl)
+                    and isinstance(node.type.type, c_ast.TypeDecl)
+                    and isinstance(node.type.dim, c_ast.Constant)
+                ):
+                    # Only literal positive bounds attest an extent here. Do
+                    # not infer bounds from initializer counts or unresolved
+                    # macros, expressions, variable or incomplete declarations.
+                    bound = re.fullmatch(
+                        r"(0[xX][0-9a-fA-F]+|0[0-7]*|[1-9][0-9]*)(?:[uU](?:[lL]{1,2})?|[lL]{1,2}[uU]?)?",
+                        node.type.dim.value,
+                    )
+                    element = declarations.canonical(declarations.node_type(node.type.type), aliases)
+                    element = re.sub(r"\b(?:const|volatile|restrict)\b\s*", "", element).strip()
+                    if bound and element in SCALARS:
+                        literal = bound[1]
+                        count = int(literal, 16 if literal.lower().startswith("0x") else 8 if literal[0] == "0" else 10)
+                        if count > 0:
+                            sizes[node.name] = count * SCALARS[element][0]
+                elif (
+                    isinstance(node.type, c_ast.ArrayDecl)
                     and node.type.dim is None
                     and isinstance(node.init, c_ast.Constant)
                     and node.init.type == "string"

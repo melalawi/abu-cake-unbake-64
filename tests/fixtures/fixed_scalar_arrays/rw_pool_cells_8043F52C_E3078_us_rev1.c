@@ -1,0 +1,6 @@
+/* Scalar pool consumed by func_8043F52C_de.
+ * US rev1 ROM 0xE3078-0xE3090.
+ */
+const float D_800DE448[2] = { 0.10810811072587967f, 0.5f };
+const float D_800DE450_de[2] = { 0.0045045046135783195f, 0.0045045046135783195f };
+const float D_800DE458[2] = { 0.0035211266949772835f, 0.0045045046135783195f };
