@@ -131,3 +131,51 @@ class LandConfigScopeTests(ProjectCase):
             with self.assertRaisesRegex(Held, "index changed since proof"):
                 land._compiler_config(self.project, FUNCTION, "ido-7.1", before, staged_before=staged_before)
         self.assertEqual(self.path.read_bytes(), before)
+
+
+class LandMigrationConfigTests(ProjectCase):
+    """The tool's own migrated config.toml is admitted with a separate migration commit; hand edits are not."""
+
+    native = LandConfigScopeTests.native
+
+    def setUp(self):
+        super().setUp()
+        import json
+
+        self.path = self.project.root / "config.toml"
+        self.head = (FIXTURE / "bt-head.toml").read_bytes()
+        self.index = self.project.root / ".git/index"
+        self.index.parent.mkdir()
+        self.index.write_bytes(b"x")
+        self.calls, self.blobs = [], {}
+        self.revision = "5a01eaed3ec9bfa32eaea921186c823253e74347"
+
+        migrated = toml.loads(self.head.decode())
+        migrated["schema"] = 2
+        self.migrated = toml.dumps(migrated).encode()
+        self.staged = self.head
+        self.path.write_bytes(self.migrated)
+        directory = self.project.root / ".unbake/migrations/abc"
+        directory.mkdir(parents=True)
+        (directory / "config.toml").write_bytes(self.head)
+        (directory / "plan.json").write_text(
+            json.dumps(
+                {"kind": "config.recipe-cutover", "writes": {"config.toml": self.migrated.decode()}, "file_copies": {}}
+            )
+        )
+
+    def test_migration_output_is_recognised_and_committed_alone(self):
+        with patch.object(process, "run_native", side_effect=self.native), journal.transaction(self.project):
+            self.assertIsNotNone(land.migrated_config(self.project))
+            commit = land.commit_migration(self.project, self.host)
+        self.assertEqual(commit, "a" * 40)
+        self.assertEqual(self.head, self.migrated)
+
+    def test_hand_edit_on_top_of_migration_is_not_admitted_and_refusal_names_keys(self):
+        edited = toml.loads(self.migrated.decode())
+        edited["build"]["cppflags"].append("-DUNPROVED")
+        self.path.write_bytes(toml.dumps(edited).encode())
+        with patch.object(process, "run_native", side_effect=self.native):
+            self.assertIsNone(land.migrated_config(self.project))
+            with self.assertRaisesRegex(Held, r"differing keys: .*build\.cppflags"):
+                land._compiler_config(self.project, FUNCTION, "ido-7.1", self.path.read_bytes())

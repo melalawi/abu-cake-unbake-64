@@ -1,6 +1,7 @@
 """Real closed headers converge on one owner before the public fold parses them."""
 
 from collections import Counter
+import hashlib
 from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
@@ -10,10 +11,29 @@ from unbake import config
 from unbake.config import Held
 from unbake.fold import declarations
 from unbake.layout.header_context import Headers
+from unbake.layout import split
 from unbake.layout.split import Edit
 from unbake.project.headers import include_headers
 
 FIXTURES = Path(__file__).parent / "fixtures/shared_provider"
+
+
+def _linked(project, host, obj, version, row, source, *, capture_info=None):
+    """Score-mode link mock that records the native digest chain the real link captures."""
+    if capture_info is not None:
+        words = split.words(project, row)
+        digest = lambda label: hashlib.sha256(label.encode()).hexdigest()  # noqa: E731
+        capture_info.update(
+            preprocessed_sha256=digest("preprocessed"),
+            object_sha256=digest("object"),
+            placed_object_sha256=digest("placed"),
+            linked_sha256=hashlib.sha256(words).hexdigest(),
+            compiler_pins=digest("pins"),
+            compile_argv=["cc"],
+            placement={"address": row.address, "rom_start": row.start, "rom_end": row.end},
+            placement_refusals=[],
+        )
+    return split.words(project, row), []
 
 
 class ProviderReuseTests(ProjectCase):
@@ -294,9 +314,7 @@ class ProviderReuseTests(ProjectCase):
         with (
             patch.object(compare, "view_for", return_value=view),
             patch.object(runner, "compile_unit", side_effect=compile_unit) as compile_calls,
-            patch.object(
-                runner, "link_function", side_effect=lambda p, h, o, v, row, f: (split.words(p, row), [])
-            ) as links,
+            patch.object(runner, "link_function", side_effect=_linked) as links,
         ):
             measured = compare.measure(self.project, self.host, source)
         self.assertTrue(measured.exact)

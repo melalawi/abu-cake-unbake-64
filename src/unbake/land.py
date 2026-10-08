@@ -390,6 +390,55 @@ def _unit_config(project: Project, function: str, ident: str, before: bytes) -> 
     return str(toml.dumps(data)).encode()
 
 
+def _differing_keys(left: dict[str, Any], right: dict[str, Any], prefix: str = "") -> list[str]:
+    """Dotted names of every table key or value that differs; lists and scalars are leaves."""
+    names: list[str] = []
+    for key in sorted(set(left) | set(right)):
+        name = f"{prefix}{key}"
+        a, b = left.get(key), right.get(key)
+        if key in left and key in right and isinstance(a, dict) and isinstance(b, dict):
+            names += _differing_keys(a, b, name + ".")
+        elif key not in left or key not in right or a != b:
+            names.append(name)
+    return names
+
+
+def migrated_config(project: Project) -> dict[str, Any] | None:
+    """The migration receipt that produced the working config.toml from the committed one, else None.
+
+    Proven by the receipt's own record: its backup is the committed config.toml and its planned write is
+    the working one. A hand edit on top of the migration matches no receipt."""
+    import json
+
+    path = project.root / "config.toml"
+    if "config.toml" not in dirty(project):
+        return None
+    committed = _git(project, "show", "HEAD:config.toml").encode()
+    working = path.read_bytes()
+    for directory in sorted((project.root / ".unbake/migrations").glob("*/")):
+        plan_path, backup = directory / "plan.json", directory / "config.toml"
+        if not plan_path.is_file() or not backup.is_file() or backup.read_bytes() != committed:
+            continue
+        plan = json.loads(plan_path.read_text())
+        if (
+            plan.get("kind") == "config.recipe-cutover"
+            and plan.get("writes", {}).get("config.toml", "").encode() == working
+        ):
+            return dict(plan)
+    return None
+
+
+def commit_migration(project: Project, host: Host) -> str | None:
+    """Commit the tool's own state migration output as its own commit before the first landing."""
+    plan = migrated_config(project)
+    if plan is None:
+        return None
+    owned = {*plan["writes"], *plan["file_copies"], "attempts.jsonl"}
+    changed = sorted(name for name in owned if name in dirty(project))
+    _commit(project, host, [project.root / name for name in changed], "Migrate project state to the current schema")
+    return _git(project, "rev-parse", "HEAD").strip()
+
+
 def _compiler_config(
     project: Project, function: str, ident: str, before: bytes, *, staged_before: bytes | None = None
 ) -> bytes:
@@ -418,10 +467,24 @@ def _compiler_config(
             != {key: value for key, value in committed.items() if key != "units"}
             or other_units(data) != other_units(staged)
         ):
+            names = sorted(
+                {
+                    *_differing_keys(
+                        {k: v for k, v in data.items() if k != "units"},
+                        {k: v for k, v in committed.items() if k != "units"},
+                    ),
+                    *_differing_keys(
+                        {k: v for k, v in staged.items() if k != "units"},
+                        {k: v for k, v in committed.items() if k != "units"},
+                    ),
+                    *(f"units.{n}" for n in _differing_keys(other_units(data), other_units(staged))),
+                }
+            )
             raise Held(
                 cause_named(
                     "land.config",
-                    f"land.config: {function}: unproved config changes outside its unit options",
+                    f"land.config: {function}: unproved config changes outside its unit options; "
+                    f"differing keys: {', '.join(names)}",
                     owner="land",
                     stage="land",
                 )
@@ -823,6 +886,8 @@ def land(
         source = proof.proposed_source if proof.proposed_source is not None else source
     finally:
         shutil.rmtree(stage, ignore_errors=True)
+    commit_migration(project, host)
+    config_staged_before = _git(project, "show", ":config.toml").encode()
     config_content = _compiler_config(project, function, ident, config_before, staged_before=config_staged_before)
     config_local = _unit_config(project, function, ident, config_before)
     config_staged = _unit_config(project, function, ident, config_staged_before)
