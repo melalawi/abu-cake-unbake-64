@@ -483,6 +483,16 @@ def measure(project: Project, policy: Host | None, version: str, *, current: Any
     for interval in coverage.intervals:
         size = interval.end - interval.start
         matched = coverage.bytes_in(interval.start, interval.end)
+        resource = interval.kind == "resource"
+        extents = [
+            extent
+            for extent in coverage.manifest["extents"]
+            if interval.start <= extent["start"] < extent["end"] <= interval.end
+        ]
+        owners = {extent["source"] for extent in extents}
+        metadata = {"complete": matched == size, "progress_categories": ["data", "resource"] if resource else ["data"]}
+        if len(owners) == 1:
+            metadata["source_path"] = next(iter(owners))
         units.append(
             {
                 "name": f"{interval.kind}:{interval.path}@{interval.start:X}",
@@ -493,20 +503,29 @@ def measure(project: Project, policy: Host | None, version: str, *, current: Any
                     "matched_data_percent": _share(matched, size),
                     "complete_data_percent": _share(matched, size),
                     "total_units": 1,
+                    "complete_units": int(matched == size),
                 },
-                "sections": [{"name": interval.kind, "size": str(size), "metadata": {}}],
+                "sections": [
+                    {
+                        "name": interval.kind,
+                        "size": str(size),
+                        "metadata": {},
+                        "fuzzy_match_percent": _share(matched, size),
+                    }
+                ],
                 "functions": [],
-                "metadata": {"complete": matched == size, "progress_categories": ["data"]},
+                "metadata": metadata,
             }
         )
     category_units: dict[str, list[dict[str, Any]]] = {
-        kind: [] for kind in ("c", "original_asm", "draft", "asm", "data")
+        kind: [] for kind in ("c", "original_asm", "draft", "asm", "data", "resource")
     }
     for row in current.units[version]:
         for member in split.unit_members(row):
             entry = _unit(member, members=[member], receipts=current.receipts, version=version)
             category_units[entry["metadata"]["progress_categories"][0]].append(entry)
     category_units["data"] = [unit for unit in units if "data" in unit["metadata"]["progress_categories"]]
+    category_units["resource"] = [unit for unit in units if "resource" in unit["metadata"]["progress_categories"]]
     categories = [
         {"id": ident, "name": label, "measures": _sum_measures(category_units[ident])}
         for ident, label in (
@@ -515,6 +534,7 @@ def measure(project: Project, policy: Host | None, version: str, *, current: Any
             ("draft", "Retained C draft"),
             ("asm", "Assembly"),
             ("data", "Declared data"),
+            ("resource", "Symbolic resources"),
         )
     ]
     return {"measures": _sum_measures(units), "units": units, "categories": categories, "version": 2}

@@ -40,6 +40,28 @@ def admission(project: Project, host: Host, head: str, base: str) -> dict[str, A
             if (project.root / name).parent == project.src and Path(name).suffix in (".c", ".s")
         )
     )
+    from unbake.report import data
+
+    history = attempts.ledger(project)
+    proofs = {}
+
+    def available(version: str, unit: buildfiles.Unit) -> bool:
+        subject = version + "/" + unit.kind + "/" + unit.name
+        prior = history.latest("native.data", subject)
+        if prior is not None and data.current_dependencies(project, prior, version) is None:
+            return False
+        native = project.build_link(version) / ("data" if unit.kind == "data" else "resources") / (unit.name + ".bin")
+        if not native.is_file():
+            return False
+        with project.version(version).baserom.open("rb") as stream:
+            stream.seek(unit.start)
+            original = stream.read(unit.size)
+        proof = data.capture_producer(project, version, unit, native.read_bytes(), original)
+        if proof is None:
+            return False
+        proofs[version, unit] = proof
+        return True
+
     data_scopes = []
     resource_scopes = []
     selected_sources = set(sources)
@@ -51,7 +73,7 @@ def admission(project: Project, host: Host, head: str, base: str) -> dict[str, A
         previous = buildfiles.data_bindings(project, version, text=prior_text) if prior_text is not None else current
         for unit, binding in current.items():
             source = project.src / (unit.name + ".c")
-            if source in sources or previous.get(unit) != binding:
+            if source in sources or previous.get(unit) != binding or available(version, unit):
                 if not source.is_file():
                     raise Held(
                         cause_named(
@@ -72,7 +94,12 @@ def admission(project: Project, host: Host, head: str, base: str) -> dict[str, A
         for resource, source_name in current_resources.items():
             source = project.root / source_name
             resource_headers = {p.relative_to(project.root).as_posix() for p in buildfiles.resource_inputs(project)}
-            if source_name in changed or resource not in previous_resources or changed & resource_headers:
+            if (
+                source_name in changed
+                or resource not in previous_resources
+                or changed & resource_headers
+                or available(version, resource)
+            ):
                 resource_scopes.append((version, resource))
                 selected_sources.add(source)
     from unbake.decomp import checks
@@ -104,8 +131,8 @@ def admission(project: Project, host: Host, head: str, base: str) -> dict[str, A
         for row in split.functions(project, version):
             if row.kind not in ("c", "hasm"):
                 continue
-            unit = Path(row.path).name
-            source = project.src / (unit + (".s" if row.kind == "hasm" else ".c"))
+            code_unit = Path(row.path).name
+            source = project.src / (code_unit + (".s" if row.kind == "hasm" else ".c"))
             if source not in sources:
                 continue
             if not source.is_file():
@@ -117,7 +144,7 @@ def admission(project: Project, host: Host, head: str, base: str) -> dict[str, A
                         stage="publish",
                     )
                 )
-            native = project.build_link(version) / ("hasm" if row.kind == "hasm" else "units") / (unit + ".bin")
+            native = project.build_link(version) / ("hasm" if row.kind == "hasm" else "units") / (code_unit + ".bin")
             if not native.is_file():
                 target = native.relative_to(project.root).as_posix()
                 raise Held(
@@ -134,12 +161,12 @@ def admission(project: Project, host: Host, head: str, base: str) -> dict[str, A
                 raise Held(
                     cause_named(
                         "publish.native_mismatch",
-                        f"{unit} {version}: native linked bytes differ from ROM slice",
+                        f"{code_unit} {version}: native linked bytes differ from ROM slice",
                         owner="project.publication_push",
                         stage="publish",
                     )
                 )
-            scopes.append({"function": unit, "version": version, "bytes": len(linked)})
+            scopes.append({"function": code_unit, "version": version, "bytes": len(linked)})
             work["native_bytes_read"] += len(linked)
             work["rom_bytes_read"] += len(original)
             work["functions_compared"] += 1
@@ -168,6 +195,9 @@ def admission(project: Project, host: Host, head: str, base: str) -> dict[str, A
                     stage="publish",
                 )
             )
+        proof = proofs.get((version, unit)) or data.capture_producer(project, version, unit, linked, original)
+        if proof is not None:
+            proofs[version, unit] = proof
         scopes.append({"data": unit.name, "version": version, "rom_start": unit.start, "bytes": unit.size})
         work["native_bytes_read"] += len(linked)
         work["rom_bytes_read"] += len(original)
@@ -197,6 +227,9 @@ def admission(project: Project, host: Host, head: str, base: str) -> dict[str, A
                     stage="publish",
                 )
             )
+        proof = proofs.get((version, resource)) or data.capture_producer(project, version, resource, linked, original)
+        if proof is not None:
+            proofs[version, resource] = proof
         scopes.append(
             {
                 "resource": resource.name,
@@ -217,6 +250,7 @@ def admission(project: Project, host: Host, head: str, base: str) -> dict[str, A
         "base": base,
         "scopes": scopes,
         "source_findings": [],
+        "native_data": list(proofs.values()),
         "work": work,
         "elapsed_ns": time.perf_counter_ns() - started,
     }
@@ -422,6 +456,18 @@ def push(project: Project, host: Host, remote: str, *, attempts_limit: int = 5) 
                     ),
                     data={"check": checked, "head": head},
                 )
+            # Persist the already accepted standalone proofs in the existing tracked
+            # Ledger. CI owns canonical report regeneration; no verifier runs here.
+            from unbake.report import data
+
+            with journal.transaction(current):
+                events = data.record_producers(current, checked.pop("native_data", []))
+                if events:
+                    _git(current, "add", "--", attempts.PATH)
+                    _git(current, "commit", "-m", "Record accepted standalone native DATA and resource proofs")
+                    head = _git(current, "rev-parse", "HEAD")
+                    checked["head"] = head
+                    checked["native_data_events"] = events
             validated = (head, tip)
         try:
             _git(project, "push", "--", remote, head + ":refs/heads/" + branch)

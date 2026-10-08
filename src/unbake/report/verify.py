@@ -77,6 +77,7 @@ def source_paths(project: Project) -> tuple[Path, ...]:
         project.tools / "compilers.sha256",
     }
     paths.update(path for path in project.src.rglob("*") if path.is_file())
+    paths.update(path for path in (project.root / "resources").rglob("*") if path.is_file())
     paths.update(path for root in project.include for path in root.rglob("*") if path.is_file())
     for version in project.versions:
         meta = project.version(version)
