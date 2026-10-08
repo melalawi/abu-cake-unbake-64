@@ -78,6 +78,9 @@ class Context:
             )
         if self._project is None:
             self._project = config.load(self.root)
+            from unbake import effort
+
+            effort.stage_log(self._project.build / "stages.jsonl")
         return self._project
 
     def pending(self) -> PendingProject:

@@ -1,5 +1,8 @@
 import inspect
+import json
+import tempfile
 import unittest
+from pathlib import Path
 
 from unbake import effort, steps
 from unbake.tui import progress
@@ -33,6 +36,29 @@ class PooledStepRegistry(unittest.TestCase):
         finally:
             effort.expect_workers(1)
         self.assertIn(f"{effort.PARENT_ONLY}Looping units ({effort.PARENT_ITEMS + 1} items)", names)
+
+    def test_stage_over_thirty_seconds_at_one_core_is_parent_only(self) -> None:
+        effort.expect_workers(4)
+        try:
+            self.assertTrue(effort.parent_only("x", 3, False, effort.PARENT_SECONDS + 1, effort.PARENT_SECONDS + 1))
+            self.assertFalse(effort.parent_only("x", 3, False, effort.PARENT_SECONDS + 1, 8 * effort.PARENT_SECONDS))
+            self.assertFalse(effort.parent_only("x", 3, False, effort.PARENT_SECONDS - 1, 1.0))
+            self.assertFalse(effort.parent_only("x", 3, True, 300.0, 300.0))
+        finally:
+            effort.expect_workers(1)
+
+    def test_stages_are_written_as_they_finish(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            log = Path(root) / "build" / "stages.jsonl"
+            log.parent.mkdir()
+            effort.stage_log(log)
+            try:
+                with progress.task("Alpha"), self.assertRaises(RuntimeError), progress.task("Beta"):
+                    raise RuntimeError("killed mid-stage")
+            finally:
+                effort.stage_log(None)
+            names = [json.loads(line)["stage"] for line in log.read_text().splitlines()]
+        self.assertEqual(["Beta", "Alpha"], names)
 
 
 if __name__ == "__main__":

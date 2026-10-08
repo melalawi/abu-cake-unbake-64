@@ -8,6 +8,7 @@ its own; a mark taken before several windows sees the highest of them."""
 from __future__ import annotations
 
 import contextlib
+import json
 import math
 import os
 import resource
@@ -115,14 +116,36 @@ def expect_workers(count: int) -> None:
     _width = count
 
 
-def parent_only(label: str, items: int, pooled: bool) -> bool:
-    return _width > 1 and items > PARENT_ITEMS and not pooled
+# Seconds a parent stage may run on about one core with workers available before the guard names it.
+PARENT_SECONDS = 30.0
+
+
+def parent_only(label: str, items: int, pooled: bool, wall: float = 0.0, cpu: float = 0.0) -> bool:
+    """A stage the parent ran alone: many items with no pool task, or over PARENT_SECONDS at about one core."""
+    if _width <= 1 or pooled:
+        return False
+    return items > PARENT_ITEMS or (wall > PARENT_SECONDS and cpu < 1.5 * wall)
+
+
+_sink: Path | None = None
+
+
+def stage_log(path: Path | None) -> None:
+    """Append each stage to PATH as it finishes, so a refused or killed command still leaves its timings."""
+    global _sink
+    _sink = path
 
 
 def record_stage(name: str, wall: float, cpu: float) -> None:
     """One finished stage: its wall seconds and the CPU seconds all processes spent in it."""
     with _lock:
         _stages.append((name, wall, cpu))
+        sink = _sink
+    if sink is not None:
+        with contextlib.suppress(OSError), sink.open("a") as handle:
+            handle.write(
+                json.dumps({"stage": name, "wall_seconds": round(wall, 3), "cpu_seconds": round(cpu, 3)}) + "\n"
+            )
 
 
 def count(name: str, done: int, total: int) -> None:

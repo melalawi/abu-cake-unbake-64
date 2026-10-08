@@ -509,7 +509,7 @@ class Graph:
 
     def resolve(self, parent: Path, include: Include) -> Resolution:
         if include.unknown:
-            return Resolution(None, (), True)
+            return Resolution(None, (), True, f"{parent}: include {include.name!r} is not a literal header name")
         roots = (
             *((parent.parent, *self.search.quote_roots) if include.quoted else ()),
             *self.search.include_roots,

@@ -234,7 +234,8 @@ def fold_source(
     if contract is not None:
         self_prototype.require_complete(exact_entry, text, function, versions)
         headers = Headers({**headers.texts, **{edit.path: edit.after for edit in owning_edits}}, root=headers.root)
-    contracts = namespace.project_declarations(project, headers.texts, texts=(text,))
+    contracts = namespace.project_declarations(project, headers.texts, texts=(text,), host=policy)
+    contracts.prepare(headers.texts.values(), policy, project.cache)
     identity_edits = [
         Edit(path, before, after, versions)
         for path, before in headers.texts.items()

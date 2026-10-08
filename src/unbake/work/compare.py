@@ -173,6 +173,9 @@ def view_for(project: Project, file: Path, function: str) -> Project:
 
     if project.work_include or not file.resolve().is_relative_to(project.work.resolve()):
         return project
+    from unbake.decomp import field_access
+
+    field_access.restore(project, function, file.read_text())
     fold_apply.link_private_includes(project, function)
     return draft_view(project, function)
 
@@ -189,7 +192,7 @@ def measure(
     """Measure without recording an attempt. Compile failures retain native faults and nonexact placeholders.
     Link failures refuse by default; explicit scoped comparison retains them per version so no optional
     version's failure prevents measuring the required ones. A fault is never an exact comparison."""
-    from unbake import runner
+    from unbake import runner, tui
     from unbake.decomp import checks
 
     started = time.monotonic()
@@ -200,7 +203,8 @@ def measure(
     view = view_for(project, file, function)
     content = file.read_bytes()
     input_view = view
-    dependency_before = operation_dependencies(input_view, host, file)
+    with tui.task("Reading dependencies"):
+        dependency_before = operation_dependencies(input_view, host, file)
     non_matching = (
         file.resolve() == (project.src / f"{function}.c").resolve()
         and attempts.ledger(project).fuzzy(function) is not None
@@ -275,7 +279,7 @@ def measure(
                 "target_sha256": hashlib.sha256(target).hexdigest(),
                 "dependencies": dependency_before.document(),
                 "dependency_digest": dependency_before.digest,
-                "dependency_current": operation_dependencies(input_view, host, file) == dependency_before,
+                "dependency_current": False,
                 "unit_recipe": view.recipe_for(function).document(),
             }
             if not {"preprocessed_sha256", "object_sha256", "placed_object_sha256"} <= capture_info.keys():
@@ -285,6 +289,14 @@ def measure(
                 result.typed["relocation"] += len(problems)
                 result.lines.extend(f"constant: {problem}" for problem in problems)
             results[version] = result
+    # One readback after every version compiled: the closure is the same for each, so a per-version readback
+    # only repeated the whole header scan.
+    if any(result.provenance for result in results.values()):
+        with tui.task("Reading dependencies back"):
+            current = operation_dependencies(input_view, host, file) == dependency_before
+        for result in results.values():
+            if result.provenance:
+                result.provenance["dependency_current"] = current
     digest = hashlib.sha256(content).hexdigest()
     compiler = view.compiler_reference(function)
     compared = Compared(
@@ -464,6 +476,11 @@ def operation_dependencies(project: Project, host: Host, file: Path) -> Dependen
             },
             "source_sha256": inputs.digest(file, algorithm="sha256", reuse=cache.configured()),
             "dependencies_unknown": any(closure.unknown for closure in closures),
+            **(
+                {"unresolved_includes": sorted({line for closure in closures for line in closure.unresolved})}
+                if any(closure.unresolved for closure in closures)
+                else {}
+            ),
         },
         {**dependencies.recipes, "compare": recipe},
     )

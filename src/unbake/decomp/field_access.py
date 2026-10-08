@@ -217,35 +217,89 @@ def share(
                     stage="m2c",
                 )
             )
-        key = hashlib.sha256(f"{offset}:{type_name}".encode()).hexdigest()[:12]
-        tag = f"Measured_{function}_{key}"
-        if offset >= 0:
-            padding = f"unsigned char padding[{offset}]; " if offset else ""
-            body = padding + declarator(type_name, "value") + ";"
-            access = f"((struct {tag} *)({base}))->value"
-        else:
-            size = max(-offset, width)
-            size = (size + alignment - 1) // alignment * alignment
-            prefix_size = size + offset
-            body = (
-                (f"unsigned char padding[{prefix_size}]; " if prefix_size else "")
-                + declarator(type_name, "value")
-                + ";"
-            )
-            trailing = size - prefix_size - width
-            if trailing:
-                body += f" unsigned char trailing[{trailing}];"
-            access = f"((struct {tag} *)({base}))[-1].value"
-        views[tag] = (
-            f"/* Measured {width}-byte access at {literal}; storage view, complete object unknown. */\n"
-            f"struct {tag} {{ {body} }};"
-        )
+        tag, access, view = storage_view(function, base, offset, type_name, width, alignment, literal)
+        views[tag] = view
         return access
 
     output = calls(output, "M2C_FIELD", replace)
     if not views:
         return output, None
     shared = project.include[0] / "common" / f"draft_fields_{function}.h"
-    guard = f"UNBAKE_DRAFT_FIELDS_{function.upper()}_H"
-    atomic_files.text(shared, f"#ifndef {guard}\n#define {guard}\n" + "\n".join(views.values()) + "\n#endif\n")
+    atomic_files.text(shared, header_text(function, list(views.values())))
     return output, shared
+
+
+def header_text(function: str, views: list[str]) -> str:
+    guard = f"UNBAKE_DRAFT_FIELDS_{function.upper()}_H"
+    return f"#ifndef {guard}\n#define {guard}\n" + "\n".join(views) + "\n#endif\n"
+
+
+def storage_view(
+    function: str, base: str, offset: int, type_name: str, width: int, alignment: int, literal: str
+) -> tuple[str, str, str]:
+    """Tag, access expression and declaration of one measured storage view."""
+    from unbake.typemap.declarations import declarator
+
+    key = hashlib.sha256(f"{offset}:{type_name}".encode()).hexdigest()[:12]
+    tag = f"Measured_{function}_{key}"
+    if offset >= 0:
+        padding = f"unsigned char padding[{offset}]; " if offset else ""
+        body = padding + declarator(type_name, "value") + ";"
+        access = f"((struct {tag} *)({base}))->value"
+    else:
+        size = max(-offset, width)
+        size = (size + alignment - 1) // alignment * alignment
+        prefix_size = size + offset
+        body = (f"unsigned char padding[{prefix_size}]; " if prefix_size else "") + declarator(type_name, "value") + ";"
+        trailing = size - prefix_size - width
+        if trailing:
+            body += f" unsigned char trailing[{trailing}];"
+        access = f"((struct {tag} *)({base}))[-1].value"
+    view = (
+        f"/* Measured {width}-byte access at {literal}; storage view, complete object unknown. */\n"
+        f"struct {tag} {{ {body} }};"
+    )
+    return tag, access, view
+
+
+def restore(project: Project, function: str, source: str) -> Path | None:
+    """Rebuild the draft's measured-storage header when a source includes it and no copy exists.
+
+    A view tag is a hash of its offset and field type, so each tag the source uses is recovered by searching
+    the scalar types and the pointer types the source names. A tag that cannot be recovered is refused."""
+    name = f"common/draft_fields_{function}.h"
+    if not re.search(rf'^[ \t]*#[ \t]*include[ \t]*"{re.escape(name)}"', source, re.M):
+        return None
+    for root in (*project.work_include, project.work / function / "include", *project.include):
+        if (root / name).is_file():
+            return None
+    wanted = list(dict.fromkeys(re.findall(rf"\bstruct\s+Measured_{re.escape(function)}_([0-9a-f]{{12}})\b", source)))
+    pointers = {"void *"}
+    for spelled in re.findall(r"\b((?:struct\s+)?[A-Za-z_]\w*)\s*\*", source):
+        pointers.add(f"{spelled} *")
+    types = {**SCALARS, **{t: (4, 4) for t in sorted(pointers)}}
+    found: dict[str, str] = {}
+    for offset in range(-256, 0x20000):
+        for type_name, (width, alignment) in types.items():
+            if offset % alignment:
+                continue
+            key = hashlib.sha256(f"{offset}:{type_name}".encode()).hexdigest()[:12]
+            if key in wanted and key not in found:
+                literal = f"{offset:#x}".upper().replace("0X", "0x") if offset > 9 else str(offset)
+                found[key] = storage_view(function, "base", offset, type_name, width, alignment, literal)[2]
+        if wanted and len(found) == len(wanted):
+            break
+    missing = [key for key in wanted if key not in found]
+    if missing or not wanted:
+        raise Held(
+            cause_named(
+                "draft.fields_missing",
+                f"draft.fields_missing: {function}: {name} is included but absent from every include root; "
+                + (f"measured views {missing} cannot be rebuilt" if wanted else "the source uses no measured view"),
+                owner="decomp.field_access",
+                stage="draft",
+            )
+        )
+    shared = project.work / function / "include" / name
+    atomic_files.text(shared, header_text(function, [found[key] for key in wanted]))
+    return shared

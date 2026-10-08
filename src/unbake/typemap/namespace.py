@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import copy
 import re
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
@@ -18,6 +18,91 @@ from unbake.process import capture
 from unbake.process import named as cause_named
 
 
+def _scan(text: str) -> tuple[list[tuple[int, int]], dict[str, str]]:
+    from unbake.layout import redeclarations
+
+    spans = redeclarations.spans(text)
+    typedefs: dict[str, str] = {}
+    for start, end in spans:
+        statement = text[start:end]
+        if statement.startswith("typedef"):
+            for name in cdecl.declarations(statement).typedefs:
+                typedefs[name] = statement
+    return spans, typedefs
+
+
+def _prototypes(row: FunctionDeclarations, text: str) -> list[tuple[str, str]]:
+    found: list[tuple[str, str]] = []
+    if row.names.isdisjoint(re.findall(r"\b[A-Za-z_]\w*\b", text)):
+        return found
+    generator = c_generator.CGenerator()
+    spans = row.spans.get(text)
+    if spans is None:
+        spans = row.spans[text] = _scan(text)[0]
+    for start, end in spans:
+        statement = text[start:end]
+        if row.names.isdisjoint(re.findall(r"\b[A-Za-z_]\w*\b", statement)):
+            continue
+        for node in row.tree(statement).ext:
+            if isinstance(node, c_ast.Decl) and node.name in row.names and row.function(node.type):
+                found.append((node.name, generator.visit(node) + ";"))
+    return found
+
+
+def _fan_out(host: Host | None, cache_root: Path | None, job: Any, shared: Any, texts: list[str]) -> list[Any]:
+    """JOB over every text in the pool; the shared value and cache root go to each worker once."""
+    from unbake import pool, tui
+
+    batches = [texts[start : start + 64] for start in range(0, len(texts), 64)]
+    with tui.task("Reading header declarations", len(texts)):
+        done = pool.run(host, job, batches, (cache_root, shared))
+    return [row for batch in done for row in batch]
+
+
+def _cached(cache_root: Path, kind: str, parts: tuple[str, ...], compute: Any) -> Any:
+    from unbake import cache
+
+    return cache.Cache(cache_root).value(kind, cache.key(*parts), cache.JSON, compute)
+
+
+def _scan_job(shared: Any, texts: list[str]) -> list[Any]:
+    root, _ = shared
+    rows = []
+    for text in texts:
+        spans, typedefs = _cached(root, "namespace-scan", (text,), lambda text=text: list(_scan(text)))
+        rows.append(([(a, b) for a, b in spans], typedefs))
+    return rows
+
+
+def _prototype_job(shared: Any, texts: list[str]) -> list[Any]:
+    root, (names, aliases, typedefs) = shared
+    from unbake import cache
+
+    row = FunctionDeclarations._worker(names, aliases, typedefs)
+    contracts = cache.key(repr(names), repr(aliases), repr(sorted(typedefs.items())))
+    return [
+        _cached(root, "namespace-prototypes", (contracts, text), lambda text=text: _prototypes(row, text))
+        for text in texts
+    ]
+
+
+def _rewrite_job(shared: Any, texts: list[str]) -> list[str | None]:
+    root, (names, aliases, typedefs, prototypes, records) = shared
+    from unbake import cache
+
+    row = FunctionDeclarations._worker(names, aliases, typedefs)
+    row.prototypes, row.records = prototypes, records
+    contracts = cache.key(repr(names), repr(aliases), repr(sorted(typedefs.items())), repr(sorted(prototypes.items())))
+    contracts = cache.key(contracts, repr(sorted((k, repr(v)) for k, v in records.items())))
+    rows: list[str | None] = []
+    for text in texts:
+        try:
+            rows.append(_cached(root, "namespace-rewrite", (contracts, text), lambda text=text: row.rewrite(text)))
+        except Held:
+            rows.append(None)
+    return rows
+
+
 class FunctionDeclarations:
     """Repair address-only object receipts using code identity, never name prefixes.
 
@@ -26,9 +111,14 @@ class FunctionDeclarations:
     linkage for an address reference without inventing a parameter list.
     """
 
-    def __init__(self, value: dict[str, Any], contents: Mapping[Path, str]) -> None:
-        from unbake.layout import redeclarations
-
+    def __init__(
+        self,
+        value: dict[str, Any],
+        contents: Mapping[Path, str],
+        *,
+        host: Host | None = None,
+        cache_root: Path | None = None,
+    ) -> None:
         self.names = set(value.get("function_symbols", ())) | value.get("functions", {}).keys()
         self.records = value.get("functions", {})
         self.typedefs: dict[str, str] = {}
@@ -39,26 +129,39 @@ class FunctionDeclarations:
         self.aliases = set(value.get("typedefs", {}))
         if not self.names:
             return
-        # Typedef-based function declarations need their actual declarator,
-        # rather than the parser's temporary scalar typedef scaffolding.
-        for text in dict.fromkeys(contents.values()):
-            self.spans[text] = redeclarations.spans(text)
-            for start, end in self.spans[text]:
-                statement = text[start:end]
-                if statement.startswith("typedef"):
-                    for name in cdecl.declarations(statement).typedefs:
-                        self.typedefs[name] = statement
-        generator = c_generator.CGenerator()
-        for text in dict.fromkeys(contents.values()):
-            if self.names.isdisjoint(re.findall(r"\b[A-Za-z_]\w*\b", text)):
-                continue
-            for start, end in self.spans[text]:
-                statement = text[start:end]
-                if self.names.isdisjoint(re.findall(r"\b[A-Za-z_]\w*\b", statement)):
-                    continue
-                for node in self.tree(statement).ext:
-                    if isinstance(node, c_ast.Decl) and node.name in self.names and self.function(node.type):
-                        self.prototypes.setdefault(node.name, generator.visit(node) + ";")
+        texts = list(dict.fromkeys(contents.values()))
+        pooled = host is not None and cache_root is not None
+        # Parsing every header is a pure function of its text: pooled across the workers and kept in the project
+        # cache, so a later landing reads what an earlier one parsed.
+        scanned = _fan_out(host, cache_root, _scan_job, (), texts) if pooled else [_scan(text) for text in texts]
+        for text, (spans, typedefs) in zip(texts, scanned, strict=True):
+            self.spans[text] = [(start, end) for start, end in spans]
+            self.typedefs.update(typedefs)
+        shared = (sorted(self.names), sorted(self.aliases), self.typedefs)
+        found = (
+            _fan_out(host, cache_root, _prototype_job, shared, texts)
+            if pooled
+            else [_prototypes(self, text) for text in texts]
+        )
+        for rows in found:
+            for name, prototype in rows:
+                self.prototypes.setdefault(name, prototype)
+
+    @classmethod
+    def _worker(cls, names: list[str], aliases: list[str], typedefs: dict[str, str]) -> FunctionDeclarations:
+        row = cls({}, {})
+        row.names, row.aliases, row.typedefs = set(names), set(aliases), dict(typedefs)
+        return row
+
+    def prepare(self, texts: Iterable[str], host: Host | None, cache_root: Path | None) -> None:
+        """Rewrite every text in the pool, cached by its text and these contracts; a refusal is left to rewrite."""
+        todo = [t for t in dict.fromkeys(texts) if t not in self.rewritten]
+        if host is None or cache_root is None or not self.names or len(todo) < 2:
+            return
+        shared = (sorted(self.names), sorted(self.aliases), self.typedefs, self.prototypes, self.records)
+        for text, after in zip(todo, _fan_out(host, cache_root, _rewrite_job, shared, todo), strict=True):
+            if after is not None:
+                self.rewritten[text] = after
 
     def tree(self, text: str) -> Any:
         if text not in self.parsed:
@@ -135,7 +238,7 @@ class FunctionDeclarations:
 
 
 def project_declarations(
-    project: Project, contents: Mapping[Path, str], *, texts: tuple[str, ...] = ()
+    project: Project, contents: Mapping[Path, str], *, texts: tuple[str, ...] = (), host: Host | None = None
 ) -> FunctionDeclarations:
     """Read code placement once per VERSION and only requested solved contracts."""
     from unbake.layout import split
@@ -153,7 +256,9 @@ def project_declarations(
     names &= words
     database = types_db.path(project)
     records = types_db.entries(database, "functions", names) if names and database.is_file() else {}
-    return FunctionDeclarations({"function_symbols": names, "functions": records}, contents)
+    return FunctionDeclarations(
+        {"function_symbols": names, "functions": records}, contents, host=host, cache_root=project.cache
+    )
 
 
 def publication_outputs(
@@ -227,7 +332,7 @@ def comparison_view(
     if contents is None:
         contents = Headers.contents(project)
     if contracts is None:
-        contracts = project_declarations(project, contents, texts=(text,))
+        contracts = project_declarations(project, contents, texts=(text,), host=host)
     after = contracts.rewrite(text)
     changed = {
         path: rewritten for path, before in contents.items() if (rewritten := contracts.rewrite(before)) != before

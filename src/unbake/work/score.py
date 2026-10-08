@@ -78,12 +78,17 @@ class Measurement:
 
     @property
     def provenance_valid(self) -> bool:
+        return not self.proof_gaps()
+
+    def proof_gaps(self) -> list[str]:
+        """Every piece of the strict native proof that is missing or unusable, each by name."""
         import re
 
         from unbake.compilers.recipe_options import recipe_digest
         from unbake.work.attempts import dependency_record
 
         proof = self.provenance
+        gaps = []
         required = (
             "source_sha256",
             "preprocessed_sha256",
@@ -95,29 +100,39 @@ class Measurement:
             "dependency_digest",
             "compiler_pins",
         )
-        if any(
-            not isinstance(proof.get(key), str) or re.fullmatch(r"[0-9a-f]{64}", proof[key]) is None for key in required
+        gaps += [
+            f"{key} missing"
+            for key in required
+            if not isinstance(proof.get(key), str) or re.fullmatch(r"[0-9a-f]{64}", proof[key]) is None
+        ]
+        if proof.get("dependency_current") is not True:
+            gaps.append("dependency_current: the header closure changed while comparing")
+        if proof.get("placement_refusals") != []:
+            gaps.append(f"placement_refusals: {proof.get('placement_refusals')}")
+        if proof.get("linked_sha256") != self.strict.get("linked_sha256"):
+            gaps.append("linked_sha256 differs from the strict link")
+        if proof.get("target_sha256") != self.strict.get("target_sha256"):
+            gaps.append("target_sha256 differs from the strict link")
+        if recipe_digest(proof.get("recipe")) != proof.get("recipe_digest") or not (proof.get("recipe") or {}).get(
+            "pins"
         ):
-            return False
-        if proof.get("dependency_current") is not True or proof.get("placement_refusals") != []:
-            return False
-        if proof["linked_sha256"] != self.strict.get("linked_sha256") or proof["target_sha256"] != self.strict.get(
-            "target_sha256"
-        ):
-            return False
-        if recipe_digest(proof.get("recipe")) != proof["recipe_digest"] or not proof.get("recipe", {}).get("pins"):
-            return False
+            gaps.append("recipe: digest or compiler pins unusable")
         try:
             dependencies = dependency_record(proof["dependencies"])
         except (KeyError, TypeError, ValueError):
-            return False
-        return (
-            dependencies.digest == proof["dependency_digest"]
-            and dependencies.values.get("dependencies_unknown") is False
-            and bool(dependencies.files)
-            and bool(proof.get("placement"))
-            and bool(proof.get("compile_argv"))
-        )
+            return [*gaps, "dependencies: record unreadable"]
+        if dependencies.digest != proof.get("dependency_digest"):
+            gaps.append("dependency_digest differs from the dependency record")
+        if dependencies.values.get("dependencies_unknown") is not False:
+            unresolved = dependencies.values.get("unresolved_includes") or ["an include that resolves nowhere"]
+            gaps.append("dependencies_unknown: " + "; ".join(unresolved))
+        if not dependencies.files:
+            gaps.append("dependencies: no pinned files")
+        if not proof.get("placement"):
+            gaps.append("placement missing")
+        if not proof.get("compile_argv"):
+            gaps.append("compile_argv missing")
+        return gaps
 
     @property
     def exact(self) -> bool:

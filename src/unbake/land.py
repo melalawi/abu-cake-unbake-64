@@ -329,10 +329,17 @@ def exact_attempt(
         ) from error
     broken = [checks.plain(row.finding) for row in checks.findings(project, (file,), Cache(project.cache)).unmarked]
     if not compare.acceptance(measurements, selected, broken):
+        gaps = [
+            f"{version}: {gap}"
+            for version in selected
+            if version in measurements
+            for gap in measurements[version].proof_gaps()
+        ] + [f"source rule: {line}" for line in broken]
         raise Held(
             cause_named(
                 "land.not_exact",
-                f"{function}: publication requires complete strict native proof and source rules",
+                f"{function}: publication requires complete strict native proof and source rules"
+                + (f"; missing: {'; '.join(gaps)}" if gaps else ""),
                 owner="land",
                 stage="admission",
             )

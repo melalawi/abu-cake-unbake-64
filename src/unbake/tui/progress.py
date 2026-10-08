@@ -97,8 +97,10 @@ def task(label: str, total: int | None = None) -> Iterator[Task]:
             _stack.remove(opened)
         spent = effort.since(mark)
         effort.record_stage(label, spent.wall, spent.cpu)
-        if effort.parent_only(label, opened.total or 0, bool(spent.pool)):
-            effort.record_stage(f"{effort.PARENT_ONLY}{label} ({opened.total} items)", spent.wall, spent.cpu)
+        if effort.parent_only(label, opened.total or 0, bool(spent.pool), spent.wall, spent.cpu):
+            effort.record_stage(
+                f"{effort.PARENT_ONLY}{label} ({opened.total or 0} items)", spent.wall, spent.cpu
+            )
         if _renderer is not None:
             cores = spent.cpu / spent.wall if spent.wall > 0 else 0.0
             _renderer.done(opened, spent.wall, cores, _cache(spent) + opened.note)

@@ -219,7 +219,10 @@ def fold(
     from unbake.layout.header_context import Headers
 
     installed = Headers.contents(project)
-    contracts = namespace.project_declarations(project, installed, texts=(folded,))
+    contracts = namespace.project_declarations(project, installed, texts=(folded,), host=host)
+    contracts.prepare(
+        [*installed.values(), *(path.read_text() for path in sorted(project.src.glob("*.c")))], host, project.cache
+    )
     canonical_edits = namespace.consumer_edits(project, contracts, function, source_edits)
     identity_changed = canonical_edits != source_edits or any(
         contracts.rewrite(text) != text for text in installed.values()
