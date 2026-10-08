@@ -13,6 +13,7 @@ from difflib import SequenceMatcher
 from itertools import pairwise
 from typing import TYPE_CHECKING, Any
 
+from unbake.work.compare_symptoms import symptoms
 from unbake.work.score import Measurement, align_words, classify
 
 if TYPE_CHECKING:
@@ -186,6 +187,9 @@ def facts(result: Measurement, pc: int, names: dict[int, list[str]]) -> dict[str
             }
         )
     return {
+        "available": True,
+        "symptoms": symptoms(result),
+        "target_sha256": result.strict.get("target_sha256"),
         "pc": hex(pc),
         "target_different": len(rows),
         "raw_target_delta_bytes": -4 * len(rows),

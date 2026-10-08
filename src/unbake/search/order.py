@@ -39,6 +39,11 @@ class _Safety:
         counts = Counter(node.name for node in declarations)
         self.shadowed = any(count > 1 for count in counts.values())
         self.types = {node.name: node for node in declarations}
+        self.arrays = {
+            node.name: node
+            for node in walk(tree)
+            if isinstance(node, ast.Decl) and isinstance(node.type, ast.ArrayDecl)
+        }
         self.escaped = {
             node.expr.name
             for node in walk(function.body)
@@ -151,6 +156,69 @@ class _Safety:
         return not (lb or rb or lw & (rr | rw) or rw & lr)
 
 
+def _specialized_tail(
+    assignment: Any, tail: list[Any], ast: Any, safety: _Safety, declarations: Counter[str]
+) -> list[Any] | None:
+    """Replace a dead pointer temporary with its proved array address argument.
+
+    No memory value is moved across a call. The only substituted expression is
+    an array-to-pointer decay of the same declared element type, evaluated in
+    the first call, whose other arguments cannot change it or the local.
+    """
+    if not isinstance(assignment, ast.Assignment) or assignment.op != "=" or not isinstance(assignment.lvalue, ast.ID):
+        return None
+    name = assignment.lvalue.name
+    local = safety.types.get(name)
+    value = assignment.rvalue
+    array = safety.arrays.get(value.name) if isinstance(value, ast.ID) else None
+    if (
+        local is None
+        or array is None
+        or not isinstance(local.type, ast.PtrDecl)
+        or declarations[name] != 1
+        or name in safety.escaped
+        or name in safety.volatile
+    ):
+        return None
+    a, b = local.type.type, array.type.type
+    if not (
+        isinstance(a, ast.TypeDecl)
+        and isinstance(b, ast.TypeDecl)
+        and isinstance(a.type, ast.IdentifierType)
+        and isinstance(b.type, ast.IdentifierType)
+        and a.type.names == b.type.names
+        and a.quals == b.quals
+    ):
+        return None
+    if not tail or not isinstance(tail[0], ast.FuncCall) or not isinstance(tail[0].name, ast.ID) or not tail[0].args:
+        return None
+    arguments = tail[0].args.exprs
+    uses = [arg for arg in arguments if isinstance(arg, ast.ID) and arg.name == name]
+    if len(uses) != 1 or sum(isinstance(n, ast.ID) and n.name == name for item in tail for n in walk(item)) != 1:
+        return None
+
+    def pure_argument(node: Any) -> bool:
+        if isinstance(node, ast.Constant):
+            return True
+        if isinstance(node, ast.ID):
+            return node.name in safety.types and node.name not in safety.volatile
+        if isinstance(node, ast.UnaryOp) and node.op == "&":
+            return isinstance(node.expr, ast.ID)
+        if isinstance(node, ast.Cast):
+            return pure_argument(node.expr)
+        if isinstance(node, ast.BinaryOp):
+            return pure_argument(node.left) and pure_argument(node.right)
+        return False
+
+    if any(not pure_argument(arg) for arg in arguments if arg is not uses[0]):
+        return None
+    made = deepcopy(tail)
+    made[0].args.exprs = [
+        deepcopy(value) if isinstance(arg, ast.ID) and arg.name == name else arg for arg in made[0].args.exprs
+    ]
+    return made
+
+
 def _terminal_tails(function: Any, ast: Any, safety: _Safety) -> Iterator[tuple[Any, str, Callable[[Any], Any]]]:
     items = function.body.block_items or []
     declarations = Counter(node.name for node in walk(function) if isinstance(node, ast.Decl))
@@ -197,6 +265,24 @@ def _terminal_tails(function: Any, ast: Any, safety: _Safety) -> Iterator[tuple[
                 continue
 
             def duplicate(target: Any, name: str = label.name, tail: list[Any] = tail) -> None:
+                # Specialize the immediate predecessor of each tail entry only
+                # when the local is dead after its sole argument use.
+                for compound in walk(target):
+                    if not isinstance(compound, ast.Compound):
+                        continue
+                    statements = compound.block_items or []
+                    for entry in range(len(statements) - 1, 0, -1):
+                        node = statements[entry]
+                        if not isinstance(node, (ast.Goto, ast.Label)) or node.name != name:
+                            continue
+                        specialized = _specialized_tail(statements[entry - 1], tail, ast, safety, declarations)
+                        if specialized is not None:
+                            if isinstance(node, ast.Goto):
+                                statements[entry - 1 : entry + 1] = [ast.Compound(specialized)]
+                            else:
+                                # Labelled suffix is terminal; preserve other
+                                # incoming edges until they are copied below.
+                                statements[entry - 1 : entry + len(tail)] = specialized
                 predecessors = [child for child in walk(target) if isinstance(child, ast.Goto) and child.name == name]
                 for jump in predecessors:
                     _replace(target, jump, lambda _: ast.Compound(deepcopy(tail)))

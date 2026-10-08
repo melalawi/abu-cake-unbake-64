@@ -8,7 +8,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from unbake.compilers.drivers import resolved
 from unbake.compilers.options import classify_capability, infer_options, plan_episode
@@ -17,7 +17,7 @@ from unbake.compilers.recipe_options import recipe_digest
 from unbake.config import Held, Host, Project
 from unbake.inputs import DependencySet
 from unbake.layout import split
-from unbake.search.frontier import retain
+from unbake.search.frontier import coordinates, retain
 from unbake.work import attempts
 from unbake.work.compare import Compared, measure, operation_dependencies, row_of, view_for
 from unbake.work.source_scope import SourceScope, materialize
@@ -51,6 +51,20 @@ class Pairs:
         self.counters = {"attempted": 0, "measured": 0, "pair_cache_hits": 0, "option_pairs": 0}
         self.capabilities: dict[str, list[dict[str, Any]]] = {}
         self.baseline: Candidate | None = None
+        self.no_gain_limit = cast(int, host.no_gain_probes)
+        if type(self.no_gain_limit) is not int or self.no_gain_limit <= 0:
+            from unbake.process import named
+
+            raise Held(
+                named("search.no_gain_probes", "positive probe count required", owner="search.pairs", stage="search")
+            )
+        self.no_gain_probes = 0
+        self.probes = 0
+        self.gains: tuple[float, ...] | None = None
+
+    @property
+    def exhausted(self) -> bool:
+        return self.no_gain_probes >= self.no_gain_limit
 
     def evaluate(
         self, content: str, kind: str, description: str, view: Project, *, baseline: Compared | None = None
@@ -181,6 +195,22 @@ class Pairs:
         )
         if self.baseline is None and candidate is not None:
             self.baseline = candidate
+            self.gains = coordinates(candidate.trial)
+        elif not cached:
+            self.probes += 1
+            vector = coordinates(candidate.trial) if candidate is not None else None
+            gained = (
+                vector is not None
+                and candidate is not None
+                and any(m.available for m in candidate.trial.compares.values())
+                and self.gains is not None
+                and any(math.isfinite(value) and value < old for value, old in zip(vector, self.gains, strict=True))
+            )
+            if gained:
+                assert vector is not None and self.gains is not None
+                self.gains = tuple(min(old, value) for old, value in zip(self.gains, vector, strict=True))
+            self.no_gain_probes = 0 if gained else self.no_gain_probes + 1
+        self.counters.update(probes=self.probes, no_gain_probes=self.no_gain_probes, no_gain_limit=self.no_gain_limit)
         return candidate
 
     def active(self) -> list[Candidate]:
@@ -193,18 +223,30 @@ class Pairs:
     def episode(self, parents: list[Candidate], deadline: float = math.inf) -> dict[str, Any]:
         capabilities = []
         stop = "finite_plan"
-        for parent in parents[: self.host.episode_parents]:
-            episode = plan_episode(
+        retained = parents[: self.host.episode_parents]
+        plans = [
+            plan_episode(
                 parent.project,
                 self.scope.unit,
                 evidence=infer_options(parent.trial.facts),
                 recipe_limit=self.host.episode_recipes,
                 parent_limit=self.host.episode_parents,
             )
-            for recipe in episode.recipes:
+            for parent in retained
+        ]
+        # Cross each evidence-selected recipe with structural parents before
+        # spending the budget on unrelated options of the first parent.
+        for index in range(max((len(plan.recipes) for plan in plans), default=0)):
+            for parent, plan in zip(retained, plans, strict=True):
+                if self.exhausted:
+                    stop = "no_gain_handoff"
+                    break
                 if time.monotonic() >= deadline:
                     stop = "deadline_after_start"
                     break
+                if index >= len(plan.recipes):
+                    continue
+                recipe = plan.recipes[index]
                 view = replace(parent.project, units={**parent.project.units, self.scope.unit: recipe})
                 self.counters["option_pairs"] += 1
                 candidate = self.evaluate(parent.source, parent.kind, "bounded option episode", view)
@@ -224,6 +266,7 @@ class Pairs:
 
 def option_episode(project: Project, host: Host, source: Path, baseline: Compared) -> Compared:
     """Explicit flags enter the same pair measurement/history/frontier owner."""
+    from unbake.work.hints import proven_techniques
     from unbake.work.source_scope import admit_source
 
     scope = admit_source(project, source)
@@ -239,5 +282,6 @@ def option_episode(project: Project, host: Host, source: Path, baseline: Compare
         "frontier": [p.identity for p in pairs.active()],
         "pairs": rows,
         "counters": pairs.counters,
+        "hints": proven_techniques(result.facts, pairs.no_gain_probes),
     }
     return result

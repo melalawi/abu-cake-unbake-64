@@ -11,10 +11,12 @@ from unittest.mock import patch
 
 from tests.kit import TempCase
 from tests.unified.support import B, expanded_baseline, gcc_project, native_replay, phases, retained
+from unbake import cdecl
 from unbake.cli.main import make_parser
 from unbake.compilers.recipe_options import UnitRecipe
 from unbake.config import Held
 from unbake.search import core, creative, frontier, pairs, permute
+from unbake.search.loops import walk
 from unbake.work import compare, compare_dump
 from unbake.work.score import measure_words
 from unbake.work.source_scope import admit_source, materialize, scoped_project
@@ -35,6 +37,10 @@ class SearchTests(TempCase):
         def output(text, recipe):
             scoped = "delta_conversion" in text
             duplicated = "goto text_tail;" not in text
+            if duplicated:
+                self.assertNotIn("text = D_800731", text)
+                self.assertIn("func_80105A50(&D_803276D4, D_800731C0,", text)
+                self.assertIn("func_80105A50(&D_803276D4, D_800731CC,", text)
             arms.add((scoped, duplicated))
             self.assertIn("-G8", recipe.phase("compile"))
             self.assertIn("-G0", recipe.phase("assemble"))
@@ -60,6 +66,138 @@ class SearchTests(TempCase):
         self.assertEqual(result.trial.compares["us"].strict["positional_words"], 0)
         self.assertEqual(result.trial.compares["us"].strict["target_bytes"], 28652)
         self.assertEqual(result.stop_reason, "exact")
+
+    def test_composed_authored_body_matches_actual_exact_source_not_just_kind_labels(self):
+        from pycparser import c_ast, c_generator
+
+        source = retained("bt-baseline.c").decode()
+        expanded = expanded_baseline()
+        trial = SimpleNamespace(function=B)
+        _project, _host, file = gcc_project(self.root, content=source)
+        ctx = SimpleNamespace(deadline=math.inf, source=file)
+        scoped = next(p for p in creative.propose(expanded, trial, ctx) if p.kind == "conversion-scope")
+        file.write_text(scoped.source)
+        composed = next(p for p in creative.propose(expanded, trial, ctx) if p.kind == "tail-duplicate")
+        typedefs = {node.name for node in walk(cdecl.parse(expanded)) if isinstance(node, c_ast.Typedef)}
+
+        def body(text):
+            tree = cdecl.parse(cdecl.declaration_source(text), typedefs=typedefs)
+            function = next(n for n in tree.ext if isinstance(n, c_ast.FuncDef) and n.decl.name == B)
+            for node in walk(function):
+                if isinstance(node, (c_ast.ID, c_ast.Decl)) and node.name == "unused_delta":
+                    node.name = "delta_conversion"
+                if isinstance(node, c_ast.TypeDecl) and node.declname == "unused_delta":
+                    node.declname = "delta_conversion"
+                if isinstance(node, c_ast.Compound):
+                    items = []
+                    for child in node.block_items or []:
+                        if isinstance(child, c_ast.Compound) and all(
+                            isinstance(item, (c_ast.FuncCall, c_ast.Return)) for item in child.block_items or []
+                        ):
+                            items.extend(child.block_items or [])
+                        else:
+                            items.append(child)
+                    node.block_items = items
+            return c_generator.CGenerator().visit(function)
+
+        self.assertEqual(body(composed.source), body(retained("bt-exact.c").decode()))
+
+    def test_tail_specialization_withholds_volatile_escaped_and_effectful_argument_counterfactuals(self):
+        baseline = (
+            "extern char a[]; extern char b[]; void f(int x) { char *p; "
+            "if(x) {p=a; goto tail;} p=b; tail: use(p, 1); return; }"
+        )
+        trial, ctx = SimpleNamespace(function="f"), SimpleNamespace(deadline=math.inf)
+        for text in (
+            baseline.replace("char *p;", "char * volatile p;"),
+            baseline.replace("if(x)", "escape(&p); if(x)"),
+            baseline.replace("use(p, 1)", "use(p, mutate())"),
+            baseline.replace("use(p, 1)", "use(p, p)"),
+        ):
+            with self.subTest(counterfactual=text):
+                tail = next(p for p in creative.propose(text, trial, ctx) if p.kind == "tail-duplicate")
+                self.assertIn("p = a;", tail.source)
+                self.assertIn("p = b;", tail.source)
+
+    def test_no_gain_handoff_counts_new_probes_keeps_cached_parents_and_is_per_attempt(self):
+        from unbake.work import search
+
+        project, old_host, file = gcc_project(self.root, content="int func_800B1520_us(void) { return 1; }\n")
+        host = replace(old_host, values={**old_host.values, "search": {"no_gain_probes": 2}})
+
+        class Changes:
+            name = "labeled source counterfactuals with retained same output"
+
+            def propose(self, text, trial, ctx):
+                yield core.Mutation("counterfactual", "cached baseline", text)
+                for value in range(2, 12):
+                    yield core.Mutation(
+                        "counterfactual", "different literal", text.replace("return 1", f"return {value}")
+                    )
+
+        calls = []
+        with (
+            native_replay(project, lambda text, recipe: retained("bt-baseline.bin"), calls),
+            patch("unbake.search.methods", return_value=[Changes()]),
+        ):
+            first = search.search(project, host, file, "creative", 30, required_versions=("us",))
+            second = search.search(project, host, file, "creative", 30, required_versions=("us",))
+        self.assertEqual(first.stop_reason, "no_gain_handoff")
+        self.assertEqual(second.stop_reason, "no_gain_handoff")
+        self.assertEqual(first.telemetry["search"]["probes"], 2)
+        self.assertEqual(first.telemetry["search"]["pair_cache_hits"], 1)
+        self.assertEqual(len(calls), 6)
+        self.assertEqual(first.document()["handoff"]["next_command"], first.next_command)
+        parsed = make_parser().parse_args(shlex.split(first.next_command)[1:])
+        self.assertEqual(parsed.require_version, ["us"])
+        self.assertTrue(parsed.file.exists())
+        self.assertTrue(parsed.recipe.exists())
+
+    def test_option_episode_crosses_each_recipe_with_retained_parents_before_next_option(self):
+        project, host, file = gcc_project(self.root, content="int func_800B1520_us(void) { return 1; }\n")
+        calls = []
+        # Labelled source counterfactual retains the same measured output to
+        # inspect bounded planner order, without asserting new exactness.
+        with native_replay(project, lambda text, recipe: retained("bt-baseline.bin"), calls):
+            executor = pairs.Pairs(project, host, admit_source(project, file), lambda row: None)
+            first = executor.evaluate(file.read_text(), "baseline", "retained baseline", project)
+            second = executor.evaluate(file.read_text() + "\n", "conversion-scope", "source counterfactual", project)
+            calls.clear()
+            executor.episode([first, second])
+        self.assertEqual(calls[0][1].phase("compile"), calls[1][1].phase("compile"))
+        self.assertNotEqual(calls[0][0], calls[1][0])
+        self.assertEqual(calls[2][1].phase("compile"), calls[3][1].phase("compile"))
+        self.assertNotEqual(calls[0][1].phase("compile"), calls[2][1].phase("compile"))
+
+    def test_shared_pair_probe_counter_resets_only_on_measured_gain_not_cached_or_unavailable(self):
+        project, old_host, file = gcc_project(self.root, content="int func_800B1520_us(void) { return 1; }\n")
+        host = replace(old_host, values={**old_host.values, "search": {"no_gain_probes": 2}})
+        calls = []
+
+        def output(text, recipe):
+            if "return 4" in text:
+                from unbake.process import named
+
+                raise Held(
+                    named("replay.unavailable", "counterfactual missing native output", owner="replay", stage="link")
+                )
+            return retained("bt-g8.bin" if "return 3" in text else "bt-baseline.bin")
+
+        with native_replay(project, output, calls):
+            executor = pairs.Pairs(project, host, admit_source(project, file), lambda row: None)
+            text = file.read_text()
+            executor.evaluate(text, "baseline", "initial", project)
+            executor.evaluate(text.replace("return 1", "return 2"), "counterfactual", "no gain", project)
+            self.assertEqual(executor.no_gain_probes, 1)
+            executor.evaluate(text, "baseline", "cached", project)
+            self.assertEqual(executor.no_gain_probes, 1)
+            executor.evaluate(
+                text.replace("return 1", "return 3"), "counterfactual", "retained G8 output gain", project
+            )
+            self.assertEqual(executor.no_gain_probes, 0)
+            executor.evaluate(text.replace("return 1", "return 4"), "counterfactual", "unavailable", project)
+            self.assertEqual(executor.no_gain_probes, 1)
+        self.assertFalse(executor.exhausted)
 
     def test_actual_seventh_dead_conversion_and_nested_text_tail_are_early_safe_proposals(self):
         source = expanded_baseline()

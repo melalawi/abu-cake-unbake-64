@@ -1,0 +1,254 @@
+{
+  "hints": [
+    {
+      "detect": "candidate_bytes < target and difflib delete runs of equal length repeated",
+      "evidence": "func_80414CCC_de 3712->3920 B, opratio .92->.95",
+      "fix": "make the merged arms textually different the way the original was (e.g. one arm reads through a pointer to the va_list home slot)",
+      "id": "crossjump-merged-arms",
+      "match": {
+        "repeated_deleted_runs": {
+          "gte": 2
+        },
+        "size_delta_bytes": {
+          "lt": 0
+        }
+      },
+      "missing_observation": null,
+      "symptom": "candidate shorter than target by a multiple of one block; opcode diff shows identical deleted runs in several switch cases",
+      "variant": "7f6f5a575c9f0aedf8d195ab16ab0967592054873c7861b38584ba7e3837fd82"
+    },
+    {
+      "detect": "extra callee-saved/spill slot; register holds sp+const across loop",
+      "evidence": "func_80414CCC_de 570->696 words; func_8023A4E0_de color pointer",
+      "fix": "declare a block-local pointer inside the branch (char **ap = &args;) so loop.c cannot hoist it",
+      "id": "hoisted-invariant-address",
+      "match": {},
+      "missing_observation": "requires retained source/loop/allocation lineage not available from word comparison",
+      "symptom": "candidate keeps &local/&param (sp+N) live in a register all function; frame 8 bytes larger; target recomputes addiu aX,sp,N at use",
+      "variant": "5cf442b0634422fe4046fb1caa6e95f83b2a0a0c94c65396f34c22356cbfef2e"
+    },
+    {
+      "detect": "typed.register dominant, inserted/missing ~0",
+      "evidence": "func_80414CCC_de 834->925 words",
+      "fix": "probe with -dg -dl, compute floor_log2(refs)*refs/live per pseudo from .lreg; change live ranges/first use: goto loops drop loop-depth weight, test-before-copy removes weighted refs, reorder case assignments",
+      "id": "register-priority",
+      "match": {
+        "register_dominant": {
+          "eq": true
+        }
+      },
+      "missing_observation": null,
+      "symptom": "only register permutation left; per-register use counts equal",
+      "variant": "6b146246d36a6750bece13d083599b9f1df914970c0ea21dd3f092465e658e45"
+    },
+    {
+      "detect": "placement problem 'references to .rdata disagree' with two bases 4 apart",
+      "evidence": "func_80269A80_de 1126->1134/1134 exact",
+      "fix": "tool: n64link >=0.3.2 aligns 8-byte constant items against the final address",
+      "id": "rodata-align-final-address",
+      "match": {
+        "literal_immediates_off_four": {
+          "gte": 1
+        }
+      },
+      "missing_observation": null,
+      "symptom": "only float-literal/jump-table load immediates off by exactly 4",
+      "variant": "650bbbeb0f992fcbaaf4911aec4da33187ee8d741176fe2ca24a9b30153f7e1a"
+    },
+    {
+      "detect": "target has two identical instruction runs, candidate one",
+      "evidence": "func_80266810_de exact",
+      "fix": "write the block out twice instead of goto; split one goto into separate if-blocks",
+      "id": "duplicated-block-not-goto",
+      "match": {
+        "repeated_deleted_runs": {
+          "gte": 2
+        },
+        "size_delta_bytes": {
+          "lt": 0
+        }
+      },
+      "missing_observation": null,
+      "symptom": "target duplicates a block body; candidate shares it via goto",
+      "variant": "d2ca1db74700d322b8af4e4380308da02fc669f27b23651f7fbc6899fbed9c6a"
+    },
+    {
+      "detect": "typed.immediate on sp-relative offsets only; addiu sp delta differs",
+      "evidence": "func_80266810_de 240->352 frame, exact",
+      "fix": "unused locals (e.g. Vec3) sized to the original frame; mark as fakematch comment",
+      "id": "frame-size-unused-locals",
+      "match": {
+        "frame_delta_bytes": {
+          "lt": 0
+        },
+        "sp_offset_only": {
+          "eq": true
+        }
+      },
+      "missing_observation": null,
+      "symptom": "frame smaller than target, everything else aligned except sp offsets",
+      "variant": "6f19aa9de2de3e1065ab44a87d6a086881a98b2124c38bdf9b2ff9157871d1ce"
+    },
+    {
+      "detect": "addiu on pointer regs in loop vs sll/addu index",
+      "evidence": "func_8023A4E0_de 407->530 words",
+      "fix": "drop -fno-strength-reduce and write plain indexed for-loops",
+      "id": "strength-reduce-flag",
+      "match": {},
+      "missing_observation": "requires retained source/loop/allocation lineage not available from word comparison",
+      "symptom": "loops use pointer increments where target uses indexes (or vice versa)",
+      "variant": "ab6a7f4b3e6b87800947ea426433bb60ae15db856f8e427e088107b21f491d41"
+    },
+    {
+      "detect": "jump table on char-32, PAD 16-byte tables, mul.d/div.d by 10",
+      "evidence": "func_80414CCC_de BSD vfprintf",
+      "fix": "identify the source family (BSD vfprintf, libultra, SDK GBI macros) and write it the way that source was written",
+      "id": "origin-first",
+      "match": {},
+      "missing_observation": "requires retained source/loop/allocation lineage not available from word comparison",
+      "symptom": "large function with format/parse/math shape",
+      "variant": "49e379c5f83169c19d32129059f44be9e9d914c2f6dcf92af39955c6bc6c4e83"
+    },
+    {
+      "detect": ">=300 variants no gain",
+      "evidence": "BattleTanx func_800B1520_us 99.37%->exact via -G8",
+      "fix": "per-file build options (-G8 etc.) before more C rewrites",
+      "id": "compiler-option-plateau",
+      "match": {
+        "plateau_probes": {
+          "gte": 300
+        }
+      },
+      "missing_observation": null,
+      "symptom": "source rewrites plateau with address-cost/scheduling diffs",
+      "variant": "4b834bf75b04e346369c7261a74c9d956c9698ced616771f02d74b5e489692a2"
+    },
+    {
+      "detect": "-dg -dl: chosen pseudo refs 5/live 257 loses to hoisted pointer 5/190; two arms share a goto tail",
+      "evidence": "func_8020AF9C_de 460->480 words",
+      "fix": "write the shared tail (if (result==0){best=..}) out in both arms and goto only the loop latch; gcc cross-jumps it later, but the duplicate sets raise the variable's ref count (5->7) so it wins s8",
+      "id": "duplicated-block-not-goto",
+      "match": {
+        "repeated_deleted_runs": {
+          "gte": 2
+        },
+        "size_delta_bytes": {
+          "lt": 0
+        }
+      },
+      "missing_observation": null,
+      "symptom": "chosen-index local spilled to stack while hoisted address pseudos took the callee-saved register",
+      "variant": "27ce315d399b934c973ee6baef9eca646857de414d73fe48cc3f9504b0d722fe"
+    },
+    {
+      "detect": "pri table from -dg -dl lreg: floor_log2(refs)*refs/live of the two pseudos",
+      "evidence": "func_8020AF9C_de 461->480 words",
+      "fix": "split one variable into two (call result vs destination id) to lower its refs/live below the other",
+      "id": "register-priority",
+      "match": {
+        "register_dominant": {
+          "eq": true
+        }
+      },
+      "missing_observation": null,
+      "symptom": "two long-lived locals swapped (s2/s3)",
+      "variant": "650d6d95977115e0a8d495111f11f65a0e441bf4a1be95190b790fce86ffa26d"
+    },
+    {
+      "detect": "asm: addiu t,sp,N / s1,80 stores to stack at function top instead of loop preheader",
+      "evidence": "func_8020AF9C_de 487->489 (with preset-store before snapshot copy)",
+      "fix": "use real struct assignment (80-byte struct) so gcc emits block-move loops whose end pointers loop.c hoists in the preheader; keep a single explicit query pointer assigned inside the loop head",
+      "id": "struct-copy-hoist-order",
+      "match": {},
+      "missing_observation": "requires retained source/loop/allocation lineage not available from word comparison",
+      "symptom": "pointer-to-local address pseudos computed early and spilled, or 4th hoisted address pseudo appears",
+      "variant": "ac2edde92a93f6c329048c71018fc540d79f789b29e0275b85e54ade98636ec4"
+    },
+    {
+      "detect": "li to a0/a2 in each arm, store after merge uses same reg",
+      "evidence": "func_8020AF9C_de 489->495 words",
+      "fix": "store the literal once after the merge point instead of a flag variable assigned in every arm",
+      "id": "literal-store-not-flag-variable",
+      "match": {},
+      "missing_observation": "requires retained source/loop/allocation lineage not available from word comparison",
+      "symptom": "constant (li v0,16384) kept in a global pseudo in a0/a2 instead of delay-slot li v0 copied from the merge block",
+      "variant": "f012059de71bcc7926855a645529dfa0cbc39ad61916d3f76ca40adc555cbc84"
+    },
+    {
+      "detect": "extra sw tX,N(sp) before the outer loop and lw aX,N(sp) in the inner loop; candidate frame > target",
+      "evidence": "func_8023A4E0_de 579->631 words, frame 536->528",
+      "fix": "declare a block-local pointer to the array inside the inner loop body (f32 *pc = &col[0][0]; read pc[i+4k]) instead of indexing the array or using a function-scope pointer",
+      "id": "hoisted-invariant-address",
+      "match": {},
+      "missing_observation": "requires retained source/loop/allocation lineage not available from word comparison",
+      "symptom": "frame 8 bytes larger than target and one extra spill slot; a local array base (sp+N) is loaded back from the stack inside an inner loop while the target uses sp+index",
+      "variant": "51531a7243007bfd720c544aa06f6fdb01005a546ae1ed826796a3c1a9f38839"
+    },
+    {
+      "detect": "target has per-array walker pointers advancing by 4 and 12 that the candidate lacks, or candidate bytes larger",
+      "evidence": "func_8023A4E0_de 407->530 words",
+      "fix": "write the loops as plain indexed for-loops (a[i].x) and drop -fno-strength-reduce; gcc then builds the walkers itself",
+      "id": "indexed-loops-no-strength-flag",
+      "match": {},
+      "missing_observation": "requires retained source/loop/allocation lineage not available from word comparison",
+      "symptom": "pointer-walker loops plus -fno-strength-reduce leave size and walker registers wrong",
+      "variant": "292f69f2291ca16553479c27bd43ffc80f0ce0b8378ac2f51df88a4d0bfa9020"
+    },
+    {
+      "detect": "target switch compiles to bltz/slti/bnez chain; candidate to slti/beqz/bgez",
+      "evidence": "func_8023A4E0_de 441->466 words",
+      "fix": "switch on an s32 (not u8) and add the missing case labels (case 2: default:, case 0: default:) so the case tree has the same shape",
+      "id": "switch-range-and-merged-default",
+      "match": {},
+      "missing_observation": "requires retained source/loop/allocation lineage not available from word comparison",
+      "symptom": "range check order differs: target tests low bound first (bltz then slti) or has case 0 folded into default",
+      "variant": "0f17a7133cb79883de36c121c21ca65ab06e501d7d7f1ef162e72d8296443ee9"
+    },
+    {
+      "detect": "candidate allocates fresh f regs where target overwrites the same one",
+      "evidence": "func_8023A4E0_de 631->638 words",
+      "fix": "assign results back into the same C variable (temp_f8 = temp_f8 - h; abs in place; reuse temp_f6 for the later clamp value) instead of new locals",
+      "id": "reuse-one-float-variable",
+      "match": {
+        "float_register_differences": {
+          "gte": 1
+        },
+        "register_dominant": {
+          "eq": true
+        }
+      },
+      "missing_observation": null,
+      "symptom": "float registers differ: target does sub.s/neg.s in place on f1 and reuses the height register f6 for a later value",
+      "variant": "6d32685b3eaaa91d654ce2055b76e4be3b7b7fd72907fd6a6f2bdb63592debb4"
+    },
+    {
+      "detect": "diffs confined to the region where the helper was inlined; pointer arg gives &local on stack, size +N",
+      "evidence": "func_8027DD48_de 570->632->651 of 655 words",
+      "fix": "pass/return by value first (removes spill), then write the helper body directly in the caller (no inline function) so gcc sees one flat web",
+      "id": "hand-inline-helper",
+      "match": {},
+      "missing_observation": "requires retained source/loop/allocation lineage not available from word comparison",
+      "symptom": "static inline helper called from the body leaves register diffs in the inlined block (and pointer-arg helper adds a stack spill and 20 extra bytes)",
+      "variant": "b6e3bf0c595c9be5685a579bdb06787a9d142ff19d9b96fbf2c476eae8ca2b95"
+    },
+    {
+      "detect": "compiler.stderr 'no member named'",
+      "evidence": "func_8027DD48_de 0->570 words",
+      "fix": "write a small local header with only the needed structs at the offsets read from the target disassembly (lw/lb offsets), include it from the probe source",
+      "id": "local-struct-header-for-probe",
+      "match": {
+        "missing_struct_member": {
+          "eq": true
+        }
+      },
+      "missing_observation": null,
+      "symptom": "draft from another header snapshot fails to compile: structure has no member named X",
+      "variant": "364fdafaab183003f5e9c40161928767877ff0a93031984dcd96cc78cd8bd3dd"
+    }
+  ],
+  "origin": {
+    "rows": 19,
+    "sha256": "4e246014258abe722c5956df29617e68622abdb12b4ec0643646bebbade5af0f"
+  },
+  "schema": 1
+}

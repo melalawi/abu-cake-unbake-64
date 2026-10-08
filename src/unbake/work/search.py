@@ -35,6 +35,7 @@ class Searched:
     frontier: tuple[dict[str, Any], ...] = ()
     telemetry: dict[str, Any] | None = None
     next_command: str = ""
+    hints: tuple[dict[str, Any], ...] = ()
 
     def document(self) -> dict[str, Any]:
         return {
@@ -50,9 +51,15 @@ class Searched:
             "frontier": self.frontier,
             "telemetry": self.telemetry,
             "next_command": self.next_command,
+            "hints": self.hints,
+            "handoff": {"reason": self.stop_reason, "next_command": self.next_command, "steps": str(self.steps)}
+            if self.stop_reason == "no_gain_handoff"
+            else None,
         }
 
     def lines(self) -> list[str]:
+        from unbake.work.hints import technique_lines
+
         state = (
             "EXACT"
             if self.exact
@@ -67,6 +74,8 @@ class Searched:
             *(f"{self.function}: {value.description()}" for value in self.measurements.values()),
             f"steps: {self.steps}",
             *(f"skipped {skip['key']}: {skip['reason']}" for skip in self.skips),
+            *technique_lines(self.hints),
+            f"stop: {self.stop_reason}",
         ]
 
 
@@ -205,4 +214,5 @@ def search(
         result.frontier,
         result.telemetry,
         scope.saved_action(best, exact=result.trial.exact, required_versions=required_versions, config=config_path),
+        result.hints,
     )

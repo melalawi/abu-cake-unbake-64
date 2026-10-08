@@ -66,6 +66,13 @@ Every command prints one JSON object on stdout. Human text goes to stderr.
 use the same measured source × recipe frontier. Option episodes contain at most
 eight effective recipes crossed with four retained source parents. Saved sources,
 recipes, native refusals and next commands remain available under `build/work`.
+Proven technique hints match retained compare symptoms and print “this helped before”.
+Their evidence remains advisory and unknown symptoms stay unknown. A search attempt
+hands off after `search.no_gain_probes` distinct probes without a new measured
+frontier coordinate (default 32); a later attempt remains available. Cached pairs
+do not count. Each option recipe is crossed with retained source parents before
+the next recipe.
+
 External source/include inputs require explicit roots. Advisory subsystem hints
 read retained facts and launch no native jobs or type solve.
 

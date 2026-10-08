@@ -53,6 +53,7 @@ class SearchResult:
     stop_reason: str = "finite_plan"
     frontier: tuple[dict[str, Any], ...] = ()
     telemetry: dict[str, Any] = field(default_factory=dict)
+    hints: tuple[dict[str, Any], ...] = ()
 
 
 def _positive(policy: Host, name: str) -> int:
@@ -193,7 +194,7 @@ def run(
     best, active = initial, [initial]
     stop_reason = "finite_plan"
     visited: set[tuple[str, str]] = set()
-    while time.monotonic() < deadline and not best.trial.exact:
+    while time.monotonic() < deadline and not best.trial.exact and not pairs.exhausted:
         prior = {row.identity for row in active}
         for parent in tuple(active):
             representative = min(
@@ -224,7 +225,7 @@ def run(
                 )
                 try:
                     for mutation in generator.propose(expanded, parent.trial, context):
-                        if time.monotonic() >= deadline:
+                        if time.monotonic() >= deadline or pairs.exhausted:
                             break
                         try:
                             content = validate_mutation(parent.source, mutation.source, scope.subject)
@@ -243,13 +244,13 @@ def run(
                             break
                 except Held as failure:
                     skips.append({"key": failure.key, "reason": failure.reason, "generator": method})
-                if best.trial.exact:
+                if best.trial.exact or pairs.exhausted:
                     break
-            if best.trial.exact:
+            if best.trial.exact or pairs.exhausted:
                 break
         active = pairs.active()
         plateau = prior == {row.identity for row in active}
-        if plateau and not best.trial.exact:
+        if plateau and not best.trial.exact and not pairs.exhausted:
             episode_key = recipe_digest({"parents": sorted(row.identity for row in active), "targets": pairs.targets})
             if episode_key in episodes:
                 break
@@ -262,6 +263,8 @@ def run(
                 break
     if best.trial.exact:
         stop_reason = "exact"
+    elif pairs.exhausted:
+        stop_reason = "no_gain_handoff"
     elif time.monotonic() >= deadline:
         stop_reason = "deadline_after_start"
     elif skips and counters["measured"] == 1:
@@ -270,6 +273,9 @@ def run(
         "search": counters,
         "external": [getattr(g, "telemetry", None) for g in generators if isinstance(g, Permuter)],
     }
+    from unbake.work.hints import proven_techniques
+
+    hints = proven_techniques(best.trial.facts, pairs.no_gain_probes)
     frontier = tuple(
         {
             "identity": row.identity,
@@ -280,7 +286,15 @@ def run(
         }
         for row in active
     )
-    write({"kind": "search.stop", "stop_reason": stop_reason, "frontier": frontier, "telemetry": telemetry})
+    write(
+        {
+            "kind": "search.stop",
+            "stop_reason": stop_reason,
+            "frontier": frontier,
+            "telemetry": telemetry,
+            "hints": hints,
+        }
+    )
     return SearchResult(
-        best.path, best.trial, counters["measured"], steps, tuple(skips), stop_reason, frontier, telemetry
+        best.path, best.trial, counters["measured"], steps, tuple(skips), stop_reason, frontier, telemetry, hints
     )

@@ -741,7 +741,7 @@ HOST_KEYS: dict[str, dict[str, Kind]] = {
         "symbol_similarity_threshold": "fraction",
         "symbol_similarity_margin": "fraction",
     },
-    "search": {"frontier": "int", "episode_recipes": "int", "episode_parents": "int"},
+    "search": {"frontier": "int", "episode_recipes": "int", "episode_parents": "int", "no_gain_probes": "int"},
     # What a step chain may cost here (a project's .unbake/unbake.toml sets its own); over budget is a finding.
     "budgets": {
         "recompute_seconds": "int",
@@ -1074,6 +1074,9 @@ class Host:
     symbol_similarity_threshold = property(lambda self: self.get("setup.symbol_similarity_threshold"))
     symbol_similarity_margin = property(lambda self: self.get("setup.symbol_similarity_margin"))
     search_frontier = property(lambda self: self.get("search.frontier") if self.has("search.frontier") else 8)
+    no_gain_probes = property(
+        lambda self: self.get("search.no_gain_probes") if self.has("search.no_gain_probes") else 32
+    )
     episode_recipes = property(
         lambda self: self.get("search.episode_recipes") if self.has("search.episode_recipes") else 8
     )

@@ -26,6 +26,7 @@ include = ["unbake", "unbake.*"]
 [tool.setuptools.package-data]
 "unbake" = ["LICENSE"]
 "unbake.compilers" = ["registry.toml"]
+"unbake.work" = ["crack_hints.json"]
 "unbake.templates" = ["*"]
 
 [tool.ruff]

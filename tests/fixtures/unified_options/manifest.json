@@ -189,6 +189,13 @@
       "sha256": "69a71205fecd8ae2d2b4d31ef703c2506bc21176050b53f642c4f8844b09adb4",
       "bytes": 468727,
       "evidence_class": "actual paired historical BT state; file coexistence replay, not new native proof"
+    },
+    {
+      "path": "bt-exact.c.gz",
+      "source": "bt-outside-box-800B1520/composed/text_full_duplicate_split.c",
+      "sha256": "f0c6b64226c9cbb9abdce2f8ef60ddb3f2f993bea3e62937d1595fc377af797d",
+      "bytes": 39335,
+      "evidence_class": "retained historical input; replay is not new native proof"
     }
   ],
   "counterfactuals": "Named mutations in tests are counterfactual inputs, never native success."

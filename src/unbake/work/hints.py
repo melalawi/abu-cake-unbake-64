@@ -2,11 +2,56 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import asdict, dataclass
+from importlib.resources import files
 from typing import Any
 
 from unbake.layout.subsystems import Snapshot
 from unbake.search import BUILTINS
+
+
+def proven_techniques(compared_facts: dict[str, Any], plateau_probes: int = 0) -> tuple[dict[str, Any], ...]:
+    """Match only measured symptoms. Advice and historical evidence are not proof."""
+    catalog = json.loads(files("unbake.work").joinpath("crack_hints.json").read_text())
+    matches = []
+    for version, facts in sorted(compared_facts.items()):
+        if not facts.get("available", True) or not facts.get("symptoms"):
+            continue
+        observed = {**facts["symptoms"], "plateau_probes": plateau_probes}
+        for hint in catalog["hints"]:
+            conditions = hint["match"]
+            if not conditions:
+                continue
+            supported = True
+            for name, condition in conditions.items():
+                value = observed.get(name)
+                if value is None:
+                    supported = False
+                    break
+                for op, expected in condition.items():
+                    supported &= {"eq": value == expected, "lt": value < expected, "gte": value >= expected}[op]
+            if supported:
+                matches.append(
+                    {
+                        "id": hint["id"],
+                        "variant": hint["variant"],
+                        "version": version,
+                        "symptom": hint["symptom"],
+                        "fix": hint["fix"],
+                        "evidence": hint["evidence"],
+                        "observations": {key: observed[key] for key in conditions},
+                        "source_sha256": facts.get("source_sha256"),
+                        "target_sha256": facts.get("target_sha256"),
+                        "catalog_sha256": catalog["origin"]["sha256"],
+                        "authority": "advisory",
+                    }
+                )
+    return tuple(matches)
+
+
+def technique_lines(hints: tuple[dict[str, Any], ...]) -> list[str]:
+    return [f"this helped before: {row['fix']} ({row['id']}; {row['version']})" for row in hints]
 
 
 @dataclass(frozen=True)

@@ -92,6 +92,8 @@ class Compared:
         }
 
     def lines(self) -> list[str]:
+        from unbake.work.hints import technique_lines
+
         output = [line for result in self.compares.values() for line in result.lines]
         from unbake.work.compare_facts import lines
 
@@ -105,6 +107,9 @@ class Compared:
             else "measurement unavailable"
         )
         output.append(f"{self.function}: {state}")
+        if self.option_episode is not None:
+            output.extend(technique_lines(tuple(self.option_episode.get("hints", ()))))
+            output.append(f"option stop: {self.option_episode['stop_reason']}")
         if self.required_versions is not None:
             output.append(
                 f"required versions {', '.join(self.required_versions)}: "
