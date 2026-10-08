@@ -25,6 +25,15 @@ RECIPE_MODULES = (
     "layout/structs_identity.py",
 )
 
+# Definition identity describes parsed source inputs, not the implementation of
+# the parser. These two prior graph identities emitted retained native proofs;
+# recompute them from current declarations and exact content pins for readback.
+INITIALIZED_DEFINITION_SCHEMA = cache.key("initialized-definition-1")
+LEGACY_DEFINITION_RECIPES = (
+    "4c8713fa3fd620c55dcc3d0a64915d0b79302466c2984ed71834f346fdb340a0",
+    "a6408b50abbf49e303ea51b159ec37359b7ac2e95dc73932a4810ba2f060aed7",
+)
+
 
 def recipe() -> str:
     root = Path(__file__).parents[1]
@@ -656,7 +665,13 @@ class Graph:
         return self._projections[path]
 
     def initialized_definitions(
-        self, project: Any, source: Path, version: str, *, sizes: dict[str, int] | None = None
+        self,
+        project: Any,
+        source: Path,
+        version: str,
+        *,
+        sizes: dict[str, int] | None = None,
+        legacy_ids: dict[str, tuple[str, ...]] | None = None,
     ) -> dict[str, str]:
         """Current retained, version-active named initializers through the owning C parser."""
         import ast
@@ -746,15 +761,32 @@ class Graph:
                 {node.name: declarations.node_type(node.type) for node in tree.ext if isinstance(node, c_ast.Typedef)}
             )
         result = {}
+        semantic = inputs.DependencySet(
+            closure.dependency_set.files,
+            closure.dependency_set.values,
+            {"graph": INITIALIZED_DEFINITION_SCHEMA},
+        )
         for node in initializers:
-            result[node.name] = cache.key(
+            identity = (
                 self.view.logical(source).name,
                 version,
                 node.name,
                 generator.visit(node),
                 inputs.bytes_digest(raw, algorithm="sha256"),
-                closure.dependency_set.digest,
             )
+            result[node.name] = cache.key(*identity, semantic.digest)
+            if legacy_ids is not None:
+                legacy_ids[node.name] = tuple(
+                    cache.key(
+                        *identity,
+                        inputs.DependencySet(
+                            closure.dependency_set.files,
+                            closure.dependency_set.values,
+                            {"graph": prior},
+                        ).digest,
+                    )
+                    for prior in LEGACY_DEFINITION_RECIPES
+                )
             if sizes is not None:
                 spelling = declarations.canonical(declarations.node_type(node.type), aliases)
                 spelling = re.sub(r"\b(?:const|volatile|restrict)\b\s*", "", spelling).strip()

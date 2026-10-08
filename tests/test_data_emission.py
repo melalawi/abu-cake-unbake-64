@@ -310,6 +310,22 @@ class DataEmissionTests(ProjectCase):
         )
         self.assertEqual(self.coverage().manifest["verified_bytes"], 4)
 
+    def test_retained_parser_recipe_definition_stays_qualified_without_changing_event(self):
+        from unbake.project import headers
+
+        layout = self.place()
+        self.capture()
+        self.linked(layout)
+        with patch.object(headers, "recipe", return_value=headers.LEGACY_DEFINITION_RECIPES[0]):
+            data.record_linked(self.project, self.host, self.source, "us", self.original, self.final, layout)
+        event = attempts.ledger(self.project).latest("native.data", "us")
+        before = json.dumps(event, sort_keys=True)
+        sources = {self.source.stem: (hashlib.sha256(self.source.read_bytes()).hexdigest(), set(), False)}
+        report = data.coverage(self.project, "us", sources, event)
+        self.assertEqual(report.manifest["verified_bytes"], 4)
+        self.assertEqual(json.dumps(event, sort_keys=True), before)
+        self.assertEqual(attempts.ledger(self.project).latest("native.data", "us"), event)
+
     def test_consumer_requires_current_active_initialized_definition_proof(self):
         layout = self.place()
         self.capture()

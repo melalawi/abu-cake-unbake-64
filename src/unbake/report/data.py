@@ -1060,7 +1060,7 @@ def coverage(
     matched: dict[tuple[int, int], str] = {}
     observed: dict[tuple[int, int], tuple[str, str]] = {}
     pinned_sources = {"/".join(pin.path.parts) for pin in attempts.dependency_record(record["dependencies"]).files}
-    definitions: dict[Path, dict[str, str]] = {}
+    definitions: dict[Path, dict[str, tuple[str, ...]]] = {}
     for evidence in payload["evidence"]:
         if not isinstance(evidence, dict) or set(evidence) - {"producer"} != {
             "final_artifact_sha256",
@@ -1196,12 +1196,15 @@ def coverage(
             if path not in definitions:
                 from unbake.project.headers import Graph
 
-                definitions[path] = (
-                    {extent["symbol"]: digest(producer)}
-                    if resource or (producer is not None and producer["unit"].get("section") in {".rdata", ".rodata"})
-                    else Graph.capture(project).initialized_definitions(project, path, version)
-                )
-            if definitions[path].get(extent["symbol"]) != extent["definition_proof_id"]:
+                if resource or (producer is not None and producer["unit"].get("section") in {".rdata", ".rodata"}):
+                    definitions[path] = {extent["symbol"]: (digest(producer),)}
+                else:
+                    legacy_ids: dict[str, tuple[str, ...]] = {}
+                    current_ids = Graph.capture(project).initialized_definitions(
+                        project, path, version, legacy_ids=legacy_ids
+                    )
+                    definitions[path] = {name: (value, *legacy_ids[name]) for name, value in current_ids.items()}
+            if extent["definition_proof_id"] not in definitions[path].get(extent["symbol"], ()):
                 manifest["causes"].append(
                     {"key": "data.definition.unavailable", "source": logical.name, "bytes": length}
                 )

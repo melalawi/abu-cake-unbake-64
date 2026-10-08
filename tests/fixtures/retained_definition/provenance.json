@@ -1,0 +1,11 @@
+{
+  "source": "ragewars_resident_strings_C7F50_us_rev1.c",
+  "source_sha256": "e793bd8338f18570766b50a2d0d8441ee90c26a6eb3f338c5a4718e09fc0ef1b",
+  "symbol": "ragewars_resident_strings_C7F50_us_rev1",
+  "version": "us-rev1",
+  "bytes": 12,
+  "definition_proof_id": "06deb5e952d61aab8edbd2a2cad0fe85ae6c55d888cd80d7ed90fcaf32fa9f58",
+  "proof_event": "d0636f28050b465c9c44002031929866",
+  "graph_recipe": "4c8713fa3fd620c55dcc3d0a64915d0b79302466c2984ed71834f346fdb340a0",
+  "pin": "c24a02d68958f462244e6f6db26731431c44bbbe"
+}
