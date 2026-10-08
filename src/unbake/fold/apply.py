@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from unbake import atomic as atomic_files
+from unbake import tui
 from unbake.config import Held, Host, Project, draft_view
 from unbake.decomp import checks, gbi
 from unbake.fold import declarations, notes, self_prototype
@@ -116,15 +117,17 @@ def fold(
     exact_entry: Attempt | None = None,
 ) -> Folded:
     """Lower GBI, fold shared types and plan the publication edits, without writing project files."""
-    drafted = view(project, function)
+    with tui.task("Preparing the draft view"):
+        drafted = view(project, function)
     versions = split.holding_versions(project, function) if versions is None else versions
-    lowered = gbi.prepare(drafted, text, gbi.microcode(drafted))
+    with tui.task("Lowering GBI"):
+        lowered = gbi.prepare(drafted, text, gbi.microcode(drafted))
     source = lowered.source
     if "gbi" in lowered.headers:
         source = gbi.install(drafted) + source
     if "abi" in lowered.headers:
         source = gbi.install_audio(drafted) + source
-    with notes.collect() as learned:
+    with notes.collect() as learned, tui.task("Folding aggregate declarations"):
         edits = declarations.folded_edits(
             drafted,
             host,
@@ -169,7 +172,8 @@ def fold(
     from unbake.typemap import namespace
 
     effective = {**private_headers(project, function), **headers}
-    source_edits = shared_consumers.plan(project, host, function, effective)
+    with tui.task("Planning shared consumers"):
+        source_edits = shared_consumers.plan(project, host, function, effective)
     contract = edits.contract
     if contract is not None:
         from unbake.layout import redeclarations
@@ -218,15 +222,20 @@ def fold(
         source_edits = tuple(pending.values())
     from unbake.layout.header_context import Headers
 
-    installed = Headers.contents(project)
-    contracts = namespace.project_declarations(project, installed, texts=(folded,), host=host)
-    contracts.prepare(
-        [*installed.values(), *(path.read_text() for path in sorted(project.src.glob("*.c")))], host, project.cache
-    )
-    canonical_edits = namespace.consumer_edits(project, contracts, function, source_edits)
-    identity_changed = canonical_edits != source_edits or any(
-        contracts.rewrite(text) != text for text in installed.values()
-    )
+    with tui.task("Reading installed headers"):
+        installed = Headers.contents(project)
+    with tui.task("Reading function declarations"):
+        contracts = namespace.project_declarations(project, installed, texts=(folded,), host=host)
+        contracts.prepare(
+            [*installed.values(), *(path.read_text() for path in sorted(project.src.glob("*.c")))],
+            host,
+            project.cache,
+        )
+    with tui.task("Canonicalizing consumers"):
+        canonical_edits = namespace.consumer_edits(project, contracts, function, source_edits)
+        identity_changed = canonical_edits != source_edits or any(
+            contracts.rewrite(text) != text for text in installed.values()
+        )
     source_edits = canonical_edits
     header_edits = [
         Edit(
@@ -239,24 +248,27 @@ def fold(
         if not (project.include[-1] / name).is_file() or (project.include[-1] / name).read_text() != text
     ]
     if header_edits:
-        _prove_includers(project, [*header_edits, *source_edits], host, project.src / f"{function}.c")
+        with tui.task("Proving header includers"):
+            _prove_includers(project, [*header_edits, *source_edits], host, project.src / f"{function}.c")
     if identity_changed:
-        header_step.validate(
+        with tui.task("Validating header identity change"):
+            header_step.validate(
+                project,
+                host,
+                {edit.path: edit.after.encode() for edit in [*header_edits, *source_edits]},
+                prove_all=True,
+                preproved=frozenset({function}),
+            )
+    with tui.task("Checking header loss"):
+        header_loss.check(
             project,
-            host,
-            {edit.path: edit.after.encode() for edit in [*header_edits, *source_edits]},
-            prove_all=True,
-            preproved=frozenset({function}),
+            {
+                project.src / f"{function}.c": folded.encode(),
+                **{project.include[-1] / n: t.encode() for n, t in headers.items()},
+                **{edit.path: edit.after.encode() for edit in source_edits},
+            },
+            policy=host,
         )
-    header_loss.check(
-        project,
-        {
-            project.src / f"{function}.c": folded.encode(),
-            **{project.include[-1] / n: t.encode() for n, t in headers.items()},
-            **{edit.path: edit.after.encode() for edit in source_edits},
-        },
-        policy=host,
-    )
     return Folded(function, folded, headers, tuple(split_edits), tuple(learned), source_edits, contract)
 
 

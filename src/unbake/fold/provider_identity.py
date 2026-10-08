@@ -21,9 +21,9 @@ class Unproved(Exception):
 class Identity:
     """One plan's lazy declaration parses; no I/O or namespace-wide alias merging."""
 
-    def __init__(self, contents: dict[Path, str], catalogs: dict[Path, Any], roots: tuple[Path, ...]):
+    def __init__(self, contents: dict[Path, str], catalogs: dict[Path, Any], graph: Graph):
         self.contents, self.catalogs = contents, catalogs
-        self.graph = Graph.contents(contents, roots)
+        self.graph = graph
         self.names = {name for catalog in catalogs.values() for name in catalog.typedefs}
         self.nodes: dict[str, Any] = {}
         self.scopes: dict[Path, tuple[Path, ...]] = {}

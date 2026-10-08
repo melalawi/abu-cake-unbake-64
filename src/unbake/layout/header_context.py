@@ -249,12 +249,50 @@ class Headers:
     combined source, so callers locate declarations exactly as with context().
     """
 
+    # Everything below comes from the parse of the whole context. A context built only to be replaced by the
+    # next edit is never parsed: the first read of any of these parses it, once.
+    _PARSED = frozenset(
+        {
+            "source",
+            "types",
+            "cache",
+            "defines",
+            "declarations",
+            "records",
+            "homes",
+            "placed",
+            "locations",
+            "scalars",
+            "index",
+            "_aliased",
+            "sdk",
+            "tag_only",
+        }
+    )
+
     def __init__(self, texts: dict[Path, str], *, root: Path | None) -> None:
         self.root = root
-        self._load(texts)
+        self.texts = dict(texts)
+        self._pending: dict[Path, str] | None = self.texts
+
+    def __getattr__(self, name: str) -> Any:
+        pending = self.__dict__.get("_pending")
+        if name in Headers._PARSED and pending is not None:
+            self._load(pending)
+            return getattr(self, name)
+        raise AttributeError(name)
+
+    def _ensure(self) -> None:
+        if self._pending is not None:
+            self._load(self._pending)
 
     def _load(self, texts: dict[Path, str]) -> None:
-        ordered, parser, records = context(texts, root=self.root)
+        self._pending = None
+        try:
+            ordered, parser, records = context(texts, root=self.root)
+        except BaseException:
+            self._pending = dict(texts)
+            raise
         self.texts = ordered
         self.source = parser.source
         self.types = dict(parser.types)
@@ -330,6 +368,7 @@ class Headers:
 
     def apply(self, edits: list[Any]) -> None:
         """Adopt header edits, appending new files and reparsing for changed ones."""
+        self._ensure()
         before = dict(self.texts)
         try:
             self._apply(edits)

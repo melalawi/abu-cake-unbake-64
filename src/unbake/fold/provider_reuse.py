@@ -104,6 +104,37 @@ def _catalog(text: str) -> Catalog:
     return Catalog(tags, typedefs, guard, frozenset(unproved))
 
 
+def _catalog_job(shared: Path | None, texts: list[str]) -> list[Catalog]:
+    """Catalogs of TEXTS, each kept in the project cache by its text so a later landing reads it."""
+    from unbake import cache
+
+    if shared is None:
+        return [_catalog(text) for text in texts]
+    store = cache.Cache(shared)
+
+    def one(text: str) -> Catalog:
+        catalog: Catalog = store.value("provider-catalog", cache.key(text), cache.PICKLE, lambda: _catalog(text))
+        return catalog
+
+    return [one(text) for text in texts]
+
+
+def catalogs_of(texts: list[str], host: Host | None, cache_root: Path | None, memo: dict[str, Catalog]) -> None:
+    """Fill MEMO with the catalog of every text in TEXTS: one parse per distinct text, pooled over the workers."""
+    from unbake import pool, tui
+
+    todo = [text for text in dict.fromkeys(texts) if text not in memo]
+    if not todo:
+        return
+    if host is None:
+        memo.update((text, _catalog(text)) for text in todo)
+        return
+    batches = [todo[start : start + 64] for start in range(0, len(todo), 64)]
+    with tui.task("Cataloguing header declarations", len(todo)):
+        done = pool.run(host, _catalog_job, batches, cache_root)
+    memo.update(zip(todo, (row for batch in done for row in batch), strict=True))
+
+
 def _refuse(project: Project, contents: dict[Path, str], name: str, paths: list[Path], detail: str) -> None:
     labels = []
     for path in paths:
@@ -138,15 +169,13 @@ def plan(
     *,
     changed: frozenset[Path] = frozenset(),
     cache: dict[str, Catalog] | None = None,
+    host: Host | None = None,
 ) -> list[Edit]:
     """Plan one canonical guarded provider using already read effective bytes."""
     private = {path for path in contents if any(path.is_relative_to(root) for root in project.work_include)}
     cache = {} if cache is None else cache
-    catalogs = {}
-    for path, text in contents.items():
-        if text not in cache:
-            cache[text] = _catalog(text)
-        catalogs[path] = cache[text]
+    catalogs_of(list(contents.values()), host, project.cache, cache)
+    catalogs = {path: cache[text] for path, text in contents.items()}
     providers: dict[str, list[Path]] = {}
     typedefs: dict[str, list[tuple[Path, tuple[str, ...]]]] = {}
     for path, catalog in catalogs.items():
@@ -170,7 +199,8 @@ def plan(
     }
     from unbake.fold.provider_identity import Identity
 
-    identity = Identity(contents, catalogs, tuple(project.include))
+    graph = Graph.contents(contents, project.include)
+    identity = Identity(contents, catalogs, graph)
     edits = []
     for path in sorted(contents):
         catalog = catalogs[path]
@@ -221,7 +251,7 @@ def plan(
             required.update(tokens)
         if not homes:
             continue
-        imported = set(Graph.contents(contents, project.include).closure(homes).paths)
+        imported = set(graph.closure(homes).paths)
         if path in imported:
             _refuse(project, contents, path.name, [path, *sorted(homes)], "canonical import would form a cycle")
         # Follow typedef dependencies to prove that identical field spellings

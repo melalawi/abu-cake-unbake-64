@@ -9,7 +9,7 @@ from dataclasses import dataclass, replace
 from functools import partial
 from pathlib import Path
 
-from unbake import scratch
+from unbake import scratch, tui
 from unbake.cdecl import LayoutParser
 from unbake.compilers.families.types import View
 from unbake.config import Held, Host, Project
@@ -229,7 +229,8 @@ def fold_source(
     authored = text
     from unbake.layout import redeclarations
 
-    contract = self_prototype.plan(project, headers.texts, text, function, versions)
+    with tui.task("Planning the owning prototype"):
+        contract = self_prototype.plan(project, headers.texts, text, function, versions)
     owning_edits = list(contract.edits) if contract is not None else []
     if contract is not None:
         self_prototype.require_complete(exact_entry, text, function, versions)
@@ -244,11 +245,13 @@ def fold_source(
     if identity_edits:
         headers = Headers({**headers.texts, **{edit.path: edit.after for edit in identity_edits}}, root=headers.root)
     text = contracts.rewrite(text)
-    headers, contract_edits = callee_contracts.reconcile(project, headers, text, function, versions)
+    with tui.task("Reconciling callee contracts"):
+        headers, contract_edits = callee_contracts.reconcile(project, headers, text, function, versions)
     text = gbi_recover.import_aliases(
         project, text, headers.texts, sdk_aliases=False, rules=frozenset({"volatile-storage"})
     )
-    text, evidence_end = declaration_evidence.inject(project, headers, text, function, versions)
+    with tui.task("Injecting declaration evidence"):
+        text, evidence_end = declaration_evidence.inject(project, headers, text, function, versions)
     if evidence_end:
         prefix = contracts.rewrite(text[:evidence_end])
         text = prefix + text[evidence_end:]
@@ -257,21 +260,24 @@ def fold_source(
         text = text[:evidence_end] + "/* unbake declaration evidence boundary */\n" + text[evidence_end:]
     text = imports.resolve(project, headers, text, function)
     text = pool_literals.lower(project, function, text, versions)
-    parsers = source_views.parsers(project, policy, text, versions, function, headers)
-    text, tag_only = _layout_names(
-        project,
-        policy,
-        function,
-        text,
-        parsers,
-        versions,
-        headers,
-        source_path=source_path,
-        source_line_offset=(
-            text.count("\n", 0, text.index("/* unbake declaration evidence boundary */")) + 1 if evidence_end else 0
-        ),
-    )
-    parsers = source_views.parsers(project, policy, text, versions, function, headers)
+    with tui.task("Parsing the draft per version"):
+        parsers = source_views.parsers(project, policy, text, versions, function, headers)
+    with tui.task("Naming layouts"):
+        text, tag_only = _layout_names(
+            project,
+            policy,
+            function,
+            text,
+            parsers,
+            versions,
+            headers,
+            source_path=source_path,
+            source_line_offset=(
+                text.count("\n", 0, text.index("/* unbake declaration evidence boundary */")) + 1 if evidence_end else 0
+            ),
+        )
+    with tui.task("Parsing the named draft per version"):
+        parsers = source_views.parsers(project, policy, text, versions, function, headers)
     records = [record for parser in parsers for record in _records(parser)]
     records = [replace(record, aliases=()) if record.name in tag_only else record for record in records]
     from unbake.layout import map
@@ -440,18 +446,20 @@ def folded_edits(
 
     contents = Headers.contents(project)
     catalogs: dict[str, provider_reuse.Catalog] = {}
-    reused = provider_reuse.plan(project, contents, versions, cache=catalogs)
+    with tui.task("Planning provider reuse"):
+        reused = provider_reuse.plan(project, contents, versions, cache=catalogs, host=policy)
     context = Headers({**contents, **{edit.path: edit.after for edit in reused}}, root=project.root)
-    folded = fold_source(
-        project,
-        policy,
-        context,
-        function,
-        text,
-        versions,
-        prove_headers=False,
-        exact_entry=exact_entry,
-    )
+    with tui.task("Folding the source"):
+        folded = fold_source(
+            project,
+            policy,
+            context,
+            function,
+            text,
+            versions,
+            prove_headers=False,
+            exact_entry=exact_entry,
+        )
     # A later fold edit can extend a reconciled private header. Publication must
     # still compare against its original bytes, and write each provider once.
     by_path = {edit.path: edit for edit in reused}
@@ -462,7 +470,9 @@ def folded_edits(
     # catalogue was built. Reconcile the final effective providers before the
     # native includer proof; unchanged installed homes retain ownership.
     staged = {**contents, **{edit.path: edit.after for edit in by_path.values()}}
-    for edit in provider_reuse.plan(project, staged, versions, changed=frozenset(by_path), cache=catalogs):
+    with tui.task("Reconciling providers"):
+        final = provider_reuse.plan(project, staged, versions, changed=frozenset(by_path), cache=catalogs, host=policy)
+    for edit in final:
         previous = by_path.get(edit.path)
         by_path[edit.path] = replace(edit, before=previous.before) if previous is not None else edit
     path = project.src / f"{function}.c"
