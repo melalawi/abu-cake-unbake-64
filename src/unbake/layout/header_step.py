@@ -172,7 +172,7 @@ def validate(
                 continue
             published[source] = tuple(
                 version
-                for version in split.holding_versions(project, source.stem, owners)
+                for version in split.code_versions(project, source.stem, owners)
                 if source.stem in fuzzy or any(row.kind == "c" for row in owners[version].get(source.stem, ()))
             )
             if not published[source]:

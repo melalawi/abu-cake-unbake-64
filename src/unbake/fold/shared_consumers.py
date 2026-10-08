@@ -40,7 +40,7 @@ def _units(
             continue
         versions = tuple(
             version
-            for version in split.holding_versions(project, source.stem, owners)
+            for version in split.code_versions(project, source.stem, owners)
             if any(row.kind == "c" for row in owners[version].get(source.stem, ()))
         )
         if versions:

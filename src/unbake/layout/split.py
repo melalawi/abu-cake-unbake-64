@@ -463,14 +463,14 @@ def owners_by_alias(project: Project, v: str) -> dict[str, list[Function]]:
     return memo("split.aliases", (v, tuple(rows)), build, size=retention.memory_size, copy_out=retention.clone)[0]
 
 
-def holding_versions(
+def code_versions(
     project: Project, function: str, owners: Mapping[str, Mapping[str, list[Function]]] | None = None
 ) -> tuple[str, ...]:
-    """Versions whose split has a code row named for function, in project order.
+    """Versions whose split has a code row named for function, in project order; empty for a data-only source.
 
     owners holds owners_by_alias per VERSION when a caller already read it once.
     """
-    versions = tuple(
+    return tuple(
         v
         for v in project.versions
         if any(
@@ -478,6 +478,13 @@ def holding_versions(
             for row in (owners[v] if owners is not None else owners_by_alias(project, v)).get(function, ())
         )
     )
+
+
+def holding_versions(
+    project: Project, function: str, owners: Mapping[str, Mapping[str, list[Function]]] | None = None
+) -> tuple[str, ...]:
+    """code_versions, refused by name when no VERSION holds the function."""
+    versions = code_versions(project, function, owners)
     if not versions:
         raise Held(
             cause_named(

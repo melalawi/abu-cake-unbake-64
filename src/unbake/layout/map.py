@@ -282,6 +282,52 @@ def _drop_stale_defaults(value: dict[str, Any], members: dict[str, Member]) -> N
         value["group"] = kept
 
 
+def _split_crossing(value: dict[str, Any], members: dict[str, Member]) -> None:
+    """Cut a group whose members now sit in different code segments into one group per contiguous segment run.
+
+    A segment boundary can move after a group was written; the members keep their address order, evidence, `only`
+    marks and `split` cuts, and each run takes the segment it lives in."""
+    groups = value.get("group")
+    if not isinstance(groups, list):
+        return
+    taken = {(g.get("segment"), g.get("name")) for g in groups if isinstance(g, dict)}
+    result: list[Any] = []
+    for group in groups:
+        names = group.get("members") if isinstance(group, dict) else None
+        if not isinstance(names, list) or not all(isinstance(n, str) and n in members for n in names):
+            result.append(group)
+            continue
+        runs: list[list[str]] = []
+        for name in names:
+            if runs and members[runs[-1][-1]].segment == members[name].segment:
+                runs[-1].append(name)
+            else:
+                runs.append([name])
+        if len(runs) == 1:
+            if group.get("segment") != members[names[0]].segment and group.get("evidence") == "default":
+                group["segment"] = members[names[0]].segment
+            result.append(group)
+            continue
+        for index, run in enumerate(runs):
+            segment = members[run[0]].segment
+            part = dict(group)
+            part["members"] = run
+            part["segment"] = segment
+            if index:
+                label = f"{group['name']}_{segment.removeprefix('span_')}"
+                while (segment, label) in taken:
+                    label += "_next"
+                taken.add((segment, label))
+                part["name"] = label
+            kept = set(run)
+            if isinstance(group.get("only"), dict):
+                part["only"] = {k: v for k, v in group["only"].items() if k in kept}
+            if isinstance(group.get("split"), list):
+                part["split"] = [m for m in group["split"] if m in kept]
+            result.append(part)
+    value["group"] = result
+
+
 def ensure(project: Project) -> bool:
     """Infer default and unowned catalog members; preserve every other valid group.
 
@@ -302,6 +348,9 @@ def ensure(project: Project) -> bool:
         ) from error
     members = catalog(project)
     _drop_stale_defaults(value, members)
+    arranged = json.dumps(value.get("group"), sort_keys=True, default=str)
+    _split_crossing(value, members)
+    healed = json.dumps(value.get("group"), sort_keys=True, default=str) != arranged
     named = {
         name
         for group in (value["group"] if isinstance(value.get("group"), list) else [])
@@ -311,7 +360,7 @@ def ensure(project: Project) -> bool:
     }
     # Only coverage is deferred: unknown names, duplicate owners and every authored constraint stay strict.
     current = validate(value, project.versions, {name: member for name, member in members.items() if name in named})
-    if named == members.keys() and all(group.evidence != "default" for group in current.groups):
+    if not healed and named == members.keys() and all(group.evidence != "default" for group in current.groups):
         return False
     encoded_map = encoded(modules.infer(project, current, members))
     validate(tomllib.loads(encoded_map.decode("utf-8")), project.versions, members)

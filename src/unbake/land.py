@@ -31,6 +31,7 @@ from unbake.layout import split
 from unbake.process import Fault, capture
 from unbake.process import named as cause_named
 from unbake.project.headers import scan
+from unbake.tui import progress as tui
 from unbake.work import attempts, compare
 
 
@@ -765,15 +766,17 @@ def land(
     project = _attempt_recipe(project, function, attempt)
     # The writer admits new measured split rows before fold's strict ownership read.
     # Admission checks above still refuse invalid requests without changing the map.
-    layout_map.ensure(project)
-    folded = fold_apply.fold(
-        project,
-        host,
-        function,
-        text,
-        versions=selected,
-        exact_entry=attempt,
-    )
+    with tui.task("Indexing layout"):
+        layout_map.ensure(project)
+    with tui.task("Folding shared declarations"):
+        folded = fold_apply.fold(
+            project,
+            host,
+            function,
+            text,
+            versions=selected,
+            exact_entry=attempt,
+        )
     owning_source = folded.contract.previous_source if folded.contract is not None else None
     owning_providers = (
         {
@@ -803,7 +806,8 @@ def land(
         options: dict[str, Any] = {}
         if folded.source_edits:
             options["source_edits"] = folded.source_edits
-        proof = prove(project, host, function, source, headers, stage, versions=selected, **options)
+        with tui.task("Proving every version"):
+            proof = prove(project, host, function, source, headers, stage, versions=selected, **options)
         versions, dependencies = proof.versions, proof.dependencies
         headers.update(proof.dependency_headers)
         source = proof.proposed_source if proof.proposed_source is not None else source
@@ -822,14 +826,15 @@ def land(
     }
     from unbake.layout import header_loss
 
-    header_loss.check(
-        project,
-        {
-            project.src / f"{function}.c": source.encode(),
-            **{project.include[-1] / n: t.encode() for n, t in headers.items()},
-            **{edit.path: edit.after.encode() for edit in folded.source_edits},
-        },
-    )
+    with tui.task("Checking header loss"):
+        header_loss.check(
+            project,
+            {
+                project.src / f"{function}.c": source.encode(),
+                **{project.include[-1] / n: t.encode() for n, t in headers.items()},
+                **{edit.path: edit.after.encode() for edit in folded.source_edits},
+            },
+        )
     written = {
         project.src / f"{function}.c",
         config_path,
@@ -918,7 +923,8 @@ def land(
     )
     dependencies.update(publication_inputs(updated, function, versions, dependencies))
     receipt = _receipt(updated, host, function, updated.src / f"{function}.c", versions, dependencies)
-    _commit(project, host, sorted({*written, *generated, *dependencies, project.root / attempts.PATH}), message)
+    with tui.task("Committing"):
+        _commit(project, host, sorted({*written, *generated, *dependencies, project.root / attempts.PATH}), message)
     for entry in receipt["dependency_manifest"]:
         committed = _git(project, "show", "HEAD:" + entry["path"]).encode()
         if hashlib.sha256(committed).hexdigest() != entry["digest"]:

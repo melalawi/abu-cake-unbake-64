@@ -13,7 +13,7 @@ MB = effort.MB
 
 class EffortTests(unittest.TestCase):
     def setUp(self) -> None:
-        for name, value in (("_ledger", {}), ("_counts", {}), ("_windows", [[0, 0]])):
+        for name, value in (("_ledger", {}), ("_counts", {}), ("_windows", [[0, 0]]), ("_stages", [])):
             patcher = patch.object(effort, name, value)
             patcher.start()
             self.addCleanup(patcher.stop)
@@ -54,6 +54,24 @@ class EffortTests(unittest.TestCase):
                 "worker_rss_bytes": 300 * MB,
                 "counts": {"facts": [1, 100]},
             },
+        )
+
+    def test_stages_report_wall_and_cores_once_per_name_after_the_mark(self) -> None:
+        effort.record_stage("Indexing layout", 1.0, 1.0)
+        start = effort.mark()
+        for name, wall, cpu in (
+            ("Proving every version", 4.0, 12.0),
+            ("Committing", 2.0, 0.5),
+            ("Committing", 2.0, 0.5),
+        ):
+            effort.record_stage(name, wall, cpu)
+        rows = effort.since(start).document()["stages"]
+        self.assertEqual(
+            rows,
+            [
+                {"name": "Proving every version", "runs": 1, "wall_seconds": 4.0, "cores": 3.0},
+                {"name": "Committing", "runs": 2, "wall_seconds": 4.0, "cores": 0.25},
+            ],
         )
 
     def test_a_window_holds_its_own_peak_and_a_wider_mark_sees_the_highest(self) -> None:

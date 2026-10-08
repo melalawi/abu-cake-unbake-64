@@ -28,6 +28,7 @@ _lock = threading.Lock()
 _ledger: dict[str, list[float]] = {}
 # name -> [done, total], summed (facts: source units extracted of all)
 _counts: dict[str, list[int]] = {}
+_stages: list[tuple[str, float, float]] = []
 # per memory window: [main peak, worker peak] in bytes; the last window is open
 _windows: list[list[int]] = [[0, 0]]
 
@@ -102,6 +103,12 @@ def counted() -> dict[str, tuple[int, int]]:
         return {name: (row[0], row[1]) for name, row in _counts.items()}
 
 
+def record_stage(name: str, wall: float, cpu: float) -> None:
+    """One finished stage: its wall seconds and the CPU seconds all processes spent in it."""
+    with _lock:
+        _stages.append((name, wall, cpu))
+
+
 def count(name: str, done: int, total: int) -> None:
     if type(name) is not str or not name or type(done) is not int or type(total) is not int or not 0 <= done <= total:
         raise ValueError(f"effort.count.{name}: required nonnegative integer done <= total")
@@ -125,6 +132,7 @@ class Mark:
     window: int = 0
     counts: dict[str, tuple[int, int]] = field(default_factory=dict)
     host: float = 0.0
+    stage: int = 0
 
 
 def mark() -> Mark:
@@ -134,6 +142,7 @@ def mark() -> Mark:
         pool = {name: (row[0], int(row[1])) for name, row in _ledger.items()}
         counts = {name: (row[0], row[1]) for name, row in _counts.items()}
         opened = len(_windows) - 1
+        staged = len(_stages)
     return Mark(
         time.monotonic(),
         own.ru_utime + own.ru_stime,
@@ -142,6 +151,7 @@ def mark() -> Mark:
         opened,
         counts,
         host_busy(),
+        staged,
     )
 
 
@@ -156,10 +166,29 @@ class Effort:
     counts: dict[str, tuple[int, int]] = field(default_factory=dict)
     # CPU-seconds other processes on the host used meanwhile (host busy time less this command's).
     external: float = 0.0
+    stages: tuple[tuple[str, float, float], ...] = ()
 
     @property
     def cpu(self) -> float:
         return self.main + self.tools + sum(seconds for seconds, _ in self.pool.values())
+
+    def stage_rows(self) -> list[dict[str, object]]:
+        """Each named stage once, in first-seen order: runs, wall seconds and cores used (CPU over wall)."""
+        rows: dict[str, list[float]] = {}
+        for name, wall, cpu in self.stages:
+            row = rows.setdefault(name, [0, 0.0, 0.0])
+            row[0] += 1
+            row[1] += wall
+            row[2] += cpu
+        return [
+            {
+                "name": name,
+                "runs": int(r[0]),
+                "wall_seconds": round(r[1], 3),
+                "cores": round(r[2] / r[1], 2) if r[1] > 0 else 0.0,
+            }
+            for name, r in rows.items()
+        ]
 
     @property
     def external_cores(self) -> float:
@@ -184,6 +213,7 @@ class Effort:
                 name: [round(seconds, 3), tasks]
                 for name, (seconds, tasks) in sorted(self.pool.items(), key=lambda item: -item[1][0])[:TOP]
             },
+            "stages": self.stage_rows(),
             "external_cpu_seconds": round(self.external, 3),
             "external_cores": round(self.external_cores, 2),
         }
@@ -211,7 +241,9 @@ def since(start: Mark) -> Effort:
     )
     # Pool CPU arrives when a task returns, so a window can count a task that started before it: never negative.
     external = max(0.0, end.host - start.host - spent.cpu) if start.host and end.host else 0.0
-    return replace(spent, external=external)
+    with _lock:
+        staged = tuple(_stages[start.stage :])
+    return replace(spent, external=external, stages=staged)
 
 
 def step_findings(name: str, spent: Effort, budgets: Host) -> list[str]:

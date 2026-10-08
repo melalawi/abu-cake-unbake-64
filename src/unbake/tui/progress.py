@@ -95,8 +95,9 @@ def task(label: str, total: int | None = None) -> Iterator[Task]:
     finally:
         with _lock:
             _stack.remove(opened)
+        spent = effort.since(mark)
+        effort.record_stage(label, spent.wall, spent.cpu)
         if _renderer is not None:
-            spent = effort.since(mark)
             cores = spent.cpu / spent.wall if spent.wall > 0 else 0.0
             _renderer.done(opened, spent.wall, cores, _cache(spent) + opened.note)
 
