@@ -14,6 +14,7 @@ VERBS = {
     "next": [],
     "draft": ["alpha"],
     "compare": ["alpha.c"],
+    "probe": ["alpha", "--source", "alpha.c", "--out", "out"],
     "tidy": ["alpha.c"],
     "search-variants": ["alpha.c", "--method", "order", "--seconds", "1"],
     "publish": ["alpha.c"],

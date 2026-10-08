@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import re
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -199,6 +200,7 @@ def measure(
     versions: tuple[str, ...] | None = None,
     retain_link_faults: bool = False,
     score_cache: dict[str, Measurement] | None = None,
+    on_linked: Callable[[str, Path, bytes, list[str], dict[str, Any]], None] | None = None,
 ) -> Compared:
     """Measure without recording an attempt. Compile failures retain native faults and nonexact placeholders.
     Link failures refuse by default; explicit scoped comparison retains them per version so no optional
@@ -253,6 +255,8 @@ def measure(
                     linked, problems = runner.link_function(
                         project, host, obj, version, row, file, capture_info=capture_info
                     )
+                    if on_linked is not None:
+                        on_linked(version, obj, linked, problems, capture_info)
             except Held as error:
                 if not compiling and not retain_link_faults:
                     raise

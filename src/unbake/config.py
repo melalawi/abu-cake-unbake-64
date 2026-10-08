@@ -807,6 +807,7 @@ NEEDS: dict[str, tuple[str, ...]] = {
     "next": (*_RESOURCES, *_CACHE),
     "draft": (*_COMPARE, "tools.m2c", "tools.splat", "tools.mips_objdump"),
     "compare": _COMPARE,
+    "probe": (*_COMPARE, "tools.mips_objdump"),
     "tidy": (*_RESOURCES, *_CACHE, "tools.cpp"),
     "search-variants": (
         *_COMPARE,
