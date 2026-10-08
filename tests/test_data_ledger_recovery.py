@@ -1,13 +1,19 @@
 """Preserved native SN64 evidence survives bounded storage and source-only recipe regeneration."""
 
 import copy
+import hashlib
+import io
 import json
+import shutil
+import sys
+import types
+import zipfile
 from dataclasses import replace
 from unittest.mock import patch
 
 from tests.test_source_data_build import RECORDS
 from tests.test_standalone_data_progress import StandaloneDataProgressTests, records
-from unbake import atomic, buildfiles, journal
+from unbake import atomic, buildfiles, journal, land, process
 from unbake.config import Held
 from unbake.project import publication_push
 from unbake.report import data, progress, verify
@@ -166,3 +172,157 @@ class DataLedgerRecoveryTests(StandaloneDataProgressTests):
         clean._refresh()
         self.assertEqual(len(clean.order), 3)
         self.assertEqual({row["event_id"] for row in attempts.read_records(theirs, project)}, set(clean.order))
+
+    def legacy_linker_proofs(self):
+        project = records(self)
+        symbols = project.version("us").symbols
+        symbols.write_text("Sn64DefinitionHeaderTail = 0x80002008;\n")
+        (project.root / "versions/us/symbols.ld").write_text(buildfiles.symbols_ld(project, "us"))
+        proofs = self.admit()["native_data"]
+        for proof in proofs:
+            # Retain the actual captured native payload in its pre-projection format.
+            proof["dependencies"]["values"].pop("producer_linker_inputs")
+            proof["payload"]["evidence"][0]["input_identity"] = attempts.dependency_record(proof["dependencies"]).digest
+        data.record_producers(project, proofs)
+        archive = project.root.parent / "archived-inputs"
+        for proof in proofs:
+            for pin in attempts.dependency_record(proof["dependencies"]).files:
+                path = project.root.joinpath(*pin.path.parts)
+                if path.is_file() and path.suffix in {".c", ".h", ".s", ".inc", ".ld", ".txt"}:
+                    target = archive.joinpath(*pin.path.parts)
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(path, target)
+        return project, archive
+
+    def test_hash_verified_archived_linker_projection_serializes_actual_data_without_rebinding(self):
+        project, archive = self.legacy_linker_proofs()
+        history = attempts.ledger(project)
+        history._refresh()
+        original = copy.deepcopy(history.events)
+        symbols = project.version("us").symbols
+        symbols.write_text(symbols.read_text() + "unrelated_delivery = 0x80002000;\n")
+        (project.root / "versions/us/symbols.ld").write_text(buildfiles.symbols_ld(project, "us"))
+        self.assertEqual(progress.measure(project, None, "us")["measures"]["complete_data"], 0)
+        with journal.transaction(project):
+            self.assertEqual(len(data.record_input_projections(project, archive)), 2)
+        self.assertEqual(data.record_input_projections(project, archive), [])
+        buildfiles.write_progress(project, publish_branch="main")
+        (project.root / "README.md").write_text("# Fixture\n\n## Progress\n\n| us (US fixture) |\n|---|\n\n## Build\n")
+        with patch.object(progress, "owner_descriptions", return_value={"us": "US fixture"}):
+            progress.write(project, None, source_only=True)
+        serialized = json.loads((project.root / "versions/us/report.json").read_text())
+        self.assertEqual(serialized["measures"]["matched_data"], 33253)
+        self.assertEqual(serialized["measures"]["complete_data"], 33253)
+        history._refresh()
+        self.assertTrue(all(history.events[key] == event for key, event in original.items()))
+        # A relevant symbol edit invalidates only its owning actual native record.
+        symbols.write_text(symbols.read_text().replace("0x80002008", "0x80002004"))
+        self.assertEqual(progress.measure(project, None, "us")["measures"]["complete_data"], 0)
+        symbols.write_bytes((archive / "versions/us/symbol_addrs.txt").read_bytes())
+        header = project.include[-1] / "sn64_type_records.h"
+        header.write_text(header.read_text() + "\n#define CHANGED_INPUT 1\n")
+        self.assertEqual(progress.measure(project, None, "us")["measures"]["complete_data"], 0)
+
+    def test_archived_projection_refuses_wrong_original_bytes_and_keeps_genuine_recipe_stale(self):
+        project, archive = self.legacy_linker_proofs()
+        symbols = archive / "versions/us/symbols.ld"
+        original = symbols.read_bytes()
+        symbols.write_bytes(original + b"\n")
+        with self.assertRaisesRegex(Held, "archived linker input"):
+            data.record_input_projections(project, archive)
+        symbols.write_bytes(original)
+        source = archive / "src" / (RECORDS[0]["symbol"] + ".c")
+        original_source = source.read_bytes()
+        source.write_bytes(original_source + b"\n")
+        with self.assertRaisesRegex(Held, "archived producer input"):
+            data.record_input_projections(project, archive)
+        source.write_bytes(original_source)
+        data.record_input_projections(project, archive)
+        recipe = project.root / "units.mk"
+        recipe.write_text(
+            recipe.read_text() + f"build/%/src/{RECORDS[0]['symbol']}.i: PREPROCESS_FLAGS = -DCHANGED=1\n"
+        )
+        self.assertEqual(progress.measure(project, None, "us")["measures"]["complete_data"], RECORDS[1]["bytes"])
+        source = project.src / (RECORDS[1]["symbol"] + ".c")
+        source.write_text(source.read_text() + "\n/* changed source input */\n")
+        self.assertEqual(progress.measure(project, None, "us")["measures"]["complete_data"], 0)
+
+    def test_first_ordinary_rotation_commits_real_canonical_reader_with_decodable_native_history(self):
+        project = records(self)
+        staged, committed = {}, {}
+        head = "head"
+
+        def git(current, *args):
+            nonlocal head
+            if args[0] == "rev-parse":
+                return "base" if args[-1] == "FETCH_HEAD" else head
+            if args[0] == "merge-base":
+                return "base"
+            if args[0] == "add":
+                staged.update({name: (current.root / name).read_bytes() for name in args[2:]})
+            elif args[0] == "commit":
+                committed.update(staged)
+                head = "committed"
+            elif args[0] == "push":
+                self.assertEqual(args[-1], "committed:refs/heads/" + self.host.publish_branch)
+            elif args[0] in {"fetch", "status", "ls-files", "check-ref-format"}:
+                pass
+            else:
+                return self.git(current, *args)
+            return ""
+
+        with (
+            patch.object(publication_push, "_git", side_effect=git),
+            patch.object(verify, "validate") as ci,
+            patch.object(attempts, "JOURNAL_LIMIT", 1),
+            patch.object(attempts, "SEGMENT_LIMIT", 256),
+        ):
+            result = publication_push.push(project, self.host, "origin")
+        ci.assert_not_called()
+        self.assertEqual(result["head"], "committed")
+        self.assertTrue({verify.BUNDLE, ".github/workflows/progress.yml", ".gitlab-ci.yml"} <= committed.keys())
+        self.assertEqual(json.loads(committed[attempts.PATH].splitlines()[0])["schema"], 3)
+        bundle_hash = hashlib.sha256(committed[verify.BUNDLE]).hexdigest()
+        self.assertIn(bundle_hash, committed[".github/workflows/progress.yml"].decode())
+        recovered = project.root.parent / "first-committed"
+        for name, content in committed.items():
+            atomic.write(recovered / name, content)
+        # Execute the actual reader member in the committed generated bundle,
+        # rather than substituting the checkout's Ledger class or mocking generation.
+        with zipfile.ZipFile(io.BytesIO(committed[verify.BUNDLE])) as bundle:
+            source = bundle.read("unbake/work/attempts.py")
+        name = "unbake.work.committed_attempts"
+        module = types.ModuleType(name)
+        module.__file__ = str(recovered / verify.BUNDLE) + "/unbake/work/attempts.py"
+        with patch.dict(sys.modules, {name: module}):
+            exec(compile(source, module.__file__, "exec"), module.__dict__)
+            reader = module.Ledger(replace(project, root=recovered))
+            reader._refresh()
+            expected = attempts.Ledger(project)
+            expected._refresh()
+            self.assertEqual(reader.events, expected.events)
+            self.assertEqual(len(reader.order), 2)
+
+    def test_large_git_storage_closure_uses_nul_stdin_for_publication_and_atomic_land_commit(self):
+        names = [f"history/ledger/{i:02x}/" + "a" * 64 for i in range(34896)]
+        names.extend(["src/name with spaces.c", "src/name\nwith newline.c"])
+        seen = []
+
+        def run(argv, work, phase, **kwargs):
+            self.assertLess(sum(len(arg.encode()) + 9 for arg in argv), 32768)
+            self.assertEqual(kwargs["stdin"].split("\0")[:-1], names)
+            self.assertIn("--pathspec-from-file=-", argv)
+            self.assertIn("--pathspec-file-nul", argv)
+            seen.append(phase)
+            return process.NativeResult(
+                tuple(argv), str(work), 0, None, "", "", "native-exit", None, "utf-8", "strict", {}
+            )
+
+        with patch.object(process, "run_native", side_effect=run):
+            publication_push._git(self.project, "add", "--", *names)
+            land._git(self.project, "add", "--", *names)
+            land._git(self.project, "commit", "--only", "-m", "packed history", "--", *names)
+        self.assertEqual(seen, ["publish", "land", "land"])
+        batches = list(process.path_batches(names))
+        self.assertEqual([name for batch in batches for name in batch], names)
+        self.assertTrue(all(sum(len(name.encode()) + 9 for name in batch) <= 32768 for batch in batches))

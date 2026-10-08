@@ -417,6 +417,33 @@ def run_native(
     return result
 
 
+def git_pathspec(argv: list[str]) -> tuple[list[str], str | None]:
+    """Keep large add/commit path sets off argv, preserving one atomic Git operation."""
+    if "--" not in argv or not ({"add", "commit"} & set(argv[:argv.index("--")])):
+        return argv, None
+    offset = argv.index("--")
+    paths = argv[offset + 1:]
+    # Leave ample room for the environment and pointer table on small ARG_MAX hosts.
+    if sum(len(os.fsencode(value)) + 9 for value in argv) <= 32768:
+        return argv, None
+    return [*argv[:offset], "--pathspec-from-file=-", "--pathspec-file-nul"], "\0".join(paths) + "\0"
+
+
+def path_batches(paths: Sequence[str]) -> Iterator[list[str]]:
+    """Bound path argv for read-only Git commands without pathspec-file support."""
+    batch: list[str] = []
+    size = 0
+    for path in paths:
+        cost = len(os.fsencode(path)) + 9
+        if batch and size + cost > 32768:
+            yield batch
+            batch, size = [], 0
+        batch.append(path)
+        size += cost
+    if batch:
+        yield batch
+
+
 def run_tool(
     argv: list[str],
     work: Path,
@@ -424,8 +451,9 @@ def run_tool(
     *,
     context: dict[str, Any] | None = None,
     temporary_root: Path | None = None,
+    stdin: str | None = None,
 ) -> str:
-    return run_native(argv, work, phase, context=context, temporary_root=temporary_root).stdout
+    return run_native(argv, work, phase, context=context, temporary_root=temporary_root, stdin=stdin).stdout
 
 
 def read_text(path: Path, phase: str) -> str:

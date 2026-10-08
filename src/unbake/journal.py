@@ -233,12 +233,15 @@ def recover(directory: Path, *, root: Path) -> list[Path]:
         )
         commit = result.stdout.strip()
         if commit:
-            listing = process.run_native(
-                ["git", "ls-tree", "-r", "-z", commit, "--", *intent["paths"]],
-                root,
-                "journal",
-                temporary_root=directory,
-            ).stdout
+            listing = "".join(
+                process.run_native(
+                    ["git", "ls-tree", "-r", "-z", commit, "--", *batch],
+                    root,
+                    "journal",
+                    temporary_root=directory,
+                ).stdout
+                for batch in process.path_batches(intent["paths"])
+            )
             tree = {}
             for row in listing.split("\0"):
                 if row:

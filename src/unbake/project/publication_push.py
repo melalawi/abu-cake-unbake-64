@@ -17,7 +17,8 @@ from unbake.work import attempts
 
 
 def _git(project: Project, *args: str) -> str:
-    return process.run_tool(["git", *args], project.root, "publish").strip()
+    argv, stdin = process.git_pathspec(["git", *args])
+    return process.run_tool(argv, project.root, "publish", stdin=stdin).strip()
 
 
 def admission(project: Project, host: Host, head: str, base: str) -> dict[str, Any]:
@@ -463,12 +464,15 @@ def push(project: Project, host: Host, remote: str, *, attempts_limit: int = 5) 
             with journal.transaction(current):
                 events = data.record_producers(current, checked.pop("native_data", []))
                 if events:
+                    # The first packed history commit must carry its canonical reader.
+                    # Generation is source-only; admission remains native bytes + hygiene.
+                    readers = buildfiles.write_progress(current, publish_branch=host.publish_branch)
                     _git(
                         current,
                         "add",
                         "--",
                         attempts.PATH,
-                        *(str(p.relative_to(current.root)) for p in attempts.storage_paths(current)),
+                        *(str(p.relative_to(current.root)) for p in [*attempts.storage_paths(current), *readers]),
                     )
                     _git(current, "commit", "-m", "Record accepted standalone native DATA and resource proofs")
                     head = _git(current, "rev-parse", "HEAD")

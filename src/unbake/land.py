@@ -70,7 +70,8 @@ class Landed:
 
 
 def _git(project: Project, *args: str, env: dict[str, str] | None = None) -> str:
-    return process.run_native(["git", *args], project.root, "land", temporary_root=project.build, env=env).stdout
+    argv, stdin = process.git_pathspec(["git", *args])
+    return process.run_native(argv, project.root, "land", temporary_root=project.build, env=env, stdin=stdin).stdout
 
 
 def dirty(project: Project) -> set[str]:
@@ -154,14 +155,17 @@ def _refuse_dangling_includes(project: Project, names: list[str]) -> None:
 
 
 def _commit(project: Project, host: Host, paths: list[Path], message: str) -> None:
-    paths = sorted({*paths, *attempts.storage_paths(project)})
-    names = [str(path.relative_to(project.root)) for path in paths]
-    _refuse_dangling_includes(project, names)
-    index = Path(_git(project, "rev-parse", "--git-path", "index").strip())
-    if not index.is_absolute():
-        index = project.root / index
-    author = f"{host.publish_author_name} <{host.publish_author_email}>"
     with journal.transaction(project) as transaction:
+        storage = attempts.storage_paths(project)
+        if storage:
+            paths = [*paths, *buildfiles.write_progress(project, publish_branch=host.publish_branch)]
+        paths = sorted({*paths, *storage})
+        names = [str(path.relative_to(project.root)) for path in paths]
+        _refuse_dangling_includes(project, names)
+        index = Path(_git(project, "rev-parse", "--git-path", "index").strip())
+        if not index.is_absolute():
+            index = project.root / index
+        author = f"{host.publish_author_name} <{host.publish_author_email}>"
         trailer = transaction.prepare_commit(project, host, index, paths, _git(project, "rev-parse", "HEAD").strip())
         _git(project, "add", "--", *names)
         _git(
