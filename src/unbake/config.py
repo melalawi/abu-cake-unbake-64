@@ -775,7 +775,6 @@ HOST_KEYS: dict[str, dict[str, Kind]] = {
 _RESOURCES = (
     "resources.domain",
     "resources.cores",
-    "resources.workers",
     *(f"resources.memory_{n}_bytes" for n in ("total", "parent", "worker")),
 )
 _CACHE = ("cache.machine_root", "cache.max_bytes", "cache.trim_to_bytes", "cache.memory_bytes")
@@ -993,8 +992,24 @@ class Host:
     def get(self, dotted: str) -> Any:
         section, key = dotted.split(".", 1)
         kind = HOST_KEYS[section][key]
-        value = self.raw(dotted)
         label = self._label(dotted)
+        if dotted == "resources.workers":
+            # Unset follows the host policy's core count. An explicit single worker serialises every pool job.
+            if not self.has(dotted):
+                return self.get("resources.cores")
+            workers = _positive(self.raw(dotted), label, integer=True)
+            if workers == 1 and self.get("resources.cores") > 1:
+                raise Held(
+                    _cause(
+                        f"{label}",
+                        f"{label}: 1 serialises every pool job on {self.get('resources.cores')} cores; "
+                        "remove the key to use the core count or set more workers",
+                        owner="config",
+                        stage="config",
+                    )
+                )
+            return workers
+        value = self.raw(dotted)
         if kind == "domain":
             if value == "standalone":
                 return value

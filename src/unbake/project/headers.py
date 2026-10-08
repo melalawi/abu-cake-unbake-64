@@ -472,6 +472,7 @@ class Resolution:
     target: Path | None
     probes: tuple[inputs.FilePin, ...]
     unknown: bool = False
+    detail: str = ""
 
 
 @dataclass(frozen=True)
@@ -480,6 +481,7 @@ class Closure:
     dependency_set: inputs.DependencySet
     unknown: bool
     order: tuple[Path, ...] = ()
+    unresolved: tuple[str, ...] = ()
 
 
 class Graph:
@@ -513,14 +515,19 @@ class Graph:
             *self.search.include_roots,
             *self.search.system_roots,
         )
+        # A conditional include that resolves is followed like any other: the closure holds every branch's
+        # header, so a change to any of them still changes the dependency digest. Only a conditional include
+        # that resolves nowhere is unknown, and it names the include and every path searched.
         probes = []
         for root in roots:
             candidate = Path(os.path.abspath(root / include.name))
             pin = self.view.pin(self.view.logical(candidate))
             probes.append(pin)
             if pin.state != "missing":
-                return Resolution(candidate, tuple(probes), include.conditional)
-        return Resolution(None, tuple(probes), include.conditional)
+                return Resolution(candidate, tuple(probes))
+        searched = ", ".join(p.path.name for p in probes)
+        detail = f"{parent}: conditional include {include.name!r} not found; searched {searched}"
+        return Resolution(None, tuple(probes), include.conditional, detail if include.conditional else "")
 
     def edges(self, path: Path) -> tuple[Resolution, ...]:
         if path not in self._edges:
@@ -576,6 +583,7 @@ class Graph:
         seen: set[Path] = set()
         probes: dict[inputs.LogicalPath, inputs.FilePin] = {}
         unknown = False
+        unresolved: list[str] = []
         forced_parent = self.view.root / "_forced.c"
         for name in self.search.forced:
             resolution = self.resolve(forced_parent, Include(name, True, 0, 0))
@@ -592,6 +600,8 @@ class Graph:
             probes[pin.path] = pin
             for resolution in reversed(self.edges(path)):
                 unknown |= resolution.unknown
+                if resolution.detail:
+                    unresolved.append(resolution.detail)
                 probes.update((pin.path, pin) for pin in resolution.probes)
                 if resolution.target is not None:
                     pending.append(resolution.target)
@@ -613,7 +623,13 @@ class Graph:
             },
             {"graph": self._recipe},
         )
-        result = Closure(tuple(sorted(selected)), dependency_set, unknown, tuple(p for p in ordered if p in selected))
+        result = Closure(
+            tuple(sorted(selected)),
+            dependency_set,
+            unknown,
+            tuple(p for p in ordered if p in selected),
+            tuple(unresolved),
+        )
         self._closures[identity] = result
         return result
 

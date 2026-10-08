@@ -674,7 +674,10 @@ def publication_inputs(project: Project, function: str, versions: Sequence[str],
         if closure.unknown:
             raise Held(
                 cause_named(
-                    "land.dependencies", "persistent include closure is unknown", owner="land", stage="publication"
+                    "land.dependencies",
+                    "persistent include closure is unknown" + "".join(f"\n  {u}" for u in closure.unresolved),
+                    owner="land",
+                    stage="publication",
                 )
             )
         files.update(closure.paths)

@@ -8,7 +8,7 @@
 # domain = "/abs/resource-domain.toml" # same manifest for commands sharing one allocation
 # These bound this command's pool and make jobs; in broker mode they request an atomic grant.
 # cores = 12
-# workers = 8
+# workers = 8                       # unset: the core count; 1 is refused when cores > 1
 # memory_total_bytes = 16000000000
 # memory_parent_bytes = 4000000000
 # memory_worker_bytes = 1500000000

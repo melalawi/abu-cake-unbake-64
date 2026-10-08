@@ -70,6 +70,29 @@ class GraphTests(ProjectCase):
         self.assertTrue(unknown.closure((a,)).unknown)
         self.assertEqual(unknown.resolve(a, Include("macro", False, 0, 0, True)).target, None)
 
+    def test_conditional_include_of_an_existing_path_is_known_and_a_missing_one_names_its_search(self):
+        root = self.project.include[0]
+        (root / "span").mkdir(exist_ok=True)
+        header, types, absent = root / "span/code.h", root / "types.h", root / "span/absent.h"
+        view = TreeView.contents(
+            {
+                header: b'#ifndef TYPES_H\n#include "../types.h"\n#endif\n',
+                types: REAL.read_bytes(),
+                absent: b'#ifdef X\n#include "gone.h"\n#endif\n',
+            },
+            (root,),
+        )
+        graph = Graph(view, Search(include_roots=(root,)))
+        found = graph.closure((header,))
+        self.assertFalse(found.unknown)
+        self.assertIn(types, found.paths)
+        missing = graph.closure((absent,))
+        self.assertTrue(missing.unknown)
+        self.assertEqual(len(missing.unresolved), 1)
+        self.assertIn("'gone.h'", missing.unresolved[0])
+        self.assertIn("span/gone.h", missing.unresolved[0])
+        self.assertIn("gone.h", missing.unresolved[0].split("searched")[1])
+
     def test_projection_recipe_invalidation_and_explicit_parse_failure(self):
         path = self.project.include[0] / "real.h"
         graph = Graph.contents({path: REAL.read_bytes()}, self.project.include)

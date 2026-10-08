@@ -192,6 +192,15 @@ class HostRefusalTests(TempCase):
             ):
                 Host.from_values(edited(self.values, "resources.domain", value), "next").require_command("next")
 
+    def test_workers_default_to_the_core_count_and_single_worker_is_refused(self) -> None:
+        unset = Host.from_values(edited(self.values, "resources.workers"), "compare")
+        self.assertEqual(unset.workers, unset.cores)
+        explicit = Host.from_values(edited(self.values, "resources.workers", 2), "compare")
+        self.assertEqual(explicit.workers, 2)
+        single = Host.from_values(edited(self.values, "resources.workers", 1), "compare")
+        with self.assertRaisesRegex(Held, r"resources\.workers|\[resources\]\.workers"):
+            self.assertIsNone(single.workers)
+
     def test_cross_key_rules(self) -> None:
         cache = ["cache.max_bytes", "cache.trim_to_bytes"]
         memory = ["resources.memory_total_bytes", "resources.memory_parent_bytes", "resources.memory_worker_bytes"]
