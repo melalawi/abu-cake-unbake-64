@@ -205,7 +205,7 @@ class ReportAccuracyTests(ProjectCase):
         self.assertEqual(reads, [self.project.src / "alpha.c", self.project.src / "beta.c"])
         processes.assert_not_called()
 
-    def test_source_missing_receipt_and_hash_compiler_version_mismatch_fail(self):
+    def test_claimed_receipt_mismatches_fail_and_unqualified_source_has_unknown_similarity(self):
         from unbake.report import state
 
         receipt = self.retained()
@@ -219,12 +219,12 @@ class ReportAccuracyTests(ProjectCase):
                 table["beta"] = replace(table["beta"], fuzzy={**receipt, key: value})
                 (self.project.root / attempts.PATH).write_bytes(history_bytes(self.project, table))
                 with self.assertRaisesRegex(Held, reason):
-                    state.inventory(self.project)
+                    state.inventory(self.project, receipts={"beta": {**receipt, key: value}})
         table["beta"] = replace(table["beta"], fuzzy=None)
         (self.project.root / attempts.PATH).write_bytes(history_bytes(self.project, table))
         source = (self.project.src / "beta.c").read_bytes()
-        with self.assertRaisesRegex(Held, "source.receipt.*reconcile"):
-            progress.measure(self.project, self.host, "us")
+        self.assertIsNone(state.inventory(self.project).receipts["beta"]["score"])
+        progress.measure(self.project, self.host, "us")
         self.assertEqual((self.project.src / "beta.c").read_bytes(), source)
 
     def test_duplicate_key_loss_sequence_refused_before_any_write(self):

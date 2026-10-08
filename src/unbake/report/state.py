@@ -59,8 +59,7 @@ def inventory(project: Project, *, receipts: dict[str, dict[str, Any]] | None = 
     """Read each version once, each retained source once, and receipts once."""
     pins = input_signatures(project)
     units = {version: split.functions(project, version) for version in project.versions}
-    if receipts is None:
-        receipts = attempts.ledger(project).fuzzy_sources()
+    history = attempts.ledger(project).fuzzy_sources()
     sources = {}
     definitions = {}
     for path in sorted(project.src.rglob("*.c")):
@@ -93,6 +92,30 @@ def inventory(project: Project, *, receipts: dict[str, dict[str, Any]] | None = 
             definitions[unit, version] = parsed_views[clean]
             names.update(parsed_views[clean])
         sources[unit] = (hashlib.sha256(raw).hexdigest(), names, guarded)
+    if receipts is None:
+        # History proves its own source, not a later retained provider/consumer edit.
+        # Unknown similarity describes retention only; it is never new native proof.
+        holdings: dict[str, set[str]] = {}
+        for version, rows in units.items():
+            for row in rows:
+                for member in split.unit_members(row):
+                    for name in member.aliases:
+                        holdings.setdefault(name, set()).add(version)
+        receipts = {}
+        for name, (digest, _, guarded) in sources.items():
+            if not guarded:
+                continue
+            receipt = history.get(name)
+            receipts[name] = (
+                receipt
+                if receipt is not None and receipt["source_sha256"] == digest
+                else {
+                    "source_sha256": digest,
+                    "compiler": project.compiler_reference(name),
+                    "score": None,
+                    "versions": {v: None for v in sorted(holdings.get(name, set()))},
+                }
+            )
     records = data.snapshots(project)
     coverage = {version: data.coverage(project, version, sources, records[version]) for version in project.versions}
     result = Inventory(
@@ -101,7 +124,7 @@ def inventory(project: Project, *, receipts: dict[str, dict[str, Any]] | None = 
         sources,
         definitions,
         pins,
-        inputs.bytes_digest(attempts.encoded(receipts), algorithm="sha256"),
+        inputs.bytes_digest(attempts.encoded(history), algorithm="sha256"),
         ledger_signature(project),
         coverage,
         data.identity(records),

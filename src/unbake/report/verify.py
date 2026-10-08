@@ -96,7 +96,10 @@ def source_paths(project: Project) -> tuple[Path, ...]:
 
 def source_pins(project: Project, *, receipts: dict[str, dict[str, Any]] | None = None) -> dict[str, str]:
     from unbake import cache, inputs
-    from unbake.work.attempts import encoded, ledger
+    from unbake.work.attempts import encoded
+
+    if receipts is None:
+        receipts = state.inventory(project).receipts
 
     return {
         **{
@@ -106,7 +109,7 @@ def source_pins(project: Project, *, receipts: dict[str, dict[str, Any]] | None 
         },
         "native-data-proofs": data.identity(data.snapshots(project)),
         "publication-state": inputs.bytes_digest(
-            encoded(ledger(project).fuzzy_sources() if receipts is None else receipts), algorithm="sha256"
+            encoded(receipts), algorithm="sha256"
         ),
     }
 

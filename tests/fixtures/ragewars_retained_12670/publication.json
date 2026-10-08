@@ -1,0 +1,138 @@
+{
+  "dependencies": {
+    "files": [],
+    "recipes": {},
+    "values": {
+      "dependencies_unknown": true,
+      "migration": {
+        "backup": ".unbake/migrations/89e037ddfe29f8f7f61a66ce29cb56ff2a558b9ef01885611b56a4f858ba990a",
+        "counts": {
+          "files": 29,
+          "local_logs": 26
+        },
+        "inputs": {
+          "attempts.json": "12476b1e1a40ce11e51c4448574c67711f870e8bc208e8f4da6e9ee372eba91f",
+          "build/steps.json": "03304dd07550d102d60e76af09966de6fb281dc861950a85a84b898875a1f359",
+          "build/types.sqlite": "b7e3eec1b271a45cf835622428b67d6b1388c5415151483c4179f976b7123ef2",
+          "build/work/func_802005DC_de/attempts.jsonl": "4178eabea8e16e65ebc28c2c123494485e89f345f8e1ffa96ca087e8e1661a91",
+          "build/work/func_80200C28_de/attempts.jsonl": "ea76e5447469c88511679bd9bc54a8653e22d1bda9c3b772fedb1bc17719884d",
+          "build/work/func_80200CA0_de/attempts.jsonl": "17ea69739a4018a19e06124be6a1ee2774d8180926e033aec4abb5760676b4ad",
+          "build/work/func_80200F98_de/attempts.jsonl": "3764f8dc2c0c79530a44582b8c1827ca65c09f57f7c546df58eeb0cab156ac62",
+          "build/work/func_80201064_de/attempts.jsonl": "a5161e00743eeeeca5d4115c817aa94599a644260598e4be86b68e4be0aa89b6",
+          "build/work/func_802012D8_de/attempts.jsonl": "806089d5f158d7670ac217d9ddde907107fef30e2c554d72b54d7aa7594a3707",
+          "build/work/func_80212670_de/attempts.jsonl": "1b1ad6655b17a8ccdf2d2f9ff4eefe3622abd0629823ffd2ad01b0d1adf8ea5b",
+          "build/work/func_802181FC_de/attempts.jsonl": "16c81e0326cfc37e802cc05bec7fbe1c5966758f7ba8009e98109bea556822fa",
+          "build/work/func_80222AA4_de/attempts.jsonl": "b84767c26d04ff18aa8c25f4e3d1b23742cb446746f25799a62af5e8f7b8ecf4",
+          "build/work/func_80226C60_de/attempts.jsonl": "521d76613d52549bbb76a252dcd06c796027ae9d571a717774ea724e15d91d3a",
+          "build/work/func_8022F454_de/attempts.jsonl": "301cc72fcc6f46281b6f2c35787642662e2a10312e4a00d4e26b86adae35b46c",
+          "build/work/func_8026AD8C_de/attempts.jsonl": "67304fb712ce5f9bad067f50875fd37e2c1733b9fabd31307701205450fa1436",
+          "build/work/func_8026C6D8_de/attempts.jsonl": "45b35d6f3d816d5a5c2ff2280409bece33869935dd9dcf6fc92c61e23c6aadb0",
+          "build/work/func_80271AA8_de/attempts.jsonl": "d45913b238b75f5dab3954c2ca7f3324c37872c7aa6a7d94221c69427d092ac5",
+          "build/work/func_80278274_de/attempts.jsonl": "028ea1782a25cd4a0745f8876fda8be86e7d8cae8f537555ca819dc02939dd5d",
+          "build/work/func_802A1270_de/attempts.jsonl": "79593bb3ed260e9e8964b960681fd7743ee8f0b5b6dc8eab18074491697ee385",
+          "build/work/func_802A7DE4_de/attempts.jsonl": "ebfb2cd2e89be03ca05e5ad0f17a5ab6d9d70f6c16d6a5b2e32a592519a951b5",
+          "build/work/func_802BC508_de/attempts.jsonl": "64b77e67d8f30d0b8d5e2138d6078036610e42a6120cde5cc5847ee3c12c9732",
+          "build/work/func_802BC558_de/attempts.jsonl": "2e3d179a55087f9f63b280b57e2e64641a9a755fb37fb77283e3c91bf111bd48",
+          "build/work/func_802C0230_de/attempts.jsonl": "f9f661c755e951aba021428b2dcb3bb48d24fd751b224a52cd54535a20566a41",
+          "build/work/func_802C0820_de/attempts.jsonl": "c6f0569909e5ae3410cbcd50e411e2f875b54c0d89b2b69a7a9711393f1d3840",
+          "build/work/func_804147F0_eu_x/attempts.jsonl": "9a088e762b9270fad698be0db6bbafc3eb289af7fd83a6c6360b8205736870bd",
+          "build/work/func_80415C1C_de/attempts.jsonl": "c0e284ac064372071a8a6c1898c80c4ad3f2f556aab7d5dc6242ce52c455baf2",
+          "build/work/func_80429178_us_rev1/attempts.jsonl": "d77cf26ee794a1bfedce131fff1d2f09c840a5d4ae80d6cc2ee939ca7b939b87",
+          "build/work/func_8042AF3C_de/attempts.jsonl": "c018baf12562fa5c3375f796954742e960ea517cb5b4a0bd721e4291ccb23a74",
+          "build/work/func_8044DE7C_de/attempts.jsonl": "ca6dfcff35481f4483e5006494eee1bdc67660c73f28ff4efe062df15ec5dd65"
+        },
+        "project_id": "1317b0d7-6ca5-413c-ae10-0649ad5d6994",
+        "schema": 2,
+        "sources": {
+          "src/func_802005DC_de.c": "50b9af2bd29b1cdb7208dbd331073c880b21d0ef2184f4bf77572674460781d7",
+          "src/func_80200C28_de.c": "96b8e5ad656bd37d48a4d0013f80adc7a9d3f8b9673cb30228ec513da82c056f",
+          "src/func_80200CA0_de.c": "d038719007542d4429e9eaf19ee02cc25e3fef33a026e05bac1d0bd3aedb0194",
+          "src/func_80200D18_de.c": "fefd3719342a7096a0f44389d97573038ec833050f0c0fe673bee11f33e81692",
+          "src/func_80200F98_de.c": "776e8f65b64b4897944cc28d508b8e67661f0e6b574a00e30a6c2eaf0bcbf503",
+          "src/func_80201064_de.c": "83510eac37a9a22a9160f53b82a98d3572b066c5689fc176e63393ed752f8881",
+          "src/func_802012D8_de.c": "fa5dde333ffc2d72dec15186ccb9c612192154a960e3e24ae388f9b9e454684b",
+          "src/func_80212670_de.c": "d69e7ece9a4fee6b9ec32dff09c80ec08d1fbdcc9e6d7d46e1813bacea327057",
+          "src/func_80222AA4_de.c": "d5cea2808d6c9a405f88559e1d7c12d89edefd4e3af39eb4605c84fd1c2814ed",
+          "src/func_80226C60_de.c": "6a682a61f704bb09f4ba8015e55624f2c8d3c98eaa13af451045f0827fbbd7aa",
+          "src/func_8022F454_de.c": "f746b543b2dbc7857847ebc137c50a2011ba9d77315b495d6b8c4bc013416d17",
+          "src/func_80264F60_de.c": "389d5d3446ad9f05a6e39450e891967746a6d950e8a931c05a1b516554fdde8c",
+          "src/func_802651B0_de.c": "ac139742aaa959c88849643055bc62ec532d2bfd0655d08423d5ff51473a57a8",
+          "src/func_80271AA8_de.c": "93f037c9f4bc31b3d37fa85ac8cec72b8189f51d7d366552a917d4e45de94298",
+          "src/func_8028E108_de.c": "c9afd5818be763c69cda63b7896899205c1255fad681a1a78e423c343faf81ef",
+          "src/func_802917D8_de.c": "9114578a30a9f0508e98fb664e3320223772ae9518242e9ca0573ad06e57ebc8",
+          "src/func_8029ABA0_de.c": "5d92e36822d60231bd613cd95c8357130354a7affa2d3f2e0ca1de0e5ac17d91",
+          "src/func_8029B278_de.c": "c99fa9bb71abfe35e4f021264110d8149b6f57288ab616ea0f8481236ab11e8e",
+          "src/func_802BC508_de.c": "c0e093b6c3c53f3e1c4fd79d1b423787ef2e517c3a4dc2a643f0caf8fd638674",
+          "src/func_802BC558_de.c": "b104f016e1c351682354bb402c6ad42f08e9ff611e713990f0685c7b04a109c6",
+          "src/func_804147F0_eu_x.c": "fc569876ae3283825aed96f0b82ed3421e03b89ea5ee9c3502703d5f1178c415",
+          "src/func_80426274_de.c": "059c43912a37845519c6e0554216dac218f79fb4fe9a97684c579b2cae1abbb8",
+          "src/func_80427250_de.c": "6a728654624ab8c93abca5742ac9fcffc66667049b59893ee3d9dd643776aa23",
+          "src/func_8042AF3C_de.c": "faa277f1e85e43f321e707e66c5f635a8ed3975ed4fd6e5e2e3c9e19e687dd1d",
+          "src/func_8044DE7C_de.c": "3e15b2e5c3135e245c995ab32e8c7c874812ab5158df68fffbd0aa3ab8542a91"
+        }
+      }
+    }
+  },
+  "event_id": "241340bbd5364f8b8ad22ca2959ebf8b",
+  "kind": "publication.fuzzy",
+  "observed_at": "2026-10-07T11:09:35.924471+00:00",
+  "operation_id": "7d7ae6ac8db745d0bff708bf5d35e48a",
+  "parents": [],
+  "project_id": "1317b0d7-6ca5-413c-ae10-0649ad5d6994",
+  "request": {},
+  "result": {
+    "fault": null,
+    "operation_id": "7d7ae6ac8db745d0bff708bf5d35e48a",
+    "proof_ids": [],
+    "state": "committed",
+    "value": {
+      "publication": {
+        "available": true,
+        "committed_source_sha256": null,
+        "compiler": "gcc-2.8.1-sn64",
+        "kind": "fuzzy",
+        "measurements": {
+          "de": null,
+          "eu": null,
+          "eu-x": null,
+          "us": null,
+          "us-rev1": null
+        },
+        "origin": "history.imported",
+        "receipt": {
+          "compiler": "gcc-2.8.1-sn64",
+          "score": 82.653061,
+          "source_sha256": "d69e7ece9a4fee6b9ec32dff09c80ec08d1fbdcc9e6d7d46e1813bacea327057",
+          "versions": {
+            "de": 82.653061,
+            "eu": 82.653061,
+            "eu-x": 82.653061,
+            "us": 82.653061,
+            "us-rev1": 82.653061
+          }
+        },
+        "source": {
+          "parts": [
+            "src",
+            "func_80212670_de.c"
+          ],
+          "root": "project"
+        },
+        "source_sha256": "d69e7ece9a4fee6b9ec32dff09c80ec08d1fbdcc9e6d7d46e1813bacea327057",
+        "stored_source_sha256": "d69e7ece9a4fee6b9ec32dff09c80ec08d1fbdcc9e6d7d46e1813bacea327057",
+        "unavailable_reason": null,
+        "versions": [
+          "de",
+          "eu",
+          "eu-x",
+          "us",
+          "us-rev1"
+        ]
+      }
+    },
+    "work": {}
+  },
+  "schema": 2,
+  "subject": "func_80212670_de",
+  "work": {}
+}

@@ -15,7 +15,6 @@ import re
 import shlex
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 from unbake import atomic as atomic_files
 from unbake import cache, inputs
@@ -503,13 +502,12 @@ def slices_mk(project: Project, version: str) -> str:
     return "".join(lines)
 
 
-def units_mk(project: Project, *, receipts: dict[str, dict[str, Any]] | None = None) -> str:
+def units_mk(project: Project) -> str:
     """Pattern-specific values (all versions) for units off the default compiler or with their own flags."""
     lines = [HEADER]
     default = project.compilers[project.default_compiler]
     from unbake.work import attempts
 
-    fuzzy = attempts.ledger(project).fuzzy_sources() if receipts is None else receipts
     names = sorted({path.stem for path in project.src.glob("*.c")})
     for name in names:
         targets = f"build/%/src/{name}.i build/%/src/{name}.key build/%/units/{name}.bin build/%/data/{name}.bin"
@@ -522,7 +520,7 @@ def units_mk(project: Project, *, receipts: dict[str, dict[str, Any]] | None = N
         ]
         prep, _ = drivers.stage_flags(compiler.id, effective)
         rendered = words(list(prep)).replace("-DUNBAKE_VERSION_PLACEHOLDER", "$(VERSION_DEFINES) $(CONSUMER)")
-        if name in fuzzy:
+        if attempts.guard_present((project.src / (name + ".c")).read_text()):
             rendered += " -DNON_MATCHING"
         lines.append(f"{targets}: PREPROCESS_FLAGS = {rendered}\n")
         if compiler.id != default.id:
@@ -879,7 +877,7 @@ def n64link_pin(host: Host) -> str:
     return N64LINK_RELEASE
 
 
-def generate(project: Project, host: Host, *, receipts: dict[str, dict[str, Any]] | None = None) -> dict[Path, bytes]:
+def generate(project: Project, host: Host) -> dict[Path, bytes]:
     """Every build file, by path; refused when an original-asm source or row lacks its proved record."""
     from unbake.decomp import original_asm
 
@@ -892,7 +890,7 @@ def generate(project: Project, host: Host, *, receipts: dict[str, dict[str, Any]
     files: dict[Path, str] = {
         project.root / ".gitignore": hygiene.runtime_ignore_text(project),
         project.root / "Makefile": makefile(project, host),
-        project.root / "units.mk": units_mk(project, receipts=receipts),
+        project.root / "units.mk": units_mk(project),
         project.tools / "n64link.version": n64link_pin(host),
         project.root / ".github/workflows/progress.yml": github_progress(project, host, verifier_payload=payload),
         project.root / ".gitlab-ci.yml": gitlab_progress(project, verifier_payload=payload),
@@ -918,7 +916,6 @@ def generate(project: Project, host: Host, *, receipts: dict[str, dict[str, Any]
 def input_key(project: Project, host: Host) -> str:
     """Everything the build files are made from."""
     from unbake.report import verify
-    from unbake.work import attempts
 
     parts: list[str | bytes | Path] = [
         "buildfiles",
@@ -936,7 +933,6 @@ def input_key(project: Project, host: Host) -> str:
     parts.extend(sorted(project.src.glob("*.s")))
     parts.extend(sorted((project.root / "resources").rglob("*.s")))
     parts.extend(resource_inputs(project))
-    parts.append(cache.serialized(attempts.ledger(project).fuzzy_sources()))
     from unbake.project import hygiene
 
     parts.append(hygiene.runtime_ignore_text(project))
@@ -961,9 +957,9 @@ def drift(project: Project, host: Host) -> list[Path]:
     ]
 
 
-def write(project: Project, host: Host, *, receipts: dict[str, dict[str, Any]] | None = None) -> list[Path]:
+def write(project: Project, host: Host) -> list[Path]:
     """Write the build files whose bytes changed; return them."""
-    generated = generate(project, host, receipts=receipts)
+    generated = generate(project, host)
     changed = [path for path, content in generated.items() if not path.is_file() or path.read_bytes() != content]
     for path in changed:
         atomic_files.write(path, generated[path])

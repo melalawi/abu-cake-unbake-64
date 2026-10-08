@@ -1190,12 +1190,14 @@ def land(
     from unbake import config
 
     updated = config.load(project.root)
-    receipts = attempts.ledger(updated).fuzzy_sources()
+    from unbake.report import state
+
+    receipts = state.inventory(updated).receipts
     if fuzzy_receipt is not None:
         receipts[function] = fuzzy_receipt
     else:
         receipts.pop(function, None)
-    generated = buildfiles.write(updated, host, receipts=receipts)
+    generated = buildfiles.write(updated, host)
     units_path = project.root / "units.mk"
     if units_path.is_file():
         generated.append(units_path)

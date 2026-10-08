@@ -29,7 +29,7 @@ class FuzzyPublishTests(ProjectCase):
         self.file.write_text(SOURCE)
         self.splits = {v: self.project.version(v).split.read_bytes() for v in self.versions}
 
-    def publish_source(self, score, *, fuzzy=True, fail_commit=False, cli=False):
+    def publish_source(self, score, *, fuzzy=True, fail_commit=False, cli=False, source_edits=(), generate=False):
         scores = {v: {"compiled": True, "percent": score, "exact": False} for v in self.versions}
         stream = io.StringIO()
         records = []
@@ -43,7 +43,10 @@ class FuzzyPublishTests(ProjectCase):
             journal.accepted(git_commit="c0ffee")
 
         with (
-            patch("unbake.fold.apply.fold", return_value=Folded("alpha", self.file.read_text(), {}, ())),
+            patch(
+                "unbake.fold.apply.fold",
+                return_value=Folded("alpha", self.file.read_text(), {}, (), source_edits=source_edits),
+            ),
             patch("unbake.fold.apply.private_headers", return_value={}),
             patch.object(land, "prove", return_value=prove),
             patch.object(land, "exact_attempt", return_value=SimpleNamespace(compiler="ido-7.1", sha256="a" * 64)),
@@ -57,12 +60,18 @@ class FuzzyPublishTests(ProjectCase):
             patch.object(
                 land,
                 "_git",
-                side_effect=lambda project, *args: attempts.guarded(SOURCE) if args[0] == "show" else "c0ffee\n",
+                side_effect=lambda project, *args: (
+                    (project.root / "config.toml").read_text()
+                    if args[0] == "show" and args[-1].endswith(":config.toml")
+                    else attempts.guarded(SOURCE)
+                    if args[0] == "show"
+                    else "c0ffee\n"
+                ),
             ),
             patch.object(buildfiles, "write", return_value=[]),
             patch.object(land.steps, "record"),
             patch.object(land.steps, "ensure") as ensure,
-            patch.object(progress, "write", return_value=[]),
+            nullcontext() if generate else patch.object(progress, "write", return_value=[]),
         ):
             if cli:
                 parser = argparse.ArgumentParser()
@@ -94,6 +103,45 @@ class FuzzyPublishTests(ProjectCase):
         self.assertEqual(buildfiles.units(self.project, "us"), [])
         self.assertIn("-DNON_MATCHING", buildfiles.units_mk(self.project))
         self.assertNotIn("alpha.bin", buildfiles.slices_mk(self.project, "us"))
+
+    def test_provider_materialization_retires_actual_12670_score_before_report_generation(self):
+        import json
+
+        from unbake.layout.split import Edit
+        from unbake.report import verify
+
+        fixture = Path(__file__).parent / "fixtures/ragewars_retained_12670"
+        name = "func_80212670_de"
+        event = json.loads((fixture / "publication.json").read_text())
+        cfg = self.project.root / "config.toml"
+        cfg.write_text(cfg.read_text().replace(self.project.id, event["project_id"]))
+        for path in [
+            self.project.root / "layout.toml",
+            *self.project.root.glob("versions/*/*.yaml"),
+            *self.project.root.glob("versions/*/symbol_addrs.txt"),
+        ]:
+            path.write_text(path.read_text().replace("beta", name))
+        self.project = config.load(self.project.root)
+        source = self.project.src / (name + ".c")
+        before, after = (fixture / "qualified.c").read_text(), (fixture / "retained.c").read_text()
+        source.write_text(before)
+        history = attempts.encoded(event) + b"\n"
+        (self.project.root / attempts.PATH).write_bytes(history)
+        buildfiles.write_progress(self.project, publish_branch="main")
+        with patch.object(progress, "readme_descriptions", return_value={v: f"{v} (fixture)" for v in self.versions}):
+            result, _, _ = self.publish_source(
+                100, fuzzy=False, source_edits=(Edit(source, before, after, self.versions),), generate=True
+            )
+        self.assertEqual(result, "c0ffee")
+        self.assertEqual(source.read_text(), after)
+        # Generation occurs after final consumer materialization and before the commit.
+        manifest = verify.validate(self.project)
+        for version in self.versions:
+            row = manifest["versions"][version]["drafts"][0]
+            self.assertEqual(row["name"], name)
+            self.assertIsNone(row["score"])
+            self.assertEqual(row["source_sha256"], hashlib.sha256(after.encode()).hexdigest())
+        self.assertEqual((self.project.root / attempts.PATH).read_bytes().splitlines()[0], history.rstrip())
 
     def test_first_unknown_measurement_is_explicit_and_never_replaces(self):
         self.publish_source(None)
