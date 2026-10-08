@@ -4,6 +4,7 @@ import copy
 import gzip
 import hashlib
 import os
+import unittest
 from pathlib import Path
 from unittest.mock import patch
 
@@ -88,8 +89,11 @@ class StandaloneDataProgressTests(SourceDataBuildTests):
         source = project.src / (RECORDS[0]["symbol"] + ".c")
         source.write_bytes(source.read_bytes() + b"\n")
         self.assertEqual(progress.measure(project, None, "us")["measures"]["matched_data"], 12792)
-        # An old output cannot mint a new proof for this edited source.
-        self.assertEqual(len(self.admit()["native_data"]), 1)
+        # An old output cannot mint a new proof for this edited source: without
+        # current preprocessing tools and an accepted native receipt it is refused by name.
+        with self.assertRaises(Held) as refused:
+            self.admit()
+        self.assertEqual(refused.exception.key, "data.provenance.prerequisites")
         header = project.include[-1] / "sn64_type_records.h"
         header.write_text(header.read_text() + "\n")
         self.assertEqual(progress.measure(project, None, "us")["measures"]["matched_data"], 0)
@@ -158,7 +162,9 @@ class StandaloneResourceProgressTests(ResourceBuildTests):
             before = (project.root / attempts.PATH).read_bytes()
             self.source.write_text(self.source.read_text() + "\n")
             self.assertEqual(progress.measure(project, None, "us")["measures"]["matched_data"], 0)
-            self.assertEqual(self.admit()["native_data"], [])
+            with self.assertRaises(Held) as refused:
+                self.admit()
+            self.assertEqual(refused.exception.key, "data.provenance.receipt")
             self.assertEqual((project.root / attempts.PATH).read_bytes(), before)
         native.assert_not_called()
 
@@ -183,7 +189,9 @@ class StandaloneResourceProgressTests(ResourceBuildTests):
         project = self.setup_producer()
         stamp = self.source.stat().st_mtime_ns
         os.utime(self.native, ns=(stamp - 1, stamp - 1))
-        self.assertEqual(self.admit()["native_data"], [])
+        with self.assertRaises(Held) as refused:
+            self.admit()
+        self.assertEqual(refused.exception.key, "data.provenance.receipt")
         self.assertEqual(progress.measure(project, None, "us")["measures"]["matched_data"], 0)
         self.native.write_bytes((Path(__file__).parent / "fixtures/resource_boot/boot.bin").read_bytes())
         self.source.write_text(self.source.read_text() + '\n.incbin "boot.bin"\n')
@@ -193,3 +201,10 @@ class StandaloneResourceProgressTests(ResourceBuildTests):
         self.source.write_bytes((Path(__file__).parent / "fixtures/resource_boot/boot.s").read_bytes())
         with self.assertRaises(Held):
             self.admit()
+
+
+class RelativeTextTests(unittest.TestCase):
+    def test_make_variable_path_suffix_is_not_an_absolute_path(self):
+        root = Path("/work/project")
+        self.assertEqual(config.relative_text(root, "-o $(@D)/rsp_boot.o ${OUT}/x"), "-o $(@D)/rsp_boot.o ${OUT}/x")
+        self.assertEqual(config.relative_text(root, "-I /work/project/include"), "-I include")

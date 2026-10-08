@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 from tests.project_fixture import ProjectCase
 from unbake import buildfiles
+from unbake.compilers import registry
 from unbake.config import Held
 from unbake.layout import split
 from unbake.project import publication_push
@@ -23,6 +24,10 @@ class SourceDataBuildTests(ProjectCase):
 
     def setUp(self):
         super().setUp()
+        # The fixture compiler holds placeholder bytes, so its real pin digests cannot match.
+        patcher = patch.object(registry, "verify")
+        patcher.start()
+        self.addCleanup(patcher.stop)
         for row in RECORDS:
             name = row["symbol"]
             raw = gzip.decompress((FIXTURE / (name + ".c.gz")).read_bytes())

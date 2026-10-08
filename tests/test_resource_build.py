@@ -50,7 +50,8 @@ class ResourceBuildTests(ProjectCase):
         self.project.version("us").baserom.write_bytes(bytes(NATIVE["rom_start"]) + body)
         make = self.project.root / "Makefile"
         make.write_text(buildfiles.makefile(self.project, self.host))
-        os.utime(make, ns=(1, 1))  # the producer predates the accepted native bytes
+        for producer in (make, self.source):
+            os.utime(producer, ns=(1, 1))  # producing inputs predate the accepted native bytes
         self.changed = {"versions/us/game.yaml"}
 
     def git(self, project, *args):
