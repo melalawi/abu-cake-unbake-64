@@ -138,13 +138,68 @@ def _signature(text: str, items: tuple[tuple[str, str], ...], aggregate_items: t
     return tuple(result)
 
 
-def equivalent(left: str, right: str, mapping: dict[str, str]) -> bool:
-    """Compare declarator types, ignoring parameter names and extern spelling.
-
-    An empty parameter list `f()` is compatible with `f(void)`; it is never equivalent to any other list."""
+def _entries(text: str, mapping: dict[str, str], name: str | None) -> object:
     items = tuple(sorted(mapping.items()))
     aggregates = tuple(sorted(getattr(mapping, "aggregates", {}).items()))
-    return _signature(left, items, aggregates) == _signature(right, items, aggregates)
+    signature = _signature(text, items, aggregates)
+    if name is None or not isinstance(signature, tuple):
+        return signature
+    return tuple(entry for entry in signature if entry[1] == name)
+
+
+def equivalent(left: str, right: str, mapping: dict[str, str], name: str | None = None) -> bool:
+    """Compare declarator types, ignoring parameter names and extern spelling.
+
+    An empty parameter list `f()` is compatible with `f(void)`; it is never equivalent to any other list.
+    Given NAME only that declarator of a multi-declarator declaration is compared; typedef chains resolve
+    through MAPPING, so `s32` equals `int` when the project's typedef says so."""
+    return _entries(left, mapping, name) == _entries(right, mapping, name)
+
+
+def canonical_type(text: str, mapping: dict[str, str], name: str) -> str:
+    """The canonical type NAME has in TEXT after typedef resolution, for refusal messages."""
+    found = _entries(text, mapping, name)
+    if isinstance(found, tuple) and found:
+        return str(found[0][2])
+    return "unparsed"
+
+
+def _conflict(name: str, local: str, shared: str, mapping: dict[str, str]) -> str:
+    return (
+        f"layout.redeclaration.{name}: local:\n{local}\nshared:\n{shared}\n"
+        f"local canonical type: {canonical_type(local, mapping, name)}\n"
+        f"shared canonical type: {canonical_type(shared, mapping, name)}"
+    )
+
+
+def _declarators(declaration: str) -> list[str]:
+    """Split `extern T a, *b;` into one declaration per declarator (empty when it cannot be split safely)."""
+    masked = declaration_source(declaration)
+    body = masked.rstrip().removesuffix(";")
+    cuts = []
+    depth = 0
+    for index, char in enumerate(body):
+        if char in "([{":
+            depth += 1
+        elif char in ")]}":
+            depth -= 1
+        elif char == "," and depth == 0:
+            cuts.append(index)
+    if not cuts or "=" in body or "{" in body:
+        return []
+    pieces = [declaration[a:b] for a, b in zip([0, *[c + 1 for c in cuts]], [*cuts, len(body)], strict=True)]
+    first = pieces[0]
+    names = declarations(first + ";").declared
+    if len(names) != 1:
+        return []
+    name = next(iter(names))
+    marks = [
+        m.start()
+        for m in (re.search(r"\*", first), re.search(r"\(", first), re.search(r"\b" + name + r"\b", first))
+        if m
+    ]
+    specifiers = first[: min(marks)].rstrip()
+    return [first.strip() + ";", *[f"{specifiers} {piece.strip()};" for piece in pieces[1:]]]
 
 
 _DECLARATOR = re.compile(r"\b([A-Za-z_]\w*)\s*(?:\)\s*)*[\[(;=,]")
@@ -249,11 +304,13 @@ def catalog(header: str) -> dict[str, str]:
         for variant in variants(declaration):
             row = declarations(variant)
             for name in row.typedefs | row.declared:
-                if name in result and not equivalent(result[name], variant, mapping):
+                if name in result and not equivalent(result[name], variant, mapping, name):
                     raise Held(
                         cause_named(
                             f"layout.redeclaration.{name}",
-                            f"layout.redeclaration.{name}: shared conflict\n{result[name]}\n{variant}",
+                            f"layout.redeclaration.{name}: shared conflict\n{result[name]}\n{variant}\n"
+                            f"canonical types: {canonical_type(result[name], mapping, name)} vs "
+                            f"{canonical_type(variant, mapping, name)}",
                             owner="layout.redeclarations",
                             stage="layout",
                         )
@@ -396,11 +453,13 @@ def strip(text: str, imported: list[str], disagreements: dict[str, tuple[str, st
     local_mapping = {**mapping, **aliases([text])}
     for header in imported:
         for name, declaration in catalog(header).items():
-            if name in shared and not equivalent(shared[name], declaration, mapping):
+            if name in shared and not equivalent(shared[name], declaration, mapping, name):
                 raise Held(
                     cause_named(
                         f"layout.redeclaration.{name}",
-                        f"layout.redeclaration.{name}: shared conflict\n{shared[name]}\n{declaration}",
+                        f"layout.redeclaration.{name}: shared conflict\n{shared[name]}\n{declaration}\n"
+                        f"canonical types: {canonical_type(shared[name], mapping, name)} vs "
+                        f"{canonical_type(declaration, mapping, name)}",
                         owner="layout.redeclarations",
                         stage="layout",
                     )
@@ -416,18 +475,26 @@ def strip(text: str, imported: list[str], disagreements: dict[str, tuple[str, st
                 (span for rows in tag_definitions(shared_declaration).values() for span in rows), reverse=True
             ):
                 shared_declaration = shared_declaration[:left] + shared_declaration[right:]
-            if not equivalent(local[name], shared_declaration, local_mapping):
+            if not equivalent(local[name], shared_declaration, local_mapping, name):
                 if disagreements is None:
                     raise Held(
                         cause_named(
                             f"layout.redeclaration.{name}",
-                            f"layout.redeclaration.{name}: local:\n{declaration}\nshared:\n{shared[name]}",
+                            _conflict(name, declaration, shared[name], local_mapping),
                             owner="layout.redeclarations",
                             stage="layout",
                         )
                     )
                 disagreements[name] = (local[name].strip(), shared[name].strip())
         if collisions != local.keys():
+            pieces = _declarators(declaration) if len(variants(declaration)) == 1 else []
+            if pieces:
+                kept = [p for p in pieces if not declarations(p).declared & shared.keys()]
+                masked = declaration_source(declaration)
+                match = re.search(r"\b(?:typedef|extern)\b", masked)
+                begin = start + match.start() if match is not None else start
+                text = text[:begin] + "\n".join(kept) + text[end:]
+                continue
             raise Held(
                 cause_named(
                     "layout.redeclarations.strip",
