@@ -147,10 +147,12 @@ def finalize(root: Path, document: dict[str, Any]) -> None:
         last = stream.read(1)
     if length and last != b"\n":
         raw = target.read_bytes()
-        from unbake.work.attempts import encoded, portable_tree
+        from unbake.work.attempts import portable_tree, stored_record
 
         complete, _, tail = raw.rpartition(b"\n")
-        if not any((encoded(portable_tree(project, row)) + b"\n").startswith(tail) for row in final_events.values()):
+        if not any(
+            stored_record(project, portable_tree(project, row)).startswith(tail) for row in final_events.values()
+        ):
             refuse("accepted tree preserved; torn ledger tail is not this operation's declared outcome")
         atomic_files.write(Path(document["directory"]) / "torn-record.bin", tail)
         atomic_files.write(target, complete + b"\n" if complete else b"")

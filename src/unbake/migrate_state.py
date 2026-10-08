@@ -336,7 +336,7 @@ def apply(project: Project, migration: dict[str, Any]) -> dict[str, Any]:
         refuse("migration inputs changed; create a new reviewed plan")
     target = project.root / "attempts.jsonl"
     if target.exists():
-        from unbake.work.attempts import portable_tree, validate_event
+        from unbake.work.attempts import portable_tree, stored_history, validate_event
 
         history = Ledger(project)
         history._refresh()
@@ -373,7 +373,7 @@ def apply(project: Project, migration: dict[str, Any]) -> dict[str, Any]:
         with Journal(project.build / "migration.journal", root=project.root) as transaction:
             transaction.save([target])
             if changed:
-                atomic.write(target, b"".join(encoded(row) + b"\n" for row in normalized))
+                atomic.write(target, stored_history(project, normalized))
                 history = Ledger(project)
                 if (
                     history.summaries() != summaries

@@ -154,6 +154,7 @@ def _refuse_dangling_includes(project: Project, names: list[str]) -> None:
 
 
 def _commit(project: Project, host: Host, paths: list[Path], message: str) -> None:
+    paths = sorted({*paths, *attempts.storage_paths(project)})
     names = [str(path.relative_to(project.root)) for path in paths]
     _refuse_dangling_includes(project, names)
     index = Path(_git(project, "rev-parse", "--git-path", "index").strip())

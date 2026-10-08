@@ -22,12 +22,17 @@ def register(parser: argparse.ArgumentParser) -> None:
     mode.add_argument("--plan", action="store_true")
     mode.add_argument("--apply", action="store_true")
     mode.add_argument("--recover", action="store_true")
+    mode.add_argument("--compact", action="store_true", help="Preserve all events in bounded immutable CAS storage")
 
 
 def run(context: Context) -> Result:
     from unbake import migrate_state
 
     project = context.project()
+    if context.args.compact:
+        from unbake.work import attempts
+
+        return Result.ok(NAME, attempts.compact(project), [], context.cmd("next"))
     if context.args.recover:
         return Result.ok(NAME, migrate_state.recover(project), [], context.cmd(NAME, "--plan"))
     planned = migrate_state.plan(project)

@@ -18,7 +18,7 @@ from unbake.compilers.config import BUILD_KEYS, build_values
 
 
 def relative_text(root: Path, text: str) -> str:
-    return re.sub(r"(?<![\w])/(?:[^\s\"']+)", lambda match: os.path.relpath(match[0], root), text)
+    return re.sub(r"(?<![\w./%+-])/(?:[^\s\"']+)", lambda match: os.path.relpath(match[0], root), text)
 
 
 def _held(kind: type[Held], args: tuple[Any, ...], state: dict[str, Any]) -> Held:

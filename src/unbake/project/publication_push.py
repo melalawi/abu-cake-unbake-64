@@ -7,7 +7,7 @@ from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
-from unbake import atomic, buildfiles, config, journal, process, strict_json
+from unbake import atomic, buildfiles, config, journal, process
 from unbake.cache import Cache
 from unbake.config import Held, Host, Project
 from unbake.layout import split
@@ -286,12 +286,12 @@ def resolve_conflicts(project: Project, host: Host) -> bool:
     with journal.transaction(project):
         if attempts.PATH in conflicts:
             sides = [_git(project, "show", ":" + str(stage) + ":" + attempts.PATH).encode() for stage in (1, 2, 3)]
-            merged = attempts.Ledger.merge(*sides)
+            merged = attempts.Ledger.merge(*sides, project=project)
             atomic.write(project.root / attempts.PATH, merged)
             # Strict readback owns both project identity and current-source projection.
             history = attempts.ledger(project)
             history._refresh()
-            expected = {strict_json.loads(line, "merged ledger")["event_id"] for line in merged.splitlines()}
+            expected = {row["event_id"] for row in attempts.read_records(merged, project)}
             if set(history.events) != expected:
                 raise Held(
                     cause_named(
@@ -326,7 +326,7 @@ def resolve_conflicts(project: Project, host: Host) -> bool:
         if set(conflicts) - build_generated:
             written.extend(buildfiles.write_progress(current, publish_branch=host.publish_branch))
             written.extend(progress.write(current, host, source_only=True))
-            verify.validate(current)
+        written.extend(attempts.storage_paths(current))
         _git(project, "add", "--", *sorted({*conflicts, *(p.relative_to(project.root).as_posix() for p in written)}))
     return True
 
@@ -463,7 +463,13 @@ def push(project: Project, host: Host, remote: str, *, attempts_limit: int = 5) 
             with journal.transaction(current):
                 events = data.record_producers(current, checked.pop("native_data", []))
                 if events:
-                    _git(current, "add", "--", attempts.PATH)
+                    _git(
+                        current,
+                        "add",
+                        "--",
+                        attempts.PATH,
+                        *(str(p.relative_to(current.root)) for p in attempts.storage_paths(current)),
+                    )
                     _git(current, "commit", "-m", "Record accepted standalone native DATA and resource proofs")
                     head = _git(current, "rev-parse", "HEAD")
                     checked["head"] = head

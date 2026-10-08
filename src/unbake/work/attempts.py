@@ -17,7 +17,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, NoReturn
 
-from unbake import atomic, strict_json
+from unbake import atomic, cache, strict_json
 from unbake.config import Held, Project
 from unbake.inputs import DependencySet, LogicalPath
 from unbake.process import Action, Fault, RetryRule, capture
@@ -41,6 +41,151 @@ FIELDS = frozenset(
         "observed_at",
     }
 )
+
+
+# Durable evidence uses the existing CAS, separate from evictable build caches.
+STORAGE = "history"
+JOURNAL_LIMIT = 8 * 1024 * 1024
+SEGMENT_LIMIT = 1024 * 1024
+NODE_LIMIT = 2048
+
+
+def storage_paths(project: Project) -> list[Path]:
+    ignore = project.root / STORAGE / ".gitignore"
+    return [*cache.entries(project.root / STORAGE), *([ignore] if ignore.is_file() else [])]
+
+
+def _store(project: Project, node: Any) -> str:
+    content = encoded(node)
+    identity = hashlib.sha256(content).hexdigest()
+    store = cache.Cache(project.root / STORAGE)
+    path = store.path("ledger", identity)
+    if path.exists():
+        if path.is_symlink() or path.read_bytes() != content:
+            raise ValueError("ledger.blob_conflict")
+    else:
+        # CAS appends are immutable; only the journal pointer needs rollback.
+        # A failed transaction can safely retain an unreferenced proof blob.
+        with atomic.recording(lambda _: None):
+            ignore = project.root / STORAGE / ".gitignore"
+            if not ignore.exists():
+                atomic.write(ignore, b"**/.lock\n**/.pending-*\n")
+            store.produce("ledger", identity, lambda target: atomic.write(target, content))
+            atomic.sync_directory(path.parent)
+    return identity
+
+
+def _load(project: Project, identity: str) -> Any:
+    if not isinstance(identity, str) or re.fullmatch(r"[0-9a-f]{64}", identity) is None:
+        raise ValueError("ledger.blob_identity")
+    path = cache.Cache(project.root / STORAGE).path("ledger", identity)
+    if path.is_symlink() or not path.is_file():
+        raise ValueError("ledger.blob_missing")
+    content = path.read_bytes()
+    if hashlib.sha256(content).hexdigest() != identity:
+        raise ValueError("ledger.blob_corrupt")
+    return strict_json.loads(content, path)
+
+
+def _pack(project: Project, value: Any) -> dict[str, Any]:
+    if len(encoded(value)) <= NODE_LIMIT:
+        return {"value": value}
+    if isinstance(value, dict):
+        node = {"map": _pack(project, [[key, value[key]] for key in sorted(value)])}
+    elif isinstance(value, list):
+        if len(value) > 16:
+            middle = len(value) // 2
+            node = {"concat": [_pack(project, value[:middle]), _pack(project, value[middle:])]}
+        else:
+            node = {"list": [_pack(project, item) for item in value]}
+    elif isinstance(value, str):
+        middle = len(value) // 2
+        node = {"text": [_pack(project, value[:middle]), _pack(project, value[middle:])]}
+    else:
+        raise ValueError("ledger.blob_value")
+    return {"ref": _store(project, node)}
+
+
+def _unpack(project: Project, node: Any, ancestors: frozenset[str] = frozenset()) -> Any:
+    if not isinstance(node, dict) or len(node) != 1:
+        raise ValueError("ledger.blob_node")
+    kind, value = next(iter(node.items()))
+    if kind == "ref":
+        if value in ancestors:
+            raise ValueError("ledger.blob_cycle")
+        return _unpack(project, _load(project, value), ancestors | {value})
+    if kind == "value":
+        return value
+    if kind == "map":
+        return dict(_unpack(project, value, ancestors))
+    if kind in {"list", "concat", "text"}:
+        items = [_unpack(project, child, ancestors) for child in value]
+        if kind == "concat":
+            return [item for group in items for item in group]
+        return "".join(items) if kind == "text" else items
+    raise ValueError("ledger.blob_node")
+
+
+def read_records(content: bytes, project: Project | None = None) -> Iterable[dict[str, Any]]:
+    for line in content.splitlines():
+        if not line:
+            continue
+        row = strict_json.loads(line, "ledger")
+        if type(row.get("schema")) is int and row["schema"] == 3:
+            if project is None:
+                raise ValueError("ledger.blob_root_required")
+            if set(row) == {"schema", "segment"}:
+                yield from read_records(_load(project, row["segment"]).encode(), project)
+                continue
+            if set(row) != {"schema", "event_id", "event"}:
+                raise ValueError("ledger.blob_record")
+            event = _unpack(project, row["event"])
+            if event["event_id"] != row["event_id"]:
+                raise ValueError("ledger.blob_event_identity")
+            row = event
+        yield row
+
+
+def stored_record(project: Project, event: dict[str, Any]) -> bytes:
+    if len(encoded(event)) <= NODE_LIMIT:
+        return encoded(event) + b"\n"
+    return encoded({"schema": 3, "event_id": event["event_id"], "event": _pack(project, event)}) + b"\n"
+
+
+def stored_history(project: Project, events: Iterable[dict[str, Any]]) -> bytes:
+    index = bytearray()
+    segment = bytearray()
+    for event in events:
+        line = stored_record(project, event)
+        if segment and len(segment) + len(line) > SEGMENT_LIMIT:
+            index.extend(encoded({"schema": 3, "segment": _store(project, segment.decode())}) + b"\n")
+            segment.clear()
+        segment.extend(line)
+    index.extend(segment)
+    return bytes(index)
+
+
+def compact(project: Project) -> dict[str, Any]:
+    """Change storage only: preserve every decoded event, ID, parent and proof byte."""
+    from unbake.journal import Journal
+
+    with atomic.lock(project.root / ".attempts.lock"):
+        history = Ledger(project)
+        history._refresh()
+        before = history.path.stat().st_size
+        content = stored_history(project, (history.events[i] for i in history.order))
+        with Journal(project.build / "migration.journal", root=project.root):
+            atomic.write(history.path, content)
+            check = Ledger(project)
+            check._refresh()
+            if check.order != history.order or check.events != history.events:
+                raise ValueError("ledger.storage_readback")
+        return {
+            "events": len(history.order),
+            "before_bytes": before,
+            "after_bytes": history.path.stat().st_size,
+            "storage_files": len(storage_paths(project)),
+        }
 
 
 @dataclass(frozen=True)
@@ -290,20 +435,18 @@ class Ledger:
                     stage="history",
                 )
             )
-        for line in data.splitlines():
-            if not line:
-                continue
-            try:
-                self._index(strict_json.loads(line, self.path))
-            except (ValueError, TypeError, KeyError) as error:
-                raise Held(
-                    capture(
-                        error,
-                        cause=cause_named(
-                            "ledger.corrupt", f"{self.path.name}: {error}", owner="work.attempts", stage="history"
-                        ),
-                    )
-                ) from error
+        try:
+            for row in read_records(data, self.project):
+                self._index(row)
+        except (ValueError, TypeError, KeyError) as error:
+            raise Held(
+                capture(
+                    error,
+                    cause=cause_named(
+                        "ledger.corrupt", f"{self.path.name}: {error}", owner="work.attempts", stage="history"
+                    ),
+                )
+            ) from error
         self.inode, self.offset = inode, info.st_size
 
     def _index(self, event: dict[str, Any]) -> None:
@@ -365,8 +508,10 @@ class Ledger:
                 raise Held(
                     cause_named("ledger.parents", "event parent unavailable", owner="work.attempts", stage="history")
                 )
-            atomic.append_record(self.path, encoded(value) + b"\n", durable=True)
+            atomic.append_record(self.path, stored_record(self.project, value), durable=True)
             self._index(value)
+            if self.path.stat().st_size > JOURNAL_LIMIT:
+                atomic.write(self.path, stored_history(self.project, (self.events[i] for i in self.order)))
             info = self.path.stat()
             self.inode = info.st_dev, info.st_ino
             self.offset = info.st_size
@@ -788,11 +933,10 @@ class Ledger:
         return tuple(self.events[i] for i in self.order if self.events[i]["operation_id"] == batch_id)
 
     @staticmethod
-    def merge(base: bytes, ours: bytes, theirs: bytes) -> bytes:
+    def merge(base: bytes, ours: bytes, theirs: bytes, *, project: Project | None = None) -> bytes:
         events: dict[str, dict[str, Any]] = {}
         for content in (base, ours, theirs):
-            for line in content.splitlines():
-                row = strict_json.loads(line, "ledger merge")
+            for row in read_records(content, project):
                 validate_event(row)
                 identity = row["event_id"]
                 if row.get("schema") != 2 or set(row) != FIELDS:
@@ -843,14 +987,19 @@ class Ledger:
         written: set[str] = set()
         order = []
         while remaining:
-            ready = sorted(i for i in remaining if set(events[i]["parents"]) <= written)
+            ready = sorted(
+                (i for i in remaining if set(events[i]["parents"]) <= written),
+                key=lambda i: (events[i]["observed_at"], i),
+            )
             if not ready:
                 raise ValueError("ledger.parents: unavailable or cyclic parents")
             for identity in ready:
                 order.append(events[identity])
                 written.add(identity)
                 remaining.remove(identity)
-        return b"".join(encoded(row) + b"\n" for row in order)
+        return (
+            stored_history(project, order) if project is not None else b"".join(encoded(row) + b"\n" for row in order)
+        )
 
 
 _current: ContextVar[Ledger | None] = ContextVar("unbake_ledger", default=None)

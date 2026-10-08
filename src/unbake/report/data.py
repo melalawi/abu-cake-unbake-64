@@ -335,6 +335,17 @@ def producer_binding(project: Project, version: str, unit: Any) -> dict[str, Any
     return binding
 
 
+def canonical_configuration(value: dict[str, Any]) -> dict[str, Any]:
+    """Generated build-root spelling is host layout, while recipe flags remain semantic."""
+    return {
+        **value,
+        "unit_recipe": [
+            re.sub(r"build/%[./]+(?=(?:src|units|data|resources)/)", "build/%/", line)
+            for line in value.get("unit_recipe", [])
+        ],
+    }
+
+
 def producer_configuration(project: Project, version: str, binding: dict[str, Any]) -> dict[str, Any]:
     """Scope mutable project configuration to this native producer, not unrelated inventory."""
     from unbake.compilers import drivers
@@ -549,7 +560,9 @@ def record_producers(project: Project, proofs: list[dict[str, Any]]) -> list[str
         operation = attempts.Operation.make(project, "native.data", proof["subject"], {}, dependencies)
         written.append(
             history.record(
-                operation, attempts.Outcome(operation.id, "ok", {"native_data": payload}, None, {}, (digest(payload),))
+                operation,
+                attempts.Outcome(operation.id, "ok", {"native_data": payload}, None, {}, (digest(payload),)),
+                parents=(prior["event_id"],) if prior is not None else (),
             )
         )
     return written
@@ -569,7 +582,9 @@ def current_dependencies(project: Project, event: dict[str, Any], version: str) 
     binding = dependencies.values.get("producer_binding")
     semantic_paths: set[str] = set()
     if binding is not None:
-        if dependencies.values.get("producer_configuration") != producer_configuration(project, version, binding):
+        if canonical_configuration(dependencies.values.get("producer_configuration", {})) != canonical_configuration(
+            producer_configuration(project, version, binding)
+        ):
             return "data.configuration.changed"
         semantic_paths = {
             "config.toml",
