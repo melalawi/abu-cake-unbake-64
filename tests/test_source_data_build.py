@@ -135,7 +135,7 @@ class SourceDataBuildTests(ProjectCase):
 
     def test_native_data_target_reuses_compiler_cas_and_copies_before_flags_with_exact_size(self):
         text = buildfiles.makefile(self.project, self.host)
-        self.assertIn("build/$1/data/%.bin: build/$1/src/%.key", text)
+        self.assertIn("build/$1/data/%.bin: build/$1/src/%.key versions/$1/slices.mk", text)
         self.assertIn("versions/$1/$$(NAME).data.ld | build/$1/data", text)
         recipe = text[text.index("DATA_BIN =") : text.index("SLICE =")]
         self.assertLess(recipe.index("cp build/cas/"), recipe.index("--set-section-flags"))
