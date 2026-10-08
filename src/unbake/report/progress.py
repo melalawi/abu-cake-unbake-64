@@ -18,7 +18,7 @@ from unbake.process import named as cause_named
 from unbake.report import files, readme_layout
 
 # Bump when this step's output changes for the same inputs. Keys never digest the tool's code.
-SCHEMA = 6
+SCHEMA = 7
 # Only C earns exact matched credit. Original assembly remains a separate denominator category.
 DONE = {"c": ("c", "Matched C", ".c")}
 
@@ -103,10 +103,12 @@ def _percentage(measures: dict[str, Any], field: str, name: str) -> float:
     return float(value)
 
 
-def _figures(document: dict[str, Any], name: str, functions: bool = False) -> tuple[int, int, float, float]:
+def _figures(
+    document: dict[str, Any], name: str, functions: bool = False, *, data: bool = False
+) -> tuple[int, int, float, float]:
     measures = _measures(document, name)
-    kind = "functions" if functions else "code"
-    complete = _counter(measures, "matched_functions" if functions else "complete_code", name)
+    kind = "functions" if functions else "data" if data else "code"
+    complete = _counter(measures, "matched_functions" if functions else "complete_" + kind, name)
     total = _counter(measures, "total_" + kind, name)
     if complete > total:
         raise Held(
@@ -118,7 +120,7 @@ def _figures(document: dict[str, Any], name: str, functions: bool = False) -> tu
             )
         )
     percent = 100 * complete / total if total else 0.0
-    fuzzy = percent if functions else _percentage(measures, "fuzzy_match_percent", name)
+    fuzzy = percent if functions or data else _percentage(measures, "fuzzy_match_percent", name)
     return complete, total, percent, fuzzy
 
 
@@ -128,14 +130,14 @@ def _bar(percent: float, fuzzy: float) -> str:
     return "█" * matched + "▒" * partial + "░" * (20 - matched - partial)
 
 
-def _line(label: str, document: dict[str, Any], version: str, functions: bool = False) -> str:
-    matched, total, percent, fuzzy = _figures(document, version, functions)
-    suffix = "" if functions else f" (~{fuzzy:.2f}%)"
+def _line(label: str, document: dict[str, Any], version: str, functions: bool = False, *, data: bool = False) -> str:
+    matched, total, percent, fuzzy = _figures(document, version, functions, data=data)
+    suffix = "" if functions or data else f" (~{fuzzy:.2f}%)"
     return f"{label} [{_bar(percent, fuzzy)}]  {percent:5.2f}%{suffix}  {matched:,} of {total:,}"
 
 
 def progress(reports: dict[str, dict[str, Any]], descriptions: dict[str, str]) -> str:
-    """Create the established bytes/functions table layout for a new README."""
+    """Create the established progress tables with bytes, data, functions in each ROM."""
     if not reports:
         raise Held(cause_named("reports", "reports: missing VERSION values", owner="report.progress", stage="report"))
     blocks = []
@@ -160,9 +162,11 @@ def progress(reports: dict[str, dict[str, Any]], descriptions: dict[str, str]) -
                 )
             )
         byte_line = _line("bytes    ", document, version)
+        data_line = _line("data     ", document, version, data=True)
         function_line = _line("functions", document, version, functions=True)
         blocks.append(
-            f"| {description} |\n|---|\n| <pre><code>{byte_line}</code><br><code>{function_line}</code></pre> |"
+            f"| {description} |\n|---|\n| <pre><code>{byte_line}</code><br><code>{data_line}</code>"
+            f"<br><code>{function_line}</code></pre> |"
         )
     if len(reports) > 1:
         summaries = {"all": _aggregate(reports), **reports}
@@ -184,7 +188,33 @@ _FIGURE = re.compile(
 
 
 def _replace_figures(content: str, document: dict[str, Any], version: str, table: bool) -> str:
-    expected = {"bytes", "functions"} if table else {version}
+    expected = {"bytes", "data", "functions"} if table else {version}
+    if table and not re.search(r"<code>data +\[", content):
+        pair = re.fullmatch(
+            r"(?P<before>.*?<code>)(?P<bytes>bytes[^<]+)(?P<between></code>.*?<code>)(?P<functions>functions[^<]+)(?P<after></code>.*?)",
+            content,
+            re.DOTALL,
+        )
+        if pair is None or (figure := _FIGURE.fullmatch(pair["bytes"])) is None:
+            raise Held(
+                cause_named(
+                    "readme.Progress",
+                    "readme.Progress: bytes/functions table required",
+                    owner="report.progress",
+                    stage="report",
+                )
+            )
+        padding = " " * (len(figure["label"]) + len(figure["pad"]) - len("data"))
+        data_line = "data" + padding + pair["bytes"][len(figure["label"]) + len(figure["pad"]) :]
+        content = (
+            pair["before"]
+            + pair["bytes"]
+            + pair["between"]
+            + data_line
+            + pair["between"]
+            + pair["functions"]
+            + pair["after"]
+        )
     seen: list[str] = []
 
     def replace(match: re.Match[str]) -> str:
@@ -200,11 +230,11 @@ def _replace_figures(content: str, document: dict[str, Any], version: str, table
             )
         seen.append(label)
         functions = label == "functions"
-        matched, total, percent, fuzzy = _figures(document, version, functions)
+        matched, total, percent, fuzzy = _figures(document, version, functions, data=label == "data")
         width = len(match["percent_pad"]) + len(match["percent"])
         percentage = f"{percent:.2f}"
         percentage = percentage.rjust(max(width, len(percentage) + 1))
-        fuzzy_text = "" if functions else f" (~{fuzzy:.2f}%)"
+        fuzzy_text = "" if functions or label == "data" else f" (~{fuzzy:.2f}%)"
         return (
             f"{label}{match['pad']}[{_bar(percent, fuzzy)}]{percentage}%{fuzzy_text}"
             f"{match['count_pad']}{matched:,} of {total:,}{match['suffix'] or ''}"
@@ -215,7 +245,7 @@ def _replace_figures(content: str, document: dict[str, Any], version: str, table
         raise Held(
             cause_named(
                 "report.progress",
-                f"readme.Progress.{version}: bytes/functions progress block missing or duplicated",
+                f"readme.Progress.{version}: bytes/data/functions progress block missing or duplicated",
                 owner="report.progress",
                 stage="report",
             )
@@ -321,7 +351,7 @@ def render(template: str, reports: dict[str, dict[str, Any]], *, descriptions: d
         raise Held(
             cause_named(
                 "readme.Progress",
-                "readme.Progress: complete bytes/functions tables and summary required",
+                "readme.Progress: complete ROM tables and summary required",
                 owner="report.progress",
                 stage="report",
             )

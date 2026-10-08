@@ -33,7 +33,7 @@ def section(content: str) -> tuple[str, str, str]:
 
 
 def complete(block: str) -> bool:
-    """Require both measures in every VERSION table and a full multi-VERSION summary."""
+    """Require the supported ROM measures in every VERSION table and a full multi-VERSION summary."""
     tables = list(re.finditer(r"^\| ([\w-]+) \([^\n|]+ \|\r?$", block, re.MULTILINE))
     if not tables:
         return False
@@ -41,7 +41,7 @@ def complete(block: str) -> bool:
     for index, table in enumerate(tables):
         end = tables[index + 1].start() if index + 1 < len(tables) else len(block)
         labels = re.findall(r"<code>([\w-]+) +\[", block[table.end() : end])
-        if labels != ["bytes", "functions"]:
+        if labels not in (["bytes", "functions"], ["bytes", "data", "functions"]):
             return False
     summary = re.findall(r"<code>([\w-]+) +\[", block[: tables[0].start()])
     return summary == ["all", *versions] or (len(versions) == 1 and not summary)

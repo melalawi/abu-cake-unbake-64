@@ -14,8 +14,12 @@ NUMBERS = re.compile(r"\[[#\-█▒░]{20}\] +[0-9]+\.[0-9]+%(?: \(~[0-9]+\.[0-
 FORBIDDEN = ("Retained drafts", "matching unknown", "Fuzzy % is known similarity", "All versions:")
 
 
+def without_data(content):
+    return re.sub(r"<br><code>data +\[[^<]+</code>", "", content)
+
+
 def layout(content):
-    return NUMBERS.sub("<figure>", content)
+    return NUMBERS.sub("<figure>", without_data(content))
 
 
 def payload(name):
@@ -50,11 +54,15 @@ class ReadmeFormatTests(unittest.TestCase):
                     rendered = progress.render(template, reports, descriptions=labels)
                 generate.assert_not_called()
                 self.assertEqual(replace.call_count, 2 * count + 1 if count > 1 else 1)
-                self.assertEqual(figures.call_count, 4 * count + 1 if count > 1 else 3)
+                self.assertEqual(figures.call_count, 5 * count + 1 if count > 1 else 4)
                 self.assertEqual(layout(rendered), layout(template))
-                self.assertEqual(len(NUMBERS.findall(rendered)), 3 * count + 1 if count > 1 else 2)
+                self.assertEqual(len(NUMBERS.findall(rendered)), 4 * count + 1 if count > 1 else 3)
                 self.assertNotEqual(rendered, template)
                 self.assert_art_only(rendered)
+                tables = re.findall(r"\| <pre>(.*?)</pre> \|", rendered, re.S)
+                self.assertEqual(len(tables), count)
+                for table in tables:
+                    self.assertEqual(re.findall(r"<code>(\w+) +\[", table), ["bytes", "data", "functions"])
                 if count == 1:
                     # Function accounting is preserved: actual definitions, rather than translation units.
                     self.assertIn("138 of 3,234", rendered)
@@ -73,11 +81,14 @@ class ReadmeFormatTests(unittest.TestCase):
                 reports = {"eu-mul" if v == "eu-x" else v: report for v, report in reports.items()}
                 for report in reports.values():
                     report["measures"]["total_data"] = 1234
+                    report["measures"]["complete_data"] = 456
+                    report["measures"]["matched_data"] = 456
                     report["categories"] = [{"id": "draft", "measures": {"total_code": 64, "total_functions": 2}}]
                 labels = descriptions(reference, reports)
                 generated = progress.progress(reports, labels)
                 self.assertEqual(layout(generated) + "\n", layout(reference))
                 self.assert_art_only(generated)
+                self.assertEqual(generated.count("456 of 1,234"), len(reports))
                 template = "# Owner\n\n## Progress\n\n\n## Next\n"
                 with patch.object(progress, "progress", wraps=progress.progress) as generate:
                     rendered = progress.render(template, reports, descriptions=labels)
