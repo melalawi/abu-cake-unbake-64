@@ -119,7 +119,19 @@ def capture_inputs(
 
     graph = Graph.capture(project)
     closure = graph.closure((source,), command)
-    pins = {pin.path: pin for pin in closure.dependency_set.files}
+
+    def portable(path: inputs.LogicalPath) -> inputs.LogicalPath:
+        return inputs.LogicalPath("project", path.parts) if path.root == graph.view.root_id else path
+
+    pins = {
+        portable(pin.path): inputs.FilePin(
+            portable(pin.path),
+            pin.state,
+            pin.sha256,
+            portable(pin.link_target) if pin.link_target is not None else None,
+        )
+        for pin in closure.dependency_set.files
+    }
     paths = {project.root / name for name in required(project, version)} | {project.version(version).baserom}
     for path in sorted(paths):
         pin = inputs.file_pin(path, root=project.root, root_id="project", reuse=cache.configured())

@@ -44,7 +44,7 @@ class DataEmissionTests(ProjectCase):
             (self.project.root / name).write_text("native fixture recipe\n")
         for name in ("fixture.ld", "symbols.ld"):
             (self.project.root / "versions/us" / name).write_text(
-                "SECTIONS { .text : { *(.text) } /DISCARD/ : { *(*) } }\n" if name == "fixture.ld" else ""
+                "SECTIONS\n{\n  .text : { *(.text) }\n  /DISCARD/ : { *(*) }\n}\n" if name == "fixture.ld" else ""
             )
         self.original = self.root / "func_80444CF8_de.o"
         self.original.write_bytes((FIXTURE / "named-original.elf32").read_bytes())
