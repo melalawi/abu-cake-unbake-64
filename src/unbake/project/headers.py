@@ -661,7 +661,7 @@ class Graph:
         """Current retained, version-active named initializers through the owning C parser."""
         import ast
 
-        from pycparser import c_ast, c_generator
+        from pycparser import c_ast, c_generator  # type: ignore[import-untyped]
 
         from unbake import cdecl
         from unbake.fold import source_views
@@ -727,7 +727,14 @@ class Graph:
         )
         if sizes is not None and needs_aliases:
             for text in providers:
-                provider = cdecl.parser(typedefs).parse(declarations.cleaned_unit(text))
+                # These are authored providers, not preprocessed translation
+                # units. Hide complete logical directives before the type parse.
+                try:
+                    provider = cdecl.parser(typedefs).parse(declarations.cleaned_unit(cdecl.declaration_source(text)))
+                except cdecl.ParseError as error:
+                    raise Held(
+                        cause_named("data.definition", str(error), owner="project.headers", stage="data")
+                    ) from error
                 aliases.update(
                     {
                         node.name: declarations.node_type(node.type)

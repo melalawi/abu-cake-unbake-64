@@ -449,7 +449,14 @@ def capture_producer(
             return None
         sections[0]["name"] = obj.names[index]
         sizes: dict[str, int] = {}
-        definitions = graph.initialized_definitions(project, source, version, sizes=sizes)
+        try:
+            definitions = graph.initialized_definitions(project, source, version, sizes=sizes)
+        except Held as error:
+            if error.key != "data.definition":
+                raise
+            # Unsupported declaration evidence is local to this producer. The
+            # existing native admission still owns byte equality and hygiene.
+            return None
         named = {
             symbol["name"]
             for table in obj.symbols.values()
