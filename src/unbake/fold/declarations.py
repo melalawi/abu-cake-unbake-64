@@ -6,10 +6,9 @@ import re
 from collections.abc import Iterable
 from contextlib import ExitStack
 from dataclasses import dataclass, replace
-from functools import partial
 from pathlib import Path
 
-from unbake import scratch, tui
+from unbake import pool, scratch, tui
 from unbake.cdecl import LayoutParser
 from unbake.compilers.families.types import View
 from unbake.config import Held, Host, Project
@@ -496,6 +495,122 @@ def _remove_rows(text: str, removed: Iterable[str]) -> str:
     return text
 
 
+@dataclass(frozen=True)
+class VersionNames:
+    """One version's planned type renames; versions are independent until merged in version order."""
+
+    planned: dict[tuple[int, int], str]
+    redundant: dict[tuple[int, int], str]
+    renames: frozenset[tuple[str, str]]
+    member_renames: frozenset[tuple[str, str]]
+    resolved_tags: frozenset[str]
+
+
+def _renamed_members(
+    found: set[tuple[str, str]], old: tuple[structs.Field, ...], new: tuple[structs.Field, ...], left: str, right: str
+) -> None:
+    for field, target in zip(old, new, strict=True):
+        before, after = f"{left}.{field.name}", f"{right}.{target.name}"
+        if field.name != target.name:
+            found.add((before, after))
+        _renamed_members(found, field.fields, target.fields, before, after)
+
+
+def _version_names(
+    shared_state: tuple[Project, Host, str, str, Headers, Path | None, int, dict[str, str]],
+    item: tuple[str, LayoutParser],
+) -> VersionNames:
+    """Plan one version's renames from its parser. Pure in its inputs, so versions run in pool workers."""
+    project, policy, function, text, headers, source_path, source_line_offset, shared_aliases = shared_state
+    version, parser = item
+    tag_only, sdk = headers.tag_only, headers.sdk
+    planned_here: dict[tuple[int, int], str] = {}
+    redundant: dict[tuple[int, int], str] = {}
+    renames: set[tuple[str, str]] = set()
+    member_renames: set[tuple[str, str]] = set()
+    with ExitStack() as cleanup:
+        context_project: Project | None = None
+
+        def effective_project() -> Project:
+            nonlocal context_project
+            if context_project is None:
+                temporary = cleanup.enter_context(scratch.temporary(policy, project, "fold", prefix="match-types-"))
+                roots = source_views.header_includes(project, headers, Path(temporary))
+                context_project = replace(project, work_include=tuple(roots))
+            return context_project
+
+        def typed_context() -> str:
+            return source_views.typed_context(
+                project, policy, headers, version, function, context_project=effective_project()
+            )
+
+        def expanded_context() -> View:
+            return rewrite_view.prepare(
+                effective_project(),
+                policy,
+                text,
+                version,
+                source_path or project.src / f"{function}.c",
+                contents=source_views.authored_contents(project, headers, effective_project()),
+            )
+
+        local_aliases = {}
+        for start, end in sorted({(item.start, item.end) for item in parser.declarations}):
+            local_aliases.update(alias_types(parser.source[start:end]))
+        callbacks = callback_renames(local_aliases, shared_aliases, function)
+        # Validate canonical scalar names before rewriting any aggregate alias.
+        scalar_edits(project, parser, headers)
+        records = _records(parser)
+        from unbake.fold import shared_consumers
+
+        reserved = shared_consumers.reserved(project, policy, headers, function, records)
+        resolution = headers.index.resolve(
+            [record for record in records if record.name not in sdk], function, reserved=reserved
+        )
+        resolved = frozenset(target for target, _ in resolution.values() if target in tag_only)
+        if not resolution and not callbacks:
+            return VersionNames({}, {}, frozenset(), frozenset(), resolved)
+        planned_here = type_rewrite.edits(
+            parser,
+            typed_context,
+            resolution,
+            tag_only,
+            cache_root=project.cache,
+            typedef_renames=callbacks,
+            preprocess=expanded_context,
+            source_path=source_path or project.src / f"{function}.c",
+            source_line_offset=source_line_offset,
+            source_text=text,
+        )
+        # A layout that keeps its name may absorb a same-source duplicate,
+        # whose forward typedef and definition are then both dropped.
+        local = {record.name for record in records if resolution.get(record.name, (record.name,))[0] == record.name}
+        defined: set[str] = set()
+        for record in records:
+            if record.name not in resolution:
+                continue
+            target, _ = resolution[record.name]
+            if target in defined:
+                # A forward typedef and its definition both name this record.
+                spans = [
+                    (item.start, item.end)
+                    for item in parser.declarations
+                    if getattr(item.base, "start", None) == record.start
+                ]
+                for number, span in enumerate(spans):
+                    keep = record.aliases and number == 0 and target not in local
+                    redundant[span] = f"typedef {record.kind} {target} {target};" if keep else ""
+            defined.add(target)
+        for name, (target, _) in resolution.items():
+            if name != target:
+                renames.add((name, target))
+        for record in records:
+            if record.name in resolution:
+                target, evidence = resolution[record.name]
+                _renamed_members(member_renames, record.fields, evidence.fields, record.name, target)
+    return VersionNames(dict(planned_here), redundant, frozenset(renames), frozenset(member_renames), resolved)
+
+
 def _layout_names(
     project: Project,
     policy: Host,
@@ -509,108 +624,24 @@ def _layout_names(
     source_line_offset: int = 0,
 ) -> tuple[str, set[str]]:
     """Rewrite active type tokens using complete layout evidence, before merging fields."""
-    tag_only = headers.tag_only
     resolved_tags: set[str] = set()
-    sdk = headers.sdk
     replacements: dict[tuple[int, int], str] = {}
     redundant: dict[tuple[int, int], str] = {}
     renames: set[tuple[str, str]] = set()
     member_renames: set[tuple[str, str]] = set()
-
-    def renamed_members(old: tuple[structs.Field, ...], new: tuple[structs.Field, ...], left: str, right: str) -> None:
-        for field, target in zip(old, new, strict=True):
-            before, after = f"{left}.{field.name}", f"{right}.{target.name}"
-            if field.name != target.name:
-                member_renames.add((before, after))
-            renamed_members(field.fields, target.fields, before, after)
-
     shared_aliases = {name: type_ for value in headers.texts.values() for name, type_ in alias_types(value).items()}
-
-    with ExitStack() as cleanup:
-        context_project: Project | None = None
-
-        def effective_project() -> Project:
-            nonlocal context_project
-            if context_project is None:
-                temporary = cleanup.enter_context(scratch.temporary(policy, project, "fold", prefix="match-types-"))
-                roots = source_views.header_includes(project, headers, Path(temporary))
-                context_project = replace(project, work_include=tuple(roots))
-            return context_project
-
-        def typed_context(version: str) -> str:
-            return source_views.typed_context(
-                project, policy, headers, version, function, context_project=effective_project()
-            )
-
-        def expanded_context(parser: LayoutParser, version: str) -> View:
-            return rewrite_view.prepare(
-                effective_project(),
-                policy,
-                text,
-                version,
-                source_path or project.src / f"{function}.c",
-                contents=source_views.authored_contents(project, headers, effective_project()),
-            )
-
-        for index, parser in enumerate(parsers):
-            local_aliases = {}
-            for start, end in sorted({(item.start, item.end) for item in parser.declarations}):
-                local_aliases.update(alias_types(parser.source[start:end]))
-            callbacks = callback_renames(local_aliases, shared_aliases, function)
-            # Validate canonical scalar names before rewriting any aggregate alias.
-            scalar_edits(project, parser, headers)
-            records = _records(parser)
-            from unbake.fold import shared_consumers
-
-            reserved = shared_consumers.reserved(project, policy, headers, function, records)
-            resolution = headers.index.resolve(
-                [record for record in records if record.name not in sdk], function, reserved=reserved
-            )
-            resolved_tags.update(target for target, _ in resolution.values() if target in tag_only)
-            if not resolution and not callbacks:
-                continue
-            planned = type_rewrite.edits(
-                parser,
-                partial(typed_context, versions[index]),
-                resolution,
-                tag_only,
-                cache_root=project.cache,
-                typedef_renames=callbacks,
-                preprocess=partial(expanded_context, parser, versions[index]),
-                source_path=source_path or project.src / f"{function}.c",
-                source_line_offset=source_line_offset,
-                source_text=text,
-            )
-            for span, target in planned.items():
-                if span in replacements and replacements[span] != target:
-                    structs.held(function, "version-dependent layout rename at the same source token")
-                replacements[span] = target
-            # A layout that keeps its name may absorb a same-source duplicate,
-            # whose forward typedef and definition are then both dropped.
-            local = {record.name for record in records if resolution.get(record.name, (record.name,))[0] == record.name}
-            defined: set[str] = set()
-            for record in records:
-                if record.name not in resolution:
-                    continue
-                target, _ = resolution[record.name]
-                if target in defined:
-                    # A forward typedef and its definition both name this record.
-                    spans = [
-                        (item.start, item.end)
-                        for item in parser.declarations
-                        if getattr(item.base, "start", None) == record.start
-                    ]
-                    for number, span in enumerate(spans):
-                        keep = record.aliases and number == 0 and target not in local
-                        redundant[span] = f"typedef {record.kind} {target} {target};" if keep else ""
-                defined.add(target)
-            for name, (target, _) in resolution.items():
-                if name != target:
-                    renames.add((name, target))
-            for record in records:
-                if record.name in resolution:
-                    target, evidence = resolution[record.name]
-                    renamed_members(record.fields, evidence.fields, record.name, target)
+    state = (project, policy, function, text, headers, source_path, source_line_offset, shared_aliases)
+    # One job per version, merged here in version order, so the outcome equals the serial loop's.
+    plans = pool.run(policy, _version_names, list(zip(versions, parsers, strict=True)), state)
+    for plan in plans:
+        resolved_tags.update(plan.resolved_tags)
+        for span, target in plan.planned.items():
+            if span in replacements and replacements[span] != target:
+                structs.held(function, "version-dependent layout rename at the same source token")
+            replacements[span] = target
+        redundant.update(plan.redundant)
+        renames.update(plan.renames)
+        member_renames.update(plan.member_renames)
     replacements = {
         span: target
         for span, target in replacements.items()

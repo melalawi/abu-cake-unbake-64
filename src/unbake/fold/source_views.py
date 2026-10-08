@@ -10,7 +10,7 @@ from pathlib import Path
 
 from unbake import atomic as atomic_files
 from unbake import cache as retention
-from unbake import scratch
+from unbake import pool, scratch
 from unbake.cdecl import LayoutParser
 from unbake.config import Host, Project
 from unbake.layout.header_context import Headers
@@ -31,14 +31,21 @@ def parsers(
 
     if not re.search(r"^\s*#\s*(?:if|ifdef|ifndef|elif)\b", text, re.M):
         return [contextual(text)]
-    result = []
+    # One job per version (its cpp view and its parse); versions with the same view share the first parser.
+    done = pool.run(policy, _version_parser, list(versions), (project, policy, text, unit, context))
     parsed: dict[str, LayoutParser] = {}
-    for version in versions:
-        view = active_source(project, policy, text, version, unit, context)
-        if view not in parsed:
-            parsed[view] = contextual(view)
-        result.append(parsed[view])
+    result = []
+    for view, parser in done:
+        result.append(parsed.setdefault(view, parser))
     return result
+
+
+def _version_parser(shared: tuple[Project, Host, str, str, Headers], version: str) -> tuple[str, LayoutParser]:
+    """One version's active view of the source and its parser; versions are independent."""
+    project, policy, text, unit, context = shared
+    view = active_source(project, policy, text, version, unit, context)
+    parser, _ = context.parse(view)
+    return view, parser
 
 
 def active_source(

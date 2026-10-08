@@ -366,7 +366,25 @@ def layout_tokens(clean: str, start: int = 0, end: int | None = None) -> list[re
     return [match for match in matches if not match[0].startswith(("/*", "//"))]
 
 
+class SavedToken(tuple[Any, ...]):
+    """A layout token kept across a process boundary (a re.Match cannot be pickled): text, start and end."""
+
+    def start(self) -> int:
+        return int(tuple.__getitem__(self, 1))
+
+    def end(self) -> int:
+        return int(tuple.__getitem__(self, 2))
+
+
 class LayoutParser:
+    def __getstate__(self) -> dict[str, Any]:
+        state = dict(self.__dict__)
+        state["tokens"] = [SavedToken((token[0], token.start(), token.end())) for token in self.tokens]
+        return state
+
+    def __setstate__(self, state: dict[str, Any]) -> None:
+        self.__dict__.update(state)
+
     def __init__(self, source: str, tokens: list[re.Match[str]] | None = None) -> None:
         """tokens: the layout tokens of declaration_source(source), when the caller already has them."""
         self.source = source

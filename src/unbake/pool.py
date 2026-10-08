@@ -1088,11 +1088,16 @@ def cpu(fn: Callable[..., R]) -> Callable[..., R]:
     return fn
 
 
+def in_worker() -> bool:
+    """True while a pool worker runs a job: work asked for there runs in that worker, never in a nested pool."""
+    return _token is not None
+
+
 def run(host: Host, fn: Callable[..., R], items: Sequence[T], shared: Any = None) -> list[R]:
     """Run fn over items in the shared pool, else the host's pool.
     CPU-marked functions run in workers even for a single item.
     With SHARED, fn takes it first: fn(shared, item)."""
-    if len(items) < 2 and not getattr(fn, "_pool_worker", False):
+    if in_worker() or (len(items) < 2 and not getattr(fn, "_pool_worker", False)):
         return [fn(item) if shared is None else fn(shared, item) for item in items]
     if not items:
         return []

@@ -377,7 +377,70 @@ def _compare(
     return measured
 
 
+def dependency_state(project: Project, host: Host, file: Path) -> str:
+    """Identity of every file and flag operation_dependencies reads: stat signatures, no content read.
+    The tool's own writes change a signature, so they alone invalidate a retained answer."""
+    from unbake import cache, inputs
+    from unbake.compilers import drivers
+
+    function = function_of(file)
+    holding = split.holding_versions(project, function)
+    roots = {*project.include}
+    flags = {version: drivers.flags(project, version, function) for version in holding}
+    for command in flags.values():
+        roots.update(project.root / flag[2:] for flag in command if flag.startswith("-I") and len(flag) > 2)
+    paths = {file, project.root / "config.toml", project.root / "layout.toml"}
+    for root in roots:
+        paths.update(root.rglob("*.h"))
+    paths.update(project.src.rglob("*.c"))
+    paths.update(project.src.rglob("*.h"))
+    for version in project.versions:
+        paths.update((project.version(version).split, project.version(version).symbols))
+        paths.update(path for path in project.build_link(version).glob("*"))
+    paths.update(
+        project.tools / name
+        for name in ("compilers.sha256", "compiler-driver.sha256", "compiler_contracts.py", "recipe_options.py")
+    )
+    paths.update(Path(getattr(host, field)) for field in ("cpp", "mips_as", "mips_ld", "mips_objcopy", "n64link"))
+    paths.update(compiler.cc for compiler in project.compilers.values())
+
+    def stat(path: Path) -> object:
+        try:
+            return inputs.signature(path)
+        except OSError:
+            return None
+
+    state = (
+        project.id,
+        str(project.root),
+        holding,
+        flags,
+        project.versions,
+        project.compiler_reference(function),
+        project.recipe_for(function).document(),
+        host.memory_worker_bytes,
+        host.cache_memory_bytes,
+        sorted((str(path), stat(path)) for path in paths),
+    )
+    return cache.key(repr(state))
+
+
 def operation_dependencies(project: Project, host: Host, file: Path) -> DependencySet:
+    """The dependencies of measuring FILE, read once per tree state: later calls in the command reuse them."""
+    from unbake import cache
+
+    if not cache.configured():
+        return _operation_dependencies(project, host, file)
+    return cache.memo(
+        "work.operation_dependencies",
+        dependency_state(project, host, file),
+        lambda: _operation_dependencies(project, host, file),
+        size=cache.memory_size,
+        copy_out=cache.clone,
+    )
+
+
+def _operation_dependencies(project: Project, host: Host, file: Path) -> DependencySet:
     from unbake import cache, inputs
     from unbake.project.headers import Graph
 
