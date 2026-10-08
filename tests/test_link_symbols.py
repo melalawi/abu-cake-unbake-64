@@ -89,8 +89,19 @@ class OtherVersionNameTests(unittest.TestCase):
 class SymbolsLdOtherVersionTests(OtherVersionNameTests):
     """symbols.ld provides the same address for a version-suffixed name as the probe link does."""
 
-    def render(self, project: SimpleNamespace, version: str, suffixed: dict[str, str]) -> str:
-        with patch("unbake.compilers.runtime.bindings", return_value={}):
+    def source(self, text: str) -> str:
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root)
+        path = root / "a.h"
+        path.write_text(text)
+        return str(path)
+
+    def render(self, project: SimpleNamespace, version: str, suffixed: dict[str, tuple[str, ...]]) -> str:
+        defines = {"VERSION_" + version.upper(): "1"}
+        with (
+            patch("unbake.compilers.runtime.bindings", return_value={}),
+            patch.object(buildfiles, "_version_defines", return_value=defines),
+        ):
             return buildfiles.symbols_ld(project, version, {}, suffixed)  # type: ignore[arg-type]
 
     def test_the_final_link_agrees_with_the_probe_link(self) -> None:
@@ -100,13 +111,16 @@ class SymbolsLdOtherVersionTests(OtherVersionNameTests):
                 "de": {"gA": 0x110, "gB": 0x210},
             }
         )
-        text = self.render(project, "de", {"D_80000150_eu": "src/a.c"})
+        spelled = self.source("u8 *p = &D_80000150_eu;\n")
+        text = self.render(project, "de", dict(D_80000150_eu=(spelled,)))
         self.assertIn("PROVIDE(D_80000150_eu = 0x00000160);\n", text)
         self.assertEqual(
             runner.derived_symbols({"D_80000150_eu"}, frozenset(), "de", SOURCE, project),  # type: ignore[arg-type]
             ["--defsym=D_80000150_eu=0x00000160"],
         )
-        self.assertIn("PROVIDE(D_80000150_eu = 0x00000150);\n", self.render(project, "eu", {"D_80000150_eu": "a.c"}))
+        self.assertIn(
+            "PROVIDE(D_80000150_eu = 0x00000150);\n", self.render(project, "eu", dict(D_80000150_eu=(spelled,)))
+        )
 
     def test_unanchored_is_refused_naming_source_version_symbol_and_unlisted_names_are_not_references(self) -> None:
         project = self.project(
@@ -115,11 +129,44 @@ class SymbolsLdOtherVersionTests(OtherVersionNameTests):
                 "de": {"gA": 0x110, "gB": 0x230, "gC": 0x330},
             }
         )
+        spelled = self.source("u8 *p = &D_80000150_eu;\n")
         with self.assertRaises(Held) as caught:
-            self.render(project, "de", {"D_80000150_eu": "src/a.c"})
-        for part in ("src/a.c", "VERSION de", "D_80000150_eu"):
+            self.render(project, "de", dict(D_80000150_eu=(spelled,)))
+        for part in (spelled, "VERSION de", "D_80000150_eu"):
             self.assertIn(part, caught.exception.reason)
-        self.assertNotIn("func_80001000_de", self.render(project, "de", {"func_80001000_de": "src/a.c"}))
+        self.assertNotIn("func_80001000_de", self.render(project, "de", dict(func_80001000_de=(spelled,))))
+
+    def test_only_names_the_version_s_active_branches_spell_are_references(self) -> None:
+        tables = {
+            "eu": {"gA": 0x100, "gB": 0x200, "gC": 0x300, "D_800C6500_eu": 0x250, "D_800C6504_eu": 0x150},
+            "de": {"gA": 0x110, "gB": 0x230, "gC": 0x330},
+            "us": {"gA": 0x110, "gB": 0x210, "gC": 0x310},
+        }
+        header = self.source(
+            "#if defined(VERSION_EU)\n#define D_800C6260 D_800C6500_eu\n"
+            "#elif defined(VERSION_DE) && !defined(VERSION_US)\n#define D_800C6260 D_800C6504_eu\n"
+            "#else\n#define D_800C6260 gA\n#endif\n/* D_800C6504_eu */ // D_800C6500_eu\n"
+        )
+        suffixed: dict[str, tuple[str, ...]] = {"D_800C6500_eu": (header,), "D_800C6504_eu": (header,)}
+        project = self.project(tables)
+        self.assertEqual(buildfiles.active_text("#if 0\nx_eu\n#endif\ny\n", {}, "h"), "y\n")
+        with patch.object(buildfiles, "_version_defines", return_value={"VERSION_US": "1"}):
+            self.assertEqual(buildfiles.other_version_names(project, "us", suffixed), {})  # type: ignore[arg-type]
+        with patch.object(buildfiles, "_version_defines", return_value={"VERSION_EU": "1"}):
+            self.assertEqual(buildfiles.other_version_names(self.project(tables), "eu", suffixed), {})  # type: ignore[arg-type]
+        # de: the elif branch is active, so only D_800C6504_eu is referenced, and it has no anchors there.
+        with self.assertRaises(Held) as caught:
+            self.render(project, "de", suffixed)
+        self.assertIn("D_800C6504_eu", caught.exception.reason)
+        self.assertNotIn("D_800C6500_eu", caught.exception.reason)
+        # unanchored but only spelled in an inactive branch or a comment: no reference, no refusal
+        self.assertNotIn("D_800C6500_eu", self.render(project, "de", dict(D_800C6500_eu=(header,))))
+        self.assertNotIn("D_800C6504_eu", self.render(project, "us", suffixed))
+
+    def test_an_expression_that_cannot_be_evaluated_is_refused_naming_it(self) -> None:
+        with self.assertRaises(Held) as caught:
+            buildfiles.active_text("#if FOO(1)\nx\n#endif\n", {}, "a.h")
+        self.assertIn("FOO(1)", caught.exception.reason)
 
     def test_the_source_scan_finds_suffixed_names_apart_from_address_names(self) -> None:
         root = Path(tempfile.mkdtemp())
@@ -128,7 +175,7 @@ class SymbolsLdOtherVersionTests(OtherVersionNameTests):
         source.write_text("u8 *p = &D_80000150_eu; u8 *q = &D_80000150; void func_80001000_us(void);\n")
         named, suffixed = buildfiles._address_names([source])
         self.assertEqual(named, {"D_80000150": 0x80000150})
-        self.assertEqual(suffixed, {"D_80000150_eu": str(source), "func_80001000_us": str(source)})
+        self.assertEqual(suffixed, {"D_80000150_eu": (str(source),), "func_80001000_us": (str(source),)})
 
 
 class LinkRefusalTests(ProjectCase):

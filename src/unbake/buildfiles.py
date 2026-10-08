@@ -10,6 +10,7 @@ from compilers.drivers, the same templates the runner fills, so make and unbake 
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import re
 import shlex
@@ -481,32 +482,34 @@ def named_address(name: str) -> int | None:
     return int(match[1], 16) if match else None
 
 
-def _address_names(chunk: list[Path]) -> tuple[dict[str, int], dict[str, str]]:
-    """(address-named symbols, version-suffixed address names with the first source spelling each)."""
+def _address_names(chunk: list[Path]) -> tuple[dict[str, int], dict[str, tuple[str, ...]]]:
+    """(address-named symbols, version-suffixed address names with every source spelling each)."""
     names: dict[str, int] = {}
-    suffixed: dict[str, str] = {}
+    suffixed: dict[str, tuple[str, ...]] = {}
     for path in chunk:
         text = path.read_text(errors="replace")
         for match in _ADDRESS_NAMED.finditer(text):
             names[match[0]] = int(match[1], 16)
         for match in _SUFFIXED_NAMED.finditer(text):
-            suffixed.setdefault(match[0], str(path))
+            if str(path) not in suffixed.get(match[0], ()):
+                suffixed[match[0]] = (*suffixed.get(match[0], ()), str(path))
     return names, suffixed
 
 
-def scan_names(project: Project, host: Host | None = None) -> tuple[dict[str, int], dict[str, str]]:
+def scan_names(project: Project, host: Host | None = None) -> tuple[dict[str, int], dict[str, tuple[str, ...]]]:
     """Names splat derives from a vram (D_XXXXXXXX, func_XXXXXXXX) that published C or headers spell, and the
-    version-suffixed ones (D_XXXXXXXX_eu: named after another version's address) with their source file."""
+    version-suffixed ones (D_XXXXXXXX_eu: named after another version's address) with their source files.
+    The suffixed names are candidates only: other_version_names keeps those a version's active text spells."""
     paths = sorted([*project.src.glob("*.c"), *(p for root in project.include for p in root.rglob("*.h"))])
     chunks = [paths[start : start + 64] for start in range(0, len(paths), 64)]
     with tui.task("Scanning sources for address-named symbols", len(paths)):
         found = [_address_names(c) for c in chunks] if host is None else pool.run(host, _address_names, chunks)
     named: dict[str, int] = {}
-    suffixed: dict[str, str] = {}
+    suffixed: dict[str, tuple[str, ...]] = {}
     for part_named, part_suffixed in found:
         named.update(part_named)
-        for name, source in part_suffixed.items():
-            suffixed.setdefault(name, source)
+        for name, sources in part_suffixed.items():
+            suffixed[name] = (*suffixed.get(name, ()), *sources)
     return named, suffixed
 
 
@@ -515,26 +518,149 @@ def address_named(project: Project, host: Host | None = None) -> dict[str, int]:
     return scan_names(project, host)[0]
 
 
-def other_version_names(project: Project, version: str, suffixed: dict[str, str]) -> dict[str, int]:
-    """Each referenced version-suffixed name that another VERSION lists and VERSION does not, at the address
-    the probe link gives it (data_symbols.in_version); refused naming source, VERSION and symbol when no
-    shared-name anchors agree. A suffixed name no VERSION lists is the source's own definition, not a reference."""
+_COMMENT = re.compile(r"/\*.*?\*/|//[^\n]*", re.S)
+_DIRECTIVE = re.compile(r"^\s*#\s*(\w+)\s*(.*)$")
+_DEFINED = re.compile(r"\bdefined\s*(?:\(\s*(\w+)\s*\)|(\w+))")
+_IDENTIFIER = re.compile(r"\b[A-Za-z_]\w*\b")
+_CONDITION_NODES = (
+    ast.Expression,
+    ast.BoolOp,
+    ast.And,
+    ast.Or,
+    ast.UnaryOp,
+    ast.Not,
+    ast.USub,
+    ast.Compare,
+    ast.BinOp,
+    ast.Add,
+    ast.Sub,
+    ast.Eq,
+    ast.NotEq,
+    ast.Lt,
+    ast.Gt,
+    ast.LtE,
+    ast.GtE,
+    ast.Constant,
+)
+
+
+def _version_defines(project: Project, version: str) -> dict[str, str]:
+    """The object-like macros VERSION's compile flags define (the flags the build preprocesses with)."""
+    unit = next(iter(sorted(project.src.glob("*.c"))), None)
+    if unit is None:
+        return {}
+    defines: dict[str, str] = {}
+    words = iter(drivers.flags(project, version, unit.name))
+    for word in words:
+        if word in {"-D", "-U"}:
+            word += next(words, "")
+        if word.startswith("-D"):
+            name, _, value = word[2:].partition("=")
+            defines[name] = value or "1"
+        elif word.startswith("-U"):
+            defines.pop(word[2:], None)
+    return defines
+
+
+def _condition(expression: str, defines: dict[str, str], where: str) -> bool:
+    """The truth of an #if expression over defined(), integers, macros and ! && || == != < > <= >= + -."""
+
+    def value(match: re.Match[str]) -> str:
+        text = defines.get(match[0], "0")
+        return text if re.fullmatch(r"\d+", text) else "0"
+
+    text = _DEFINED.sub(lambda m: "1" if (m[1] or m[2]) in defines else "0", expression)
+    text = _IDENTIFIER.sub(value, text).replace("&&", " and ").replace("||", " or ")
+    text = re.sub(r"!(?!=)", " not ", text)
+    try:
+        tree = ast.parse(text.strip(), mode="eval")
+        if not all(isinstance(node, _CONDITION_NODES) for node in ast.walk(tree)):
+            raise ValueError(text)
+        return bool(eval(compile(tree, "<if>", "eval"), {"__builtins__": {}}))
+    except (SyntaxError, ValueError, TypeError) as error:
+        raise Held(
+            cause_named(
+                "symbols.other_version",
+                f"symbols.other_version: {where}: cannot evaluate the conditional `{expression.strip()}`",
+                owner="buildfiles",
+                stage="buildfiles",
+            )
+        ) from error
+
+
+def active_text(text: str, defines: dict[str, str], where: str) -> str:
+    """TEXT without comments and without the branches of its #if/#ifdef/#ifndef/#elif/#else chains that
+    DEFINES (plus the file's own #define/#undef) leave inactive."""
+    lines = _COMMENT.sub(lambda m: "\n" * m[0].count("\n"), text).replace("\\\n", " ").split("\n")
+    local = dict(defines)
+    stack: list[list[bool]] = []  # per open chain: parent active, a branch already taken, this branch active
+    kept: list[str] = []
+    for line in lines:
+        found = _DIRECTIVE.match(line)
+        directive, rest = (found[1], found[2]) if found else ("", "")
+        parent = all(frame[2] for frame in stack)
+        if directive in {"if", "ifdef", "ifndef"}:
+            if not parent:
+                stack.append([False, True, False])
+                continue
+            if directive == "if":
+                taken = _condition(rest, local, where)
+            else:
+                taken = (rest.split()[:1] == [] or rest.split()[0] in local) == (directive == "ifdef")
+            stack.append([True, taken, taken])
+        elif directive == "elif" and stack:
+            frame = stack[-1]
+            frame[2] = frame[0] and not frame[1] and _condition(rest, local, where)
+            frame[1] = frame[1] or frame[2]
+        elif directive == "else" and stack:
+            frame = stack[-1]
+            frame[2] = frame[0] and not frame[1]
+            frame[1] = True
+        elif directive == "endif" and stack:
+            stack.pop()
+        elif parent:
+            if directive == "define":
+                name, _, body = rest.strip().partition(" ")
+                local[name.split("(")[0]] = body.strip() or "1"
+            elif directive == "undef":
+                local.pop(rest.strip(), None)
+            kept.append(line)
+    return "\n".join(kept)
+
+
+def other_version_names(project: Project, version: str, suffixed: dict[str, tuple[str, ...]]) -> dict[str, int]:
+    """Each version-suffixed name that another VERSION lists and VERSION does not, and that VERSION's own
+    active text spells (its #if branches evaluated with its flags, comments dropped), at the address the
+    probe link gives it (data_symbols.in_version); refused naming source, VERSION and symbol when no
+    shared-name anchors agree. A name no VERSION lists is the source's own definition, not a reference."""
     from unbake.layout import data_symbols
 
     own = split.symbols(project.version(version).symbols)[1]
     listed: set[str] = set()
     for origin in dict.fromkeys((project.names_from, *project.versions)):
         listed.update(split.symbols(project.version(origin).symbols)[1])
+    wanted = {name: sources for name, sources in sorted(suffixed.items()) if name not in own and name in listed}
+    if not wanted:
+        return {}
+    defines = _version_defines(project, version)
+    active: dict[str, str] = {}
     result: dict[str, int] = {}
-    for name, source in sorted(suffixed.items()):
-        if name in own or name not in listed:
+    for name, sources in wanted.items():
+        spelled = None
+        for source in sources:
+            if source not in active:
+                active[source] = active_text(Path(source).read_text(errors="replace"), defines, source)
+            if re.search(rf"\b{re.escape(name)}\b", active[source]):
+                spelled = source
+                break
+        if spelled is None:
             continue
         found = data_symbols.in_version(project, name, version)
         if found is None:
             raise Held(
                 cause_named(
                     "symbols.other_version",
-                    f"symbols.other_version: {source}: VERSION {version}: {name} "
+                    f"symbols.other_version: {spelled}: VERSION {version}: {name} "
                     f"has no unambiguous address through the shared-name anchors",
                     owner="buildfiles",
                     stage="buildfiles",
@@ -548,7 +674,7 @@ def symbols_ld(
     project: Project,
     version: str,
     named: dict[str, int] | None = None,
-    suffixed: dict[str, str] | None = None,
+    suffixed: dict[str, tuple[str, ...]] | None = None,
 ) -> str:
     """Every known symbol as PROVIDE, so a unit linked alone resolves its external references.
 
@@ -1115,7 +1241,7 @@ def driver_identity() -> str:
     return "".join(f"{hashlib.sha256((root / name).read_bytes()).hexdigest()}  {name}\n" for name in names)
 
 
-def _version_files(shared: tuple[Project, dict[str, int], dict[str, str]], version: str) -> dict[Path, str]:
+def _version_files(shared: tuple[Project, dict[str, int], dict[str, tuple[str, ...]]], version: str) -> dict[Path, str]:
     """One version's build files; versions are independent, so they render in pool workers."""
     project, named, suffixed = shared
     files: dict[Path, str] = {}
