@@ -137,7 +137,7 @@ class DataProgressTests(ProjectCase):
             }
         native.assert_not_called()
         tool.assert_not_called()
-        self.assertEqual((scans.call_count, parses.call_count, snapshots.call_count), (5, 6, 1))
+        self.assertEqual((scans.call_count, parses.call_count, snapshots.call_count), (5, 1, 1))
         for version, report in reports.items():
             self.assertEqual((report["measures"]["total_code"], report["measures"]["matched_code"]), (36, 0))
             self.assertEqual(

@@ -166,7 +166,7 @@ def compile_unit(
                 captured.files,
                 {
                     **captured.values,
-                    "object_sha256": inputs.digest(output, algorithm="sha256"),
+                    "object_sha256": inputs.digest(output, algorithm="sha256", reuse=False),
                     "link_tools": linked_tools,
                 },
                 captured.recipes,

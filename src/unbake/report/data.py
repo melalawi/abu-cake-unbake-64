@@ -133,7 +133,10 @@ def capture_inputs(
             "non_matching": non_matching,
             "dependencies_unknown": closure.unknown,
         },
-        {**closure.dependency_set.recipes, "data.emission": inputs.digest(Path(__file__), algorithm="sha256")},
+        {
+            **closure.dependency_set.recipes,
+            "data.emission": inputs.digest(Path(__file__), algorithm="sha256", reuse=cache.configured()),
+        },
     )
 
 

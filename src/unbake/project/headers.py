@@ -725,6 +725,7 @@ class Graph:
             )
             if sizes is not None:
                 spelling = declarations.canonical(declarations.node_type(node.type), aliases)
+                spelling = re.sub(r"\b(?:const|volatile|restrict)\b\s*", "", spelling).strip()
                 if spelling in SCALARS:
                     sizes[node.name] = SCALARS[spelling][0]
         return result
