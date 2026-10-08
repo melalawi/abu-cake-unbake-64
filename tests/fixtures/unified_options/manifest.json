@@ -175,6 +175,20 @@
       "sha256": "5c87b5d519ef4defae9203df21a04a94954156a1f9c6115351dc3d361c938894",
       "bytes": 1235,
       "evidence_class": "retained historical provider; replay is not new native proof"
+    },
+    {
+      "path": "bt-attempts.json.gz",
+      "source": "tool-impl-unified-astra/audit-inputs/bt/attempts.json",
+      "sha256": "77a86876659c0522f77ad1c0eb6dfd3cb8dcd5e936a4c02085d8ab4470692d27",
+      "bytes": 16907,
+      "evidence_class": "actual paired historical BT state; file coexistence replay, not new native proof"
+    },
+    {
+      "path": "bt-attempts.jsonl.gz",
+      "source": "tool-impl-unified-astra/audit-inputs/bt/attempts.jsonl",
+      "sha256": "69a71205fecd8ae2d2b4d31ef703c2506bc21176050b53f642c4f8844b09adb4",
+      "bytes": 468727,
+      "evidence_class": "actual paired historical BT state; file coexistence replay, not new native proof"
     }
   ],
   "counterfactuals": "Named mutations in tests are counterfactual inputs, never native success."

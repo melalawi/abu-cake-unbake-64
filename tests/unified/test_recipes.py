@@ -177,3 +177,24 @@ class MigrationTests(TempCase):
             with self.assertRaisesRegex(config.Held, "inputs or effective recipes changed"):
                 migrate_state.apply_config(project.root, planned)
             self.assertEqual(toml.loads(path.read_text())["schema"], 1)
+
+    def test_real_bt_coexisting_retired_history_is_reported_before_apply_and_preserved(self):
+        # Actual paired BT history in a minimal config/pin boundary. No retained
+        # native proof is adopted into this counterfactual project identity.
+        project, _host, path = self.legacy()
+        old = project.root / "attempts.json"
+        current = project.root / "attempts.jsonl"
+        old.write_bytes(retained("bt-attempts.json"))
+        current.write_bytes(retained("bt-attempts.jsonl"))
+        before = {p: p.read_bytes() for p in (path, old, current)}
+        with (
+            patch.object(registry, "specification", return_value=self.spec),
+            patch("unbake.migrate_state.Ledger._refresh", side_effect=AssertionError("refuse before history read")),
+            patch("subprocess.run", side_effect=AssertionError("migration native process")),
+        ):
+            planned = migrate_state.config_plan(project.root)
+            self.assertTrue(any("current ledger coexists" in b for b in planned["blockers"]))
+            with self.assertRaises(config.Held) as held:
+                migrate_state.apply_config(project.root, planned)
+        self.assertEqual(held.exception.key, "migration.evidence")
+        self.assertEqual({p: p.read_bytes() for p in before}, before)

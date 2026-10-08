@@ -361,6 +361,8 @@ def plan(project: Project) -> dict[str, Any]:
                 source, algorithm="sha256", reuse=False
             )
     target = project.root / "attempts.jsonl"
+    if target.exists() and inventory:
+        refuse("current ledger coexists with retired state; preserve and reconcile explicitly")
     history = Ledger(project)
     authority = None
     noncanonical = 0
@@ -732,8 +734,6 @@ def apply(project: Project, migration: dict[str, Any]) -> dict[str, Any]:
 
         history = Ledger(project)
         history._refresh()
-        if migration["inputs"]:
-            refuse("current ledger coexists with retired state; preserve and reconcile explicitly")
         summaries, sources = history.summaries(), history.fuzzy_sources()
         original = target.read_bytes()
         normalized = []
