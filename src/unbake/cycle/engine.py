@@ -756,8 +756,6 @@ def run(
                 finish_land(rows[function])
                 changed_exact |= rows[function].stage == "landed"
                 ready.pop(0)
-            # Guarded C leaves ROM ownership with assembly and contributes no
-            # trusted C body to type inference. It needs no whole-program pass.
             ran = bring_current(LAND_STEPS) if changed_exact else []
             if ran:
                 recheck()

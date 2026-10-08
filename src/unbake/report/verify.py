@@ -1,4 +1,4 @@
-"""ROM-free deterministic source/report validation and artifact provenance.
+"""ROM-free deterministic current-source report generation, validation and artifact provenance.
 
 Run with python -m unbake.report.verify --project DIR [--artifacts OUT].
 The generated CI bundle pins this exporter and its dependencies by content.
@@ -108,9 +108,7 @@ def source_pins(project: Project, *, receipts: dict[str, dict[str, Any]] | None 
             if path.is_file()
         },
         "native-data-proofs": data.identity(data.snapshots(project)),
-        "publication-state": inputs.bytes_digest(
-            encoded(receipts), algorithm="sha256"
-        ),
+        "publication-state": inputs.bytes_digest(encoded(receipts), algorithm="sha256"),
     }
 
 
@@ -264,29 +262,13 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--project", type=Path, default=Path.cwd())
     parser.add_argument("--artifacts", type=Path)
-    parser.add_argument(
-        "--regenerate", action="store_true", help="Regenerate source-only reports using existing owner README labels."
-    )
     args = parser.parse_args()
     try:
         project = config.load(args.project.resolve())
-        if args.regenerate:
-            if args.artifacts is not None:
-                raise Held(
-                    cause_named(
-                        "report.mode",
-                        "report.mode: regeneration and clean artifact validation are separate operations",
-                        owner="report.verify",
-                        stage="report",
-                    )
-                )
-            from unbake import buildfiles
-
-            buildfiles.write_progress(project, publish_branch=publish_branch(project))
-            progress.write(project, None, source_only=True)
-        manifest = validate(project)
+        sha = None
         if args.artifacts is not None:
-            # The caller copies reports only after this succeeds. Hashes bind each report to this checkout.
+            # Capture the immutable source revision before writing derived reports.
+            # CI checks out the source commit; its saved projections may legitimately lag.
             sha = os.environ.get("GITHUB_SHA") or os.environ.get("CI_COMMIT_SHA")
             if sha is None:
                 sha = subprocess.run(
@@ -308,7 +290,7 @@ def main() -> int:
                     raise Held(
                         cause_named(
                             "report.checkout",
-                            "report.checkout: tracked checkout must be clean before artifact publication",
+                            "report.checkout: source checkout must be clean before artifact generation",
                             owner="report.verify",
                             stage="report",
                         )
@@ -322,6 +304,12 @@ def main() -> int:
                         stage="report",
                     )
                 )
+        # Reports are derived inventory, never publication/attempt authority. Rebuild
+        # through the one canonical source-only generator, which validates receipts and
+        # pins before writing. No ROM, build, native proof or owner sync is requested.
+        progress.write(project, None, source_only=True)
+        manifest = validate(project)
+        if args.artifacts is not None and sha is not None:
             args.artifacts.mkdir(parents=True, exist_ok=True)
             for version, values in manifest["versions"].items():
                 receipt = {"source_commit": sha, "tool_sha256": manifest["tool_sha256"], "version": version, **values}
