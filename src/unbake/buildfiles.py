@@ -1,4 +1,4 @@
-"""The committed, Python-free build: Makefile, units.mk and per-version slices, symbols and link scripts.
+"""The committed build: Makefile, units.mk and per-version slices, symbols and link scripts.
 
 A version's ROM is the concatenation, in ROM order, of
 - one binary per published C unit (compile, `n64link place`, link alone at its address with symbols.ld),
@@ -26,7 +26,7 @@ from unbake.layout import split
 from unbake.process import named as cause_named
 
 # Bump when this step's output changes for the same inputs. Keys never digest the tool's code.
-SCHEMA = 13
+SCHEMA = 14
 
 # CI pins: full commit SHAs and an image digest (tool data, never config).
 CHECKOUT = ("actions/checkout", "11d5960a326750d5838078e36cf38b85af677262", "v4.4.0")
@@ -71,6 +71,18 @@ class Resource(Unit):
     assembler: str = "gnu"
     output: str = ""
     cppflags: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class MixedData(Unit):
+    """An explicit compiler table subextent of an existing published C producer."""
+
+    section: str = ""
+    offset: int = 0
+    pointer_bias: int = 0
+    code_address: int = 0
+    code_start: int = 0
+    code_size: int = 0
 
 
 def relative(project: Project, path: Path) -> str:
@@ -158,6 +170,78 @@ def data_bindings(project: Project, version: str, *, text: str | None = None) ->
                     )
                 )
             unit = Unit(source.stem, split.address(row, path), row.start, stop - row.start, "data")
+            fields = segment.fields
+            if any(key.startswith("data_") for key in fields):
+                if {key for key in fields if key.startswith("data_")} != {
+                    "data_section",
+                    "data_offset",
+                    "data_pointer_bias",
+                }:
+                    raise Held(
+                        cause_named(
+                            "buildfiles.data",
+                            "complete explicit mixed DATA fields required",
+                            owner="buildfiles",
+                            stage="buildfiles",
+                        )
+                    )
+                section = fields.get("data_section", "")
+                if section not in {".rdata", ".rodata"}:
+                    raise Held(
+                        cause_named(
+                            "buildfiles.data",
+                            "data_section must name a compiler constant section",
+                            owner="buildfiles",
+                            stage="buildfiles",
+                        )
+                    )
+                offset = split.number(fields.get("data_offset"), "data_offset")
+                bias = split.number(fields.get("data_pointer_bias"), "data_pointer_bias")
+                code = [
+                    candidate
+                    for part in segments
+                    for candidate in part.rows
+                    if candidate.kind == "c" and Path(candidate.path).name == source.stem
+                ]
+                if len(code) != 1 or bias not in {0, 0x80000000} or offset % 4 or unit.size % 4 or unit.address % 4:
+                    raise Held(
+                        cause_named(
+                            "buildfiles.data",
+                            "mixed DATA needs one published C row and aligned table bounds",
+                            owner="buildfiles",
+                            stage="buildfiles",
+                        )
+                    )
+                code_address = split.address(code[0], path)
+                code_size = split.end(code[0]) - code[0].start
+                if (
+                    unit.address < offset
+                    or unit.address + unit.size > 2**32
+                    or code_size <= 0
+                    or code_address % 4
+                    or code_address + code_size > 2**32
+                ):
+                    raise Held(
+                        cause_named(
+                            "buildfiles.data",
+                            "mixed DATA placement exceeds target bounds",
+                            owner="buildfiles",
+                            stage="buildfiles",
+                        )
+                    )
+                unit = MixedData(
+                    unit.name,
+                    unit.address,
+                    unit.start,
+                    unit.size,
+                    "data",
+                    section,
+                    offset,
+                    bias,
+                    code_address,
+                    code[0].start,
+                    code_size,
+                )
             if unit.name in names:
                 raise Held(
                     cause_named(
@@ -197,11 +281,22 @@ def data_link_script(project: Project, version: str) -> str:
     )
 
 
+def mixed_data_link_script(project: Project, version: str, unit: MixedData) -> str:
+    """Keep the real code VMA while the native linker resolves local table relocations."""
+    return (
+        "OUTPUT_ARCH(mips)\nSECTIONS\n{\n"
+        f"  .text 0x{unit.code_address:X} : {{ *(.text) }}\n"
+        f"  .data 0x{unit.address - unit.offset:X} : SUBALIGN(1) {{ *({unit.section}) }}\n"
+        "  /DISCARD/ : { *(*) }\n}\n"
+        f"INCLUDE versions/{version}/symbols.ld\n"
+    )
+
+
 def resource_bindings(project: Project, version: str, *, text: str | None = None) -> dict[Resource, str]:
     """Explicit resource rows; the segment vram is resident storage, execution_vram is separate."""
     path = project.version(version).split
     _, _, segments = split.layout(path) if text is None else split.parse_layout(path, text)
-    result = {}
+    result: dict[Resource, str] = {}
     for segment in segments:
         for row in segment.rows:
             if row.kind != "resource":
@@ -464,6 +559,14 @@ def slices_mk(project: Project, version: str) -> str:
         lines.append(f"{version}.{namespace}.{unit.name} := 0x{unit.address:X}:0x{unit.start:X}:0x{unit.size:X}\n")
         directory = {"c": "units", "hasm": "hasm", "data": "data", "resource": "resources"}[unit.kind]
         pieces.append(f"{build}/{directory}/{unit.name}.bin")
+        if isinstance(unit, MixedData):
+            lines.append(f"{version}.D.{unit.name}.SECTION := {unit.section}\n")
+            lines.append(f"{version}.D.{unit.name}.OFFSET := {unit.offset}\n")
+            lines.append(f"{version}.D.{unit.name}.BIAS := 0x{unit.pointer_bias:X}\n")
+            lines.append(
+                f"{build}/data/{unit.name}.bin: {build}/units/{unit.name}.bin tools/report-verifier.zip "
+                f"versions/{version}/data/{unit.name}.ld\n"
+            )
         if isinstance(unit, Resource) and unit.assembler == "gnu":
             lines.append(f"{version}.R.{unit.name}.ASFLAGS := {words(unit.asflags)}\n")
             lines.append(
@@ -593,7 +696,8 @@ HASM_BIN = printf '%s\n' '$(VER) $(*F)'; \
   $(N64LINK) place $(@D)/$(*F).o -o $(@D)/$(*F).placed.o --rom $($(VER).BASEROM) --text $($(VER).U.$(*F)) \
   $(addprefix --map ,$($(VER).MAP)) --symbols versions/$(VER)/symbols.ld --trim && \
   $(LINK_BIN)
-DATA_BIN = read key < $< && \
+DATA_BIN = $(if $($(VER).D.$(*F).SECTION),$(MIXED_DATA_BIN),$(PLAIN_DATA_BIN))
+PLAIN_DATA_BIN = read key < $< && \
   cp build/cas/$$key.o $(@D)/$(*F).o && \
   $(OBJCOPY) --set-section-flags .rdata=alloc,load,readonly,data,contents \
     --set-section-flags .rodata=alloc,load,readonly,data,contents \
@@ -604,6 +708,17 @@ DATA_BIN = read key < $< && \
     -o $(@D)/$(*F).elf $(@D)/$(*F).o && \
   $(OBJCOPY) -O binary --only-section=.data $(@D)/$(*F).elf $@ && \
   [ "$$(wc -c < $@)" -eq $$(( $(word 3,$(subst :, ,$($(VER).D.$(*F)))) )) ]
+MIXED_TOOL = PYTHONPATH=tools/report-verifier.zip python3 -m unbake.objects.mixed
+MIXED_ARGS = --section $($(VER).D.$(*F).SECTION) --offset $($(VER).D.$(*F).OFFSET) \
+  --size $(word 3,$(subst :, ,$($(VER).D.$(*F)))) --bias $($(VER).D.$(*F).BIAS) \
+  --function $(*F) --text $(firstword $(subst :, ,$($(VER).U.$(*F))))
+MIXED_DATA_BIN = read key < build/$(VER)/src/$(*F).key && \
+  $(MIXED_TOOL) prepare --original build/cas/$$key.o --placed build/$(VER)/units/$(*F).placed.o \
+    --output $(@D)/$(*F).o $(MIXED_ARGS) && \
+  $(OBJCOPY) --set-section-flags $($(VER).D.$(*F).SECTION)=alloc,load,readonly,data,contents $(@D)/$(*F).o && \
+  $(LD) -EB -T versions/$(VER)/data/$(*F).ld -o $(@D)/$(*F).elf $(@D)/$(*F).o && \
+  $(MIXED_TOOL) extract --original build/cas/$$key.o --final $(@D)/$(*F).elf \
+    --code build/$(VER)/units/$(*F).bin --output $@ $(MIXED_ARGS)
 RESOURCE_NAME = $(basename $(notdir $@))
 RESOURCE_BIN = $(AS) $($(VER).R.$(RESOURCE_NAME).ASFLAGS) -o $(@D)/$(RESOURCE_NAME).o $< && \
   $(LD) -EB -T versions/$(VER)/resources/$(RESOURCE_NAME).ld \
@@ -905,6 +1020,9 @@ def generate(project: Project, host: Host) -> dict[Path, bytes]:
         files[directory / "symbols.ld"] = symbols_ld(project, version)
         files[directory / f"{project.name}.ld"] = link_script(project, version)
         files[directory / f"{project.name}.data.ld"] = data_link_script(project, version)
+        for unit in data_units(project, version):
+            if isinstance(unit, MixedData):
+                files[directory / "data" / f"{unit.name}.ld"] = mixed_data_link_script(project, version, unit)
         for resource in resource_bindings(project, version):
             if resource.assembler == "gnu":
                 files[directory / "resources" / f"{resource.name}.ld"] = resource_link_script(

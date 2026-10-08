@@ -426,6 +426,12 @@ def capture_producer(
     if linked != original or len(linked) != unit.size or not native.is_file():
         return None
     graph = Graph.capture(project)
+    mixed = isinstance(unit, buildfiles.MixedData)
+    compiler_object = None
+    code = b""
+    native_inputs: dict[Path, str] = {}
+    native_identity: dict[str, Any] = {}
+    recipes = {"data.producer": inputs.digest(Path(__file__), algorithm="sha256", reuse=cache.configured())}
     if unit.kind == "data":
         command = drivers.flags(project, version, unit.name)
         closure = graph.closure((source,), command)
@@ -433,6 +439,45 @@ def capture_producer(
             return None
         producer_paths = {source, *closure.paths}
         script = project.root / "versions" / version / (project.name + ".data.ld")
+        if mixed:
+            from unbake.objects import mixed as mixed_objects
+
+            recipes["data.mixed"] = inputs.digest(
+                Path(mixed_objects.__file__), algorithm="sha256", reuse=cache.configured()
+            )
+            script = project.root / "versions" / version / "data" / (unit.name + ".ld")
+            key_path = project.build_link(version) / "src" / (unit.name + ".key")
+            if not key_path.is_file() or key_path.is_symlink():
+                return None
+            key = key_path.read_text().strip()
+            if re.fullmatch(r"[0-9a-f]{80}", key) is None:
+                return None
+            compiler_object = project.root / "build" / "cas" / (key + ".o")
+            code_path = project.build_link(version) / "units" / (unit.name + ".bin")
+            placed = code_path.with_suffix(".placed.o")
+            prepared = {key_path, compiler_object, code_path, placed, project.tools / "report-verifier.zip"}
+            if any(not path.is_file() or path.is_symlink() for path in prepared):
+                return None
+            # Persist native identities in the proof, not ignored build paths
+            # as required current-source files. The captured event remains
+            # portable after native outputs are removed from the checkout.
+            native_inputs = {
+                path: inputs.digest(path, algorithm="sha256", reuse=False)
+                for path in prepared
+                if path != project.tools / "report-verifier.zip"
+            }
+            native_identity = {
+                "mixed_object_sha256": native_inputs[compiler_object],
+                "mixed_placed_sha256": native_inputs[placed],
+                "mixed_code_sha256": native_inputs[code_path],
+                "mixed_compiler_key": key,
+            }
+            producer_paths.add(project.tools / "report-verifier.zip")
+            code = code_path.read_bytes()
+            with project.version(version).baserom.open("rb") as stream:
+                stream.seek(unit.code_start)
+                if len(code) != unit.code_size or stream.read(unit.code_size) != code:
+                    return None
     else:
         producer_paths = {source, *buildfiles.resource_inputs(project)}
         # Include every resource source: assembler includes may nest or use CPP.
@@ -442,6 +487,11 @@ def capture_producer(
     # own binding/flags/recipe are checked semantically below; source/header
     # freshness belongs to the accepted native producer, not that rewrite.
     freshness_paths = set(producer_paths)
+    if mixed:
+        # The recipe also depends on the existing exact code producer and the
+        # content-pinned relocation helper; their outputs must predate this DATA.
+        freshness_paths.add(script)
+        freshness_paths.update(native_inputs)
     producer_paths.update(project.root / name for name in ("Makefile", "units.mk", "tools/compilers.sha256"))
     producer_paths.add(project.root / "versions" / version / "symbols.ld")
     if unit.kind == "data" or unit.assembler == "gnu":
@@ -461,8 +511,9 @@ def capture_producer(
             "dependencies_unknown": False,
             "producer_binding": binding,
             "producer_configuration": producer_configuration(project, version, binding),
+            **native_identity,
         },
-        {"data.producer": inputs.digest(Path(__file__), algorithm="sha256", reuse=cache.configured())},
+        recipes,
     )
     if current_dependencies(project, {"dependencies": dependencies.document()}, version) is not None:
         return None
@@ -491,15 +542,46 @@ def capture_producer(
             or index is None
             or obj.sections[index][1] != 1
             or not obj.sections[index][2] & 2
-            or obj.sections[index][3] != unit.address
-            or obj.content(index) != linked
+            or obj.sections[index][3] != unit.address - (unit.offset if mixed else 0)
+            or (obj.content(index)[unit.offset : unit.offset + unit.size] if mixed else obj.content(index)) != linked
             or obj.relocations(index)
         ):
             return None
         sections[0]["name"] = obj.names[index]
+        if mixed:
+            from unbake import cdecl
+            from unbake.fold import source_views
+            from unbake.objects import mixed as mixed_objects
+
+            assert compiler_object is not None
+            try:
+                active = source_views.version_source(project, source.read_text(), version, source.stem)
+                if unit.name not in cdecl.declarations(active).functions:
+                    return None
+                material = mixed_objects.extract(
+                    Object(compiler_object),
+                    obj,
+                    code,
+                    section=unit.section,
+                    offset=unit.offset,
+                    size=unit.size,
+                    bias=unit.pointer_bias,
+                    function=unit.name,
+                    text=unit.code_address,
+                )
+            except (ValueError, Held):
+                return None
+            if material != linked:
+                return None
+            sections[0].update(
+                address=obj.sections[index][3],
+                size=len(obj.content(index)),
+                sha256=hashlib.sha256(obj.content(index)).hexdigest(),
+            )
+            bounds.append((unit.name, 0, unit.size, digest(binding)))
         sizes: dict[str, int] = {}
         try:
-            definitions = graph.initialized_definitions(project, source, version, sizes=sizes)
+            definitions = {} if mixed else graph.initialized_definitions(project, source, version, sizes=sizes)
         except Held as error:
             if error.key != "data.definition":
                 raise
@@ -581,6 +663,8 @@ def capture_producer(
         )
         payload["evidence"][0]["input_identity"] = dependencies.digest
     assert_inputs(project, dependencies)
+    if any(inputs.digest(path, algorithm="sha256", reuse=False) != value for path, value in native_inputs.items()):
+        return None
     return {
         "subject": version + "/" + unit.kind + "/" + unit.name,
         "dependencies": dependencies.document(),
@@ -683,9 +767,7 @@ def linker_symbols(path: Path, text: str) -> dict[str, int] | None:
     return symbols
 
 
-def referenced_symbols(
-    references: tuple[set[str], set[str], set[str]], symbols: dict[str, int]
-) -> dict[str, int]:
+def referenced_symbols(references: tuple[set[str], set[str], set[str]], symbols: dict[str, int]) -> dict[str, int]:
     identifiers, prefixes, suffixes = references
     relevant = identifiers & symbols.keys()
     relevant.update(name for name in symbols if name.startswith(tuple(prefixes)) or name.endswith(tuple(suffixes)))
@@ -867,8 +949,12 @@ def current_dependencies(project: Project, event: dict[str, Any], version: str) 
 
 @attempts.with_ledger
 def coverage(
-    project: Project, version: str, sources: dict[str, tuple[str, set[str], bool]], record: dict[str, Any] | None,
-    *, bindings: _ProducerBindings | None = None,
+    project: Project,
+    version: str,
+    sources: dict[str, tuple[str, set[str], bool]],
+    record: dict[str, Any] | None,
+    *,
+    bindings: _ProducerBindings | None = None,
 ) -> Coverage:
     if record is not None and {"legacy", "producers"} <= set(record) <= {"legacy", "producers", "input_projections"}:
         records = [event for event in [record["legacy"], *record["producers"]] if event is not None]
@@ -1112,7 +1198,7 @@ def coverage(
 
                 definitions[path] = (
                     {extent["symbol"]: digest(producer)}
-                    if resource
+                    if resource or (producer is not None and producer["unit"].get("section") in {".rdata", ".rodata"})
                     else Graph.capture(project).initialized_definitions(project, path, version)
                 )
             if definitions[path].get(extent["symbol"]) != extent["definition_proof_id"]:

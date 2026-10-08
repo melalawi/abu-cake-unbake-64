@@ -1,0 +1,292 @@
+{
+  "function": "func_8021E2A0_de",
+  "source_sha256": "901243e7b997c0a97463ff881f66c7380e2591a0eb580aeca21c5decfdc6b088",
+  "object_sha256": "afbaf744f86aa002119bb2f9485952d7d3fe13ed0f2a8787ee84a469434d17d8",
+  "text_address": 2149704316,
+  "text_start": 126588,
+  "data_address": 2148300008,
+  "data_start": 819432,
+  "offset": 24,
+  "size": 404,
+  "bias": 2147483648,
+  "files": {
+    "include/span_1000/code_8028DF6C.h": {
+      "sha256": "ac081df05bb6ea16c3ebb473309237ae98fbbf0f93cbf280967f28b8d9487907",
+      "retained_path": "cycles/rw-constant-pools/RageWars/include/span_1000/code_8028DF6C.h"
+    },
+    "include/span_1000/code_8025C544.h": {
+      "sha256": "5636013664c23ec39c08c43306d51fed20cf73a220e24523c70b9b61fe42f60f",
+      "retained_path": "cycles/rw-constant-pools/RageWars/include/span_1000/code_8025C544.h"
+    },
+    "include/span_1000/code_8028CCB8.h": {
+      "sha256": "9b9717c6f889645ba78d1d30b423364ec367c06eb005d63817114085fd00bcab",
+      "retained_path": "cycles/rw-constant-pools/RageWars/include/span_1000/code_8028CCB8.h"
+    },
+    "include/common/draft_fields_func_8028D964_de.h": {
+      "sha256": "91fa3b17d2c8b2f76ef5921299aada6a8a9f3db8b3ca3ce4773d7bd06c539b28",
+      "retained_path": "cycles/rw-constant-pools/RageWars/include/common/draft_fields_func_8028D964_de.h"
+    },
+    "include/span_1000/code_8022A274.h": {
+      "sha256": "0b38ef7638545f0f3d414b562d720d294688207892fa5d9b4aa04182308879f9",
+      "retained_path": "cycles/rw-constant-pools/RageWars/include/span_1000/code_8022A274.h"
+    },
+    "include/span_1000/code_802B53FC.h": {
+      "sha256": "2a85f7515b060999eded9968d0a94a1a549a0d3b9ed24f97ee9cbc9b736ef64c",
+      "retained_path": "cycles/rw-constant-pools/RageWars/include/span_1000/code_802B53FC.h"
+    },
+    "include/span_1000/code_802A6AC0.h": {
+      "sha256": "416c27db7dad8ffe15a217c7a627b6fdee70cd181fa2c010b4904241d2c688b4",
+      "retained_path": "cycles/rw-constant-pools/RageWars/include/span_1000/code_802A6AC0.h"
+    },
+    "include/span_16E000/code_8042BD40.h": {
+      "sha256": "900262d1eb5ed2fb57703859f6a4d65d14d968c6bb0be5efb17474adf783b59c",
+      "retained_path": "cycles/rw-constant-pools/RageWars/include/span_16E000/code_8042BD40.h"
+    },
+    "include/shared/func_8021E2A0_de_closed.h": {
+      "sha256": "d6c278cde10d56a799b1f6912297acd03baa9e9d2c043248cc85a3cc98ca116f",
+      "retained_path": "cycles/rw-constant-pools/RageWars/include/shared/func_8021E2A0_de_closed.h"
+    },
+    "include/span_16E000/code_8041F1FC.h": {
+      "sha256": "09f5c4767d953b856ba0915a9b95f5a14ab91d281a367e795207f420acd2a881",
+      "retained_path": "cycles/rw-constant-pools/RageWars/include/span_16E000/code_8041F1FC.h"
+    },
+    "include/common/data.h": {
+      "sha256": "c08903b5ddfbd5538b7ca69ec494f1e27f858f6ac2dab882a64c142e40bd3505",
+      "retained_path": "cycles/rw-constant-pools/RageWars/include/common/data.h"
+    },
+    "include/span_16E000/code_8040F1E0.h": {
+      "sha256": "24c30139d4cf1972583256dbd66cf4d434545c6077b80dd1fa31322b8fcd1005",
+      "retained_path": "cycles/rw-constant-pools/RageWars/include/span_16E000/code_8040F1E0.h"
+    },
+    "include/span_16E000/code_8043962C.h": {
+      "sha256": "89edf4524c30e187c29a771facfcbe6bd7edc04c829b9cae6ee331232775e445",
+      "retained_path": "cycles/rw-constant-pools/RageWars/include/span_16E000/code_8043962C.h"
+    },
+    "include/acmd.h": {
+      "sha256": "522f0c6ad06a44f89de7e93dd9caa51ef62e811027a48ce12dd04a3b79db60ac",
+      "retained_path": "cycles/rw-constant-pools/RageWars/include/acmd.h"
+    },
+    "include/span_166000/code_80426310.h": {
+      "sha256": "c4d1275e068f45952efbf685485c946a1e78c1cbfe8c72b028d9469b11b5d5eb",
+      "retained_path": "cycles/rw-constant-pools/RageWars/include/span_166000/code_80426310.h"
+    },
+    "include/common/draft_fields_func_8026DC24_de.h": {
+      "sha256": "18d555d54a57f1c807a75370099644a11595a1d2f3fd1c42bf9862da8d6876b9",
+      "retained_path": "cycles/rw-constant-pools/RageWars/include/common/draft_fields_func_8026DC24_de.h"
+    },
+    "include/span_1000/code_802B4730.h": {
+      "sha256": "39b67a9b7961c0666e0093d7fd49e1afd768e745d447571644f45b5e594a8b5c",
+      "retained_path": "cycles/rw-constant-pools/RageWars/include/span_1000/code_802B4730.h"
+    },
+    "include/span_1000/code_80246E34.h": {
+      "sha256": "9f32628bce1d916ff53f207a11a89ce6e950aa3bafc219986440dea3e4450e9c",
+      "retained_path": "cycles/rw-constant-pools/RageWars/include/span_1000/code_80246E34.h"
+    },
+    "include/common/types_8a8189af7b05.h": {
+      "sha256": "be0feb5a5ff818546dd3b30ad822696ca928a0438fad2c16db20de00566f48a7",
+      "retained_path": "cycles/rw-constant-pools/RageWars/include/common/types_8a8189af7b05.h"
+    },
+    "include/span_1000/code_8023B9A0.h": {
+      "sha256": "46f813682b339a435e99c800f86a53ca38a20a80b9cdf30b78322958a773a224",
+      "retained_path": "cycles/rw-constant-pools/RageWars/include/span_1000/code_8023B9A0.h"
+    },
+    "include/shared/gameplay_settings.h": {
+      "sha256": "1c4e475fb8621ad0d5d1965372e3a966b6e5f50d6361d74eb4cb50056e99a587",
+      "retained_path": "cycles/rw-constant-pools/RageWars/include/shared/gameplay_settings.h"
+    },
+    "include/span_1000/code_802508E0.h": {
+      "sha256": "08d52370239ac8403fd613e701b66fd054b39f9c95f23b78b395969a4b1d22ea",
+      "retained_path": "cycles/rw-constant-pools/RageWars/include/span_1000/code_802508E0.h"
+    },
+    "include/common/types_8fd754e1e915.h": {
+      "sha256": "1c4fe757fce4b5b798c1dfcc3c1318046579d70842ccbcbeacd90d2b6c1f6c49",
+      "retained_path": "cycles/rw-constant-pools/RageWars/include/common/types_8fd754e1e915.h"
+    },
+    "include/gfx.h": {
+      "sha256": "b1b8e8f3e3b62fb92fbf91e6d44b546b235ca3be080cc369d5197dad7e02c66c",
+      "retained_path": "cycles/rw-constant-pools/RageWars/include/gfx.h"
+    },
+    "include/span_1000/code_80265370.h": {
+      "sha256": "480ea7c01f003032f5d4f9b0558a9046ff7d7b17ddf1cdf51fa00242c7d6ac7a",
+      "retained_path": "cycles/rw-constant-pools/RageWars/include/span_1000/code_80265370.h"
+    },
+    "include/span_1000/code_8027302C.h": {
+      "sha256": "5d47d74739ec73b4d9c673516f505a17b1561e774995debc2106647710719487",
+      "retained_path": "cycles/rw-constant-pools/RageWars/include/span_1000/code_8027302C.h"
+    },
+    "include/span_1000/code_802BE0D0.h": {
+      "sha256": "d345bc7c903cb7f7676cd0a63b7c3357cd2b7a5d12937e22edf2c2a5abca3347",
+      "retained_path": "cycles/rw-constant-pools/RageWars/include/span_1000/code_802BE0D0.h"
+    },
+    "src/func_8021E2A0_de.c": {
+      "sha256": "901243e7b997c0a97463ff881f66c7380e2591a0eb580aeca21c5decfdc6b088",
+      "retained_path": "cycles/rw-constant-pools/RageWars/src/func_8021E2A0_de.c"
+    },
+    "include/span_1000/code_802BBC68.h": {
+      "sha256": "d1ffc73df7d4ec364bd670508184556128c729a4c132b26e3263aa85ea77953b",
+      "retained_path": "cycles/rw-constant-pools/RageWars/include/span_1000/code_802BBC68.h"
+    },
+    "include/span_16E000/code_804264F0.h": {
+      "sha256": "7a5bdf60c4c21df59786f70ace6addd826a87b8743db96472718102936474b99",
+      "retained_path": "cycles/rw-constant-pools/RageWars/include/span_16E000/code_804264F0.h"
+    },
+    "include/decomp/argb_color.h": {
+      "sha256": "0862547b097412fbcb2cd977c60540ab0042183ffd1deda7fb7f674247d623b4",
+      "retained_path": "cycles/rw-constant-pools/RageWars/include/decomp/argb_color.h"
+    },
+    "include/span_1000/code_8026AC38.h": {
+      "sha256": "cb4ef5b964d11e772619eb4de1c6336ac1c594ed17b4c91c3b38112cb90b2e4f",
+      "retained_path": "cycles/rw-constant-pools/RageWars/include/span_1000/code_8026AC38.h"
+    },
+    "include/span_1000/code_802BA23C.h": {
+      "sha256": "9158978c82be10b3965aff0924b7949ecb2bc4d2bbfa6ce7e411b701a16f34d8",
+      "retained_path": "cycles/rw-constant-pools/RageWars/include/span_1000/code_802BA23C.h"
+    },
+    "include/span_16E000/code_8043E9A8.h": {
+      "sha256": "3ab415f62d959bd9186d1f1eb20b0fa3f4c84305087e0d3380255cb0cd5f1634",
+      "retained_path": "cycles/rw-constant-pools/RageWars/include/span_16E000/code_8043E9A8.h"
+    },
+    "include/span_16E000/code_8040B45C.h": {
+      "sha256": "fa4b8987c3bfdeedc6de847ec806794169e48f2d555766e143d15ad350dd4006",
+      "retained_path": "cycles/rw-constant-pools/RageWars/include/span_16E000/code_8040B45C.h"
+    },
+    "include/span_1000/code_80256220.h": {
+      "sha256": "3199f9f3805c8de1e825b15ccd3729fc03473f2b5ef284148f2d5b52434d1b9e",
+      "retained_path": "cycles/rw-constant-pools/RageWars/include/span_1000/code_80256220.h"
+    },
+    "include/common/draft_fields_func_8028D474_de.h": {
+      "sha256": "50b5a2d69cb56cb3a73734f3fc263ee9e761537976e212e011fca2a65af14853",
+      "retained_path": "cycles/rw-constant-pools/RageWars/include/common/draft_fields_func_8028D474_de.h"
+    },
+    "include/span_1000/code_8025A3EC.h": {
+      "sha256": "ecd82be81b6d11699ce0663c4990a55a74b570501a89f4ede8bdfcb5a637ecc8",
+      "retained_path": "cycles/rw-constant-pools/RageWars/include/span_1000/code_8025A3EC.h"
+    },
+    "include/span_C76B0/data.h": {
+      "sha256": "fc68eabbb2483ff9ea82e68e043d17ca0b1d625ecdceb3c3c274bd9ca3b2bc3a",
+      "retained_path": "cycles/rw-constant-pools/RageWars/include/span_C76B0/data.h"
+    },
+    "include/span_1000/code_802B243C.h": {
+      "sha256": "45f8017d94e393c7283c9a7d56bde6d3b5b1a096adf1611f7906d127d29eed30",
+      "retained_path": "cycles/rw-constant-pools/RageWars/include/span_1000/code_802B243C.h"
+    },
+    "include/span_16E000/code_80403BCC.h": {
+      "sha256": "95e5537fe8d1b6681922ddb4cbfba00cfcdf1f5a45fab598c439241ab3875b1b",
+      "retained_path": "cycles/rw-constant-pools/RageWars/include/span_16E000/code_80403BCC.h"
+    },
+    "include/span_1000/code_8028308C.h": {
+      "sha256": "b06a92960ad753b3caea1313b61aab6418688d86f670e4983532e44f3ce04e6d",
+      "retained_path": "cycles/rw-constant-pools/RageWars/include/span_1000/code_8028308C.h"
+    },
+    "include/shared/func_80425674_de_layout.h": {
+      "sha256": "8c631248d1b55464b03ab528d52ad8db5dda655e9976069e445ec7ef248ab61a",
+      "retained_path": "cycles/rw-constant-pools/RageWars/include/shared/func_80425674_de_layout.h"
+    },
+    "include/span_16E000/code_8044ACCC.h": {
+      "sha256": "dee5614a0870a8c4303487ef32a86f4dae1508591a60775df74eb9cc2f9ab6f4",
+      "retained_path": "cycles/rw-constant-pools/RageWars/include/span_16E000/code_8044ACCC.h"
+    },
+    "include/shared/func_80286080_de_closed.h": {
+      "sha256": "1185969d843f989a88f9ad6f408dc26fbe6a42b4168fe9896417a05af4678a39",
+      "retained_path": "cycles/rw-constant-pools/RageWars/include/shared/func_80286080_de_closed.h"
+    },
+    "include/common/unused.h": {
+      "sha256": "ceebf2f01532c9717ce8d2f3ac9ab06ee849cd403ef17a931d4518a3584792e1",
+      "retained_path": "cycles/rw-constant-pools/RageWars/include/common/unused.h"
+    },
+    "include/types.h": {
+      "sha256": "1d8918b28b3228c8ddd7ca1fe44e7166231b6d8277087a7070cbca1418554c4e",
+      "retained_path": "cycles/rw-constant-pools/RageWars/include/types.h"
+    },
+    "include/span_1000/code_802B8DD0.h": {
+      "sha256": "5b6a1809b4aef5f961533da74e94abb56ba7363c949145f1e6a650c4f42a891c",
+      "retained_path": "cycles/rw-constant-pools/RageWars/include/span_1000/code_802B8DD0.h"
+    },
+    "include/span_1000/code_802B9ED8.h": {
+      "sha256": "886e2a764c6cf4cfd3542167cb141a5f58521caeffe0c7faccf68d45dbfd1fa5",
+      "retained_path": "cycles/rw-constant-pools/RageWars/include/span_1000/code_802B9ED8.h"
+    },
+    "include/shared/gameplay_movement.h": {
+      "sha256": "bf0287b6f37da2edd38b0f4ed400260cbf7872fbcc888697007cdcd09d65df5c",
+      "retained_path": "cycles/rw-constant-pools/RageWars/include/shared/gameplay_movement.h"
+    },
+    "include/span_1000/code_8028FC98.h": {
+      "sha256": "33918dcde1bbfed476af6cefd8a3174520f9389246a2976ffef6e296ae6fb6df",
+      "retained_path": "cycles/rw-constant-pools/RageWars/include/span_1000/code_8028FC98.h"
+    },
+    "include/span_1000/code_80297CD0.h": {
+      "sha256": "5d69f11c02450196054fbaa486da29969e9ec76031d3554ef01f7c46c5a952e1",
+      "retained_path": "cycles/rw-constant-pools/RageWars/include/span_1000/code_80297CD0.h"
+    },
+    "include/common/types_1dc8418c21db.h": {
+      "sha256": "ac6b29011de9a231ff4c967e6e9502227ea516c2af8eb12b830a28574b01095a",
+      "retained_path": "cycles/rw-constant-pools/RageWars/include/common/types_1dc8418c21db.h"
+    },
+    "include/span_1000/code_802944E8.h": {
+      "sha256": "b113f244fc1dbb6f650308e05c5d9b3f23c7c52f0039d813bced9615612daa9b",
+      "retained_path": "cycles/rw-constant-pools/RageWars/include/span_1000/code_802944E8.h"
+    },
+    "include/span_1000/code_80243A80.h": {
+      "sha256": "85680dcab98a9e3f249c2d2f046a13a450a5cca015d308b788cf6810febecd27",
+      "retained_path": "cycles/rw-constant-pools/RageWars/include/span_1000/code_80243A80.h"
+    },
+    "include/span_1000/code_802B0388.h": {
+      "sha256": "8541db64854dc205bb797b8d2aecf196c9b3b23c16eaa7f9930392b3bfd0f4e7",
+      "retained_path": "cycles/rw-constant-pools/RageWars/include/span_1000/code_802B0388.h"
+    },
+    "include/span_16E000/code_804251F4.h": {
+      "sha256": "483625b5c863dd52cf7516c21f737db93076cecdb27f69ebbb728e8c63a7ebd9",
+      "retained_path": "cycles/rw-constant-pools/RageWars/include/span_16E000/code_804251F4.h"
+    },
+    "include/span_1000/code_8021CD70.h": {
+      "sha256": "417823768ace913af6a789a1a866ed04004e072378f464356e0cc7d1e1d84659",
+      "retained_path": "cycles/rw-constant-pools/RageWars/include/span_1000/code_8021CD70.h"
+    },
+    "include/span_16E000/code_804143D8.h": {
+      "sha256": "7cee843474a0e3ccc811f65568b71bc8412ed9e6486a3ba843c3a5f30b92f69c",
+      "retained_path": "cycles/rw-constant-pools/RageWars/include/span_16E000/code_804143D8.h"
+    },
+    "include/span_16E000/code_8041BEA8.h": {
+      "sha256": "f35735ffb8bbe9d6ff6191101b8b7c7d6da75659a70d987a5091864be0329e56",
+      "retained_path": "cycles/rw-constant-pools/RageWars/include/span_16E000/code_8041BEA8.h"
+    },
+    "include/common/draft_fields_func_80283278_de.h": {
+      "sha256": "9cac7a080012dbef8243a24c8d5a3759e8beb0e7a1b7be1b0e2a12eb70d06c69",
+      "retained_path": "cycles/rw-constant-pools/RageWars/include/common/draft_fields_func_80283278_de.h"
+    },
+    "include/audio_callbacks.h": {
+      "sha256": "15d5c8bdec38dc2bf6412c28a89f3f8a8db2f6060710eb89a171bf46c40b10fe",
+      "retained_path": "cycles/rw-constant-pools/RageWars/include/audio_callbacks.h"
+    },
+    "include/span_16E000/code_804221A0.h": {
+      "sha256": "f4343e9fcec6e8ce70ba218e21243fe7e2a7a19b7f08a1984557693d5c9290c6",
+      "retained_path": "cycles/rw-constant-pools/RageWars/include/span_16E000/code_804221A0.h"
+    },
+    "include/common/types_06e4f7ef1f9e.h": {
+      "sha256": "daeb3f74e122b490b5b5b87b937c4f990a1128b4914df5eb1e65d3d2af5c53c9",
+      "retained_path": "cycles/rw-constant-pools/RageWars/include/common/types_06e4f7ef1f9e.h"
+    },
+    "original.elf.gz": {
+      "sha256": "afbaf744f86aa002119bb2f9485952d7d3fe13ed0f2a8787ee84a469434d17d8",
+      "retained_path": "cycles/rw-constant-pools/RageWars/build/cas/0a6b2545d3850aa74bc09e1c19fabfc8357190a0479187c7a363856ca8b0e1e3fd9d4bdcd831cdc1.o"
+    },
+    "placed.elf.gz": {
+      "sha256": "108c61f0152a27bac582c75e30d5791c17c828c5d50b326d964d3e54ed91e45e",
+      "retained_path": "cycles/rw-constant-pools/RageWars/build/us-rev1/units/func_8021E2A0_de.placed.o"
+    },
+    "text.bin": {
+      "sha256": "47f0f8e685e491abc85b6a8120a14db7b2cc8b9d5e684b8520801c49272e8a05",
+      "retained_path": "cycles/rw-constant-pools/RageWars/build/us-rev1/units/func_8021E2A0_de.bin"
+    },
+    "table.bin": {
+      "sha256": "0a7b62268b81bd4bdd386312315531b67852ed18282ab9fbb269b21cf003823e",
+      "retained_path": "cycles/rw-constant-pools/RageWars/roms/baserom.us-rev1.z64[0xC80E8:0xC827C]"
+    },
+    "symbols.ld": {
+      "sha256": "3e743f94f66c8acb871fba6073cd7afba302c2bf292203ba8b57d995d1f7f57e",
+      "retained_path": "cycles/rw-constant-pools/RageWars/versions/us-rev1/symbols.ld",
+      "selection": "Exact actual values for original native undefined externals only."
+    }
+  },
+  "key": "0a6b2545d3850aa74bc09e1c19fabfc8357190a0479187c7a363856ca8b0e1e3fd9d4bdcd831cdc1"
+}

@@ -1,10 +1,10 @@
 """Compiler-owned compatibility for persisted build configuration."""
 
 import tomllib
-from pathlib import Path
+from importlib.resources import files
 from typing import Any
 
-BUILD_ALIASES = tomllib.loads(Path(__file__).with_name("registry.toml").read_text())["build_aliases"]
+BUILD_ALIASES = tomllib.loads(files("unbake.compilers").joinpath("registry.toml").read_text())["build_aliases"]
 BUILD_KEYS = frozenset({"asflags", "cppflags", "gnu_asflags", "resident_mappings", *BUILD_ALIASES})
 
 

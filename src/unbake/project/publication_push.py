@@ -41,10 +41,16 @@ def admission(
             )
         )
     changed = set(_git(project, "diff", "--name-only", "-z", base, head).split("\0")) - {""}
-    sources = tuple(sorted({
-        project.root / name for name in changed
-        if (project.root / name).parent == project.src and Path(name).suffix in (".c", ".s")
-    } | set(producer_sources)))
+    sources = tuple(
+        sorted(
+            {
+                project.root / name
+                for name in changed
+                if (project.root / name).parent == project.src and Path(name).suffix in (".c", ".s")
+            }
+            | set(producer_sources)
+        )
+    )
     from unbake.report import data
 
     # Admission follows authored changes, never an all-producer history sweep.
@@ -52,7 +58,8 @@ def admission(
     proofs = {}
     previous_project = (
         config.load(project.root, text=_git(project, "show", base + ":config.toml"))
-        if "config.toml" in changed else project
+        if "config.toml" in changed
+        else project
     )
     previous_recipes = _git(project, "show", base + ":units.mk") if "units.mk" in changed else None
     changed_paths = {project.root / name for name in changed}
@@ -72,7 +79,8 @@ def admission(
             before_config = data.producer_configuration(previous_project, version, binding)
             if previous_recipes is not None:
                 before_config["unit_recipe"] = [
-                    line for line in previous_recipes.splitlines()
+                    line
+                    for line in previous_recipes.splitlines()
                     if "src/" + unit.name + "." in line or "data/" + unit.name + "." in line
                 ]
             if data.canonical_configuration(current_config) != data.canonical_configuration(before_config):
@@ -82,6 +90,10 @@ def admission(
         script = f"versions/{version}/" + (
             project.name + ".data.ld" if unit.kind == "data" else "resources/" + unit.name + ".ld"
         )
+        if isinstance(unit, buildfiles.MixedData):
+            script = f"versions/{version}/data/{unit.name}.ld"
+            if "tools/report-verifier.zip" in changed:
+                return True
         if script in changed:
             return True
         symbol_paths = {
@@ -113,7 +125,8 @@ def admission(
             from unbake.compilers import drivers
 
             references = data.linker_references(
-                source, [*drivers.flags(project, version, unit.name), *project.cppflags],
+                source,
+                [*drivers.flags(project, version, unit.name), *project.cppflags],
                 {path: path.read_text() for path in paths if path.is_file()},
             )
             if references is None:
