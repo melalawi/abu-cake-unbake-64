@@ -69,6 +69,14 @@ class TaskIdentity:
     input_keys: tuple[str, ...]
 
 
+def memory_summary(fault: dict[str, Any]) -> str:
+    """Name the action, the peak and the configured limit with the config key and file it came from."""
+    limit = fault.get("configured_cap_bytes", fault.get("cap_bytes"))
+    peak = fault.get("vmdata_bytes") or fault.get("peak_rss_bytes")
+    source = fault.get("limit_source", "resources.memory_worker_bytes")
+    return f"action {fault.get('action')} peaked at {peak} bytes against limit {limit} bytes from {source}"
+
+
 class TaskFailed(Held):
     def __init__(self, key: str, fault: dict[str, Any]) -> None:
         identity = fault.get("identity", {})
@@ -77,6 +85,8 @@ class TaskFailed(Held):
         versions = ", ".join(identity.get("versions", ()))
         where = fault.get("allocation", fault.get("cause", "worker exited"))
         suffix = "; retry failed" if fault.get("retry_exhausted", True) else ""
+        if key == "worker.memory":
+            suffix = f"; {memory_summary(fault)}{suffix}"
         from unbake.inputs import DependencySet
 
         dependencies = DependencySet(
@@ -393,7 +403,11 @@ class WorkerMemory(MemoryError):
 
 
 def memory_fault(
-    error: BaseException, identity: TaskIdentity | None = None, *, expanded_bytes: int | None = None
+    error: BaseException,
+    identity: TaskIdentity | None = None,
+    *,
+    expanded_bytes: int | None = None,
+    action: str | None = None,
 ) -> dict[str, Any]:
     from dataclasses import asdict
 
@@ -409,7 +423,7 @@ def memory_fault(
         pass
     return {
         "category": "allocation",
-        "action": "types" if identity is not None else "pool",
+        "action": action or ("types" if identity is not None else "pool"),
         "identity": asdict(identity) if identity is not None else {},
         "allocation": _where(error),
         "cause": type(error).__name__,
@@ -440,7 +454,7 @@ def _named(fn: Callable[..., R], *arguments: Any) -> R:
     except WorkerMemory:
         raise
     except MemoryError as error:
-        raise WorkerMemory(memory_fault(error)) from error
+        raise WorkerMemory(memory_fault(error, action=effort.name_of(fn))) from error
     except Held:
         raise
     except Exception as error:
@@ -578,7 +592,9 @@ class Pool:
         *,
         cache_memory_bytes: int | None = None,
         watchdog: Watchdog | None = None,
+        limit_source: str = "resources.memory_worker_bytes (argument)",
     ):
+        self.limit_source = limit_source
         self.size = admitted(workers, memory_total_bytes, memory_parent_bytes, memory_worker_bytes)
         self.cache_memory_bytes = cache_memory_bytes
         self.memory_worker_bytes = memory_worker_bytes
@@ -611,6 +627,7 @@ class Pool:
             host.memory_worker_bytes,
             host.cache_machine_root,
             cache_memory_bytes=host.cache_memory_bytes,
+            limit_source="resources.memory_worker_bytes in " + ", ".join(str(path) for path in host.sources),
         )
 
     def __enter__(self) -> Pool:
@@ -713,7 +730,10 @@ class Pool:
                     self._faults[token] = fault
                     assert fault.fault is not None
                     fault.fault = fault.fault.framed(
-                        "pool", "worker", "configured worker cap", {"configured_cap_bytes": self.memory_worker_bytes}
+                        "pool",
+                        "worker",
+                        "configured worker cap",
+                        {"configured_cap_bytes": self.memory_worker_bytes, "limit_source": self.limit_source},
                     )
                     current = self.watchdog.current[token]
                     self._report(token, "stuck", current)
@@ -854,6 +874,7 @@ class Pool:
                                     "category": "worker-exit",
                                     "cause": type(error).__name__,
                                     "configured_cap_bytes": self.memory_worker_bytes,
+                                    "limit_source": self.limit_source,
                                     "wall_seconds": time.monotonic() - started,
                                     "wall_scope": "submission-to-completion",
                                     "cpu_seconds": None,
@@ -1040,6 +1061,7 @@ class Pool:
                         }
                     )
                     diagnostic["configured_cap_bytes"] = self.memory_worker_bytes
+                    diagnostic["limit_source"] = self.limit_source
                     terminal = TaskFailed(failure, diagnostic)
                     terminal.__cause__ = error
                     ready[index] = None, terminal
