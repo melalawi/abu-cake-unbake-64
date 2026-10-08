@@ -271,13 +271,23 @@ def undefined(placed: Path) -> set[str]:
     }
 
 
-def derived_symbols(names: set[str], known: frozenset[str], version: str, source: Path) -> list[str]:
+def derived_symbols(
+    names: set[str], known: frozenset[str], version: str, source: Path, project: Project | None = None
+) -> list[str]:
     """--defsym for each missing address-named symbol at the address its name encodes (the rule symbols.ld
-    applies to published C); refused naming the source and every other missing symbol."""
+    applies to published C), and for each missing name another VERSION lists at the address of the same
+    object here (shared-name anchors); refused naming the source and every other missing symbol."""
     from unbake import buildfiles
+    from unbake.layout import data_symbols
 
     missing = sorted(names - known)
-    unknown = [name for name in missing if buildfiles.named_address(name) is None]
+    other: dict[str, int] = {}
+    for name in missing:
+        if buildfiles.named_address(name) is None and project is not None:
+            found = data_symbols.in_version(project, name, version)
+            if found is not None:
+                other[name] = found
+    unknown = [name for name in missing if buildfiles.named_address(name) is None and name not in other]
     if unknown:
         raise Held(
             cause_named(
@@ -290,7 +300,9 @@ def derived_symbols(names: set[str], known: frozenset[str], version: str, source
                 stage="link",
             )
         )
-    return [f"--defsym={name}=0x{buildfiles.named_address(name):08X}" for name in missing]
+    return [
+        f"--defsym={name}=0x{other[name] if name in other else buildfiles.named_address(name):08X}" for name in missing
+    ]
 
 
 def initialized_layout(
@@ -395,7 +407,7 @@ def link(
     from unbake.compilers.runtime import bindings
 
     runtime = bindings(project, version) if missing - known else {}
-    derived = derived_symbols(missing, known | frozenset(runtime), version, source)
+    derived = derived_symbols(missing, known | frozenset(runtime), version, source, project)
     derived.extend(f"--defsym={name}=0x{runtime[name]:08X}" for name in sorted(missing - known) if name in runtime)
     try:
         process.run_tool(

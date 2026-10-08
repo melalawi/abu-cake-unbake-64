@@ -39,6 +39,53 @@ class DerivedSymbolsTests(unittest.TestCase):
                     self.assertEqual(runner.derived_symbols(names, known, "us", SOURCE), expected)
 
 
+class OtherVersionNameTests(unittest.TestCase):
+    """A name another VERSION's address gave an object resolves through the shared-name anchors."""
+
+    def project(self, tables: dict[str, dict[str, int]]) -> SimpleNamespace:
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root)
+        versions = {}
+        for version, table in tables.items():
+            path = root / f"{version}.txt"
+            path.write_text("".join(f"{name} = 0x{address:08X};\n" for name, address in table.items()))
+            versions[version] = SimpleNamespace(symbols=path)
+        return SimpleNamespace(names_from="eu", versions=tuple(tables), version=versions.__getitem__)
+
+    def test_name_resolves_at_the_same_object_in_the_other_version(self) -> None:
+        project = self.project(
+            {
+                "eu": {"gA": 0x100, "gB": 0x200, "D_80000150_eu": 0x150},
+                "de": {"gA": 0x110, "gB": 0x210},
+            }
+        )
+        self.assertEqual(
+            runner.derived_symbols({"D_80000150_eu"}, frozenset(), "de", SOURCE, project),
+            ["--defsym=D_80000150_eu=0x00000160"],
+        )
+
+    def test_a_listed_name_is_kept_and_unanchored_or_unknown_names_are_refused_with_the_version(self) -> None:
+        project = self.project(
+            {
+                "eu": {"gA": 0x100, "gB": 0x200, "D_80000150_eu": 0x150},
+                "de": {"gA": 0x110, "gB": 0x230, "D_80000150_eu": 0x999},
+            }
+        )
+        self.assertEqual(
+            runner.derived_symbols({"D_80000150_eu"}, frozenset({"D_80000150_eu"}), "de", SOURCE, project), []
+        )
+        project = self.project(
+            {
+                "eu": {"gA": 0x100, "gB": 0x200, "gC": 0x300, "D_80000150_eu": 0x150},
+                "de": {"gA": 0x110, "gB": 0x230, "gC": 0x330},
+            }
+        )
+        for label, name in [("anchors disagree", "D_80000150_eu"), ("listed nowhere", "gNowhere")]:
+            with self.subTest(label), self.assertRaises(Held) as caught:
+                runner.derived_symbols({name}, frozenset(), "de", SOURCE, project)
+            self.assertIn(f"VERSION de: {name}", caught.exception.reason)
+
+
 class LinkRefusalTests(ProjectCase):
     def test_a_link_refusal_is_never_a_zero_percent_compare(self) -> None:
         refusal = Held(

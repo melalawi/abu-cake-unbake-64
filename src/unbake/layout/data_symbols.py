@@ -1,6 +1,7 @@
 """Resolve data correspondence between explicit VERSION symbol placements."""
 
 import re
+from typing import Any
 
 from unbake.config import Held, Host, Project
 from unbake.layout import split
@@ -29,6 +30,53 @@ def _source_address(project: Project, name: str) -> int:
     return address
 
 
+def mapped_address(
+    source: dict[str, tuple[int, int, Any]], target: dict[str, tuple[int, int, Any]], name: str, address: int
+) -> int:
+    """The address in TARGET of the object at ADDRESS in SOURCE: the two nearest shared-name anchors
+    must agree on one delta."""
+    anchors = sorted(
+        (value[0], target[key][0] - value[0])
+        for key, value in source.items()
+        if key in target and not key.startswith(("func_", "_")) and key != name
+    )
+    lower = [item for item in anchors if item[0] < address]
+    upper = [item for item in anchors if item[0] > address]
+    deltas = (
+        {delta for base, delta in lower if base == lower[-1][0]}
+        | {delta for base, delta in upper if base == upper[0][0]}
+        if lower and upper
+        else set()
+    )
+    if len(deltas) != 1:
+        raise Held(
+            cause_named(
+                "layout.data_symbols.mapped_address",
+                f"data symbol {name}: no unambiguous anchor delta",
+                owner="layout.data_symbols",
+                stage="split",
+            )
+        )
+    return address + deltas.pop()
+
+
+def in_version(project: Project, name: str, version: str) -> int | None:
+    """The address in VERSION of a name that symbol file does not list but another VERSION does (a name
+    another VERSION's address gave the object): the same object found through the shared-name anchors.
+    None when no VERSION lists the name or the anchors disagree."""
+    _, target = split.symbols(project.version(version).symbols)
+    if name in target:
+        return target[name][0]
+    for origin in dict.fromkeys((project.names_from, *project.versions)):
+        _, source = split.symbols(project.version(origin).symbols)
+        if name in source and origin != version:
+            try:
+                return mapped_address(source, target, name, source[name][0])
+            except Held:
+                return None
+    return None
+
+
 def counterparts(project: Project, name: str) -> dict[str, str]:
     """Use existing names or two agreeing surrounding cross-VERSION anchors."""
     source_version = project.names_from
@@ -40,20 +88,9 @@ def counterparts(project: Project, name: str) -> dict[str, str]:
         if name in target:
             result[version] = name
             continue
-        anchors = sorted(
-            (value[0], target[key][0] - value[0])
-            for key, value in source.items()
-            if key in target and not key.startswith(("func_", "_")) and key != name
-        )
-        lower = [item for item in anchors if item[0] < address]
-        upper = [item for item in anchors if item[0] > address]
-        deltas = (
-            {delta for base, delta in lower if base == lower[-1][0]}
-            | {delta for base, delta in upper if base == upper[0][0]}
-            if lower and upper
-            else set()
-        )
-        if len(deltas) != 1:
+        try:
+            mapped = mapped_address(source, target, name, address)
+        except Held as error:
             raise Held(
                 cause_named(
                     "layout.data_symbols.counterparts",
@@ -61,8 +98,7 @@ def counterparts(project: Project, name: str) -> dict[str, str]:
                     owner="layout.data_symbols",
                     stage="split",
                 )
-            )
-        mapped = address + deltas.pop()
+            ) from error
         candidates = [key for key, value in target.items() if value[0] == mapped]
         if len(candidates) != 1:
             raise Held(
