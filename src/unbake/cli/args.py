@@ -99,6 +99,10 @@ class Context:
                     stage="config",
                 )
             )
+        from unbake import effort, pool
+
+        # The guard that names a big stage which ran in the parent needs the width this command's pool has.
+        effort.expect_workers(pool.workers(self.host))
         return self.host
 
     def ready(self, *names: str) -> tuple[Project, Host]:

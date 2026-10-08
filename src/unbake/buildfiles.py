@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from unbake import atomic as atomic_files
-from unbake import cache, inputs
+from unbake import cache, inputs, pool, tui
 from unbake import cache as retention
 from unbake.compilers import drivers
 from unbake.compilers import registry as compiler_registry
@@ -480,16 +480,24 @@ def named_address(name: str) -> int | None:
     return int(match[1], 16) if match else None
 
 
-def address_named(project: Project) -> dict[str, int]:
-    """Names splat derives from a vram (D_XXXXXXXX, func_XXXXXXXX) that published C or headers spell."""
+def _address_names(chunk: list[Path]) -> dict[str, int]:
     names: dict[str, int] = {}
-    for path in (*project.src.glob("*.c"), *(p for root in project.include for p in root.rglob("*.h"))):
+    for path in chunk:
         for match in _ADDRESS_NAMED.finditer(path.read_text(errors="replace")):
             names[match[0]] = int(match[1], 16)
     return names
 
 
-def symbols_ld(project: Project, version: str) -> str:
+def address_named(project: Project, host: Host | None = None) -> dict[str, int]:
+    """Names splat derives from a vram (D_XXXXXXXX, func_XXXXXXXX) that published C or headers spell."""
+    paths = [*project.src.glob("*.c"), *(p for root in project.include for p in root.rglob("*.h"))]
+    chunks = [paths[start : start + 64] for start in range(0, len(paths), 64)]
+    with tui.task("Scanning sources for address-named symbols", len(paths)):
+        found = [_address_names(c) for c in chunks] if host is None else pool.run(host, _address_names, chunks)
+    return {name: address for part in found for name, address in part.items()}
+
+
+def symbols_ld(project: Project, version: str, named: dict[str, int] | None = None) -> str:
     """Every known symbol as PROVIDE, so a unit linked alone resolves its external references.
 
     Data that stays a raw ROM slice has no label in any object. An address-named symbol the sources spell
@@ -502,7 +510,7 @@ def symbols_ld(project: Project, version: str) -> str:
     # A shared name whose address already has another splat symbol in this version is kept as a comment.
     for name, address in _LINKER_ALIAS.findall(path.read_text()):
         provided.setdefault(name, int(address, 16))
-    for name, address in address_named(project).items():
+    for name, address in (address_named(project) if named is None else named).items():
         provided.setdefault(name, address)
     from unbake.compilers.runtime import bindings
 
@@ -607,17 +615,12 @@ def slices_mk(project: Project, version: str) -> str:
     return "".join(lines)
 
 
-def units_mk(project: Project, *, names: tuple[str, ...] | None = None) -> str:
-    """Pattern-specific values (all versions) for units off the default compiler or with their own flags."""
-    lines = [HEADER]
+def _unit_lines(project: Project, chunk: list[str]) -> list[str]:
+    """The pattern-specific rows of each named unit; pure in the project, so chunks run in pool workers."""
     from unbake.work import attempts
 
-    selected = (
-        sorted({path.relative_to(project.src).with_suffix("").as_posix() for path in project.src.rglob("*.c")})
-        if names is None
-        else names
-    )
-    for name in selected:
+    lines: list[str] = []
+    for name in chunk:
         targets = f"build/%/src/{name}.i build/%/src/{name}.key build/%/units/{name}.bin build/%/data/{name}.bin"
         unit = f"src/{name}.c"
         compiler = project.compiler_for(unit)
@@ -645,7 +648,24 @@ def units_mk(project: Project, *, names: tuple[str, ...] | None = None) -> str:
         guard = drivers.consumer_define(project, name)
         if guard is not None:
             lines.append(f"{targets}: CONSUMER := {guard}\n")
-    return "".join(lines)
+    return lines
+
+
+def units_mk(project: Project, *, names: tuple[str, ...] | None = None, host: Host | None = None) -> str:
+    """Pattern-specific values (all versions) for units off the default compiler or with their own flags."""
+    selected = (
+        sorted({path.relative_to(project.src).with_suffix("").as_posix() for path in project.src.rglob("*.c")})
+        if names is None
+        else list(names)
+    )
+    chunks = [selected[start : start + 64] for start in range(0, len(selected), 64)]
+    with tui.task("Rendering per-unit build flags", len(selected)):
+        rows = (
+            [_unit_lines(project, chunk) for chunk in chunks]
+            if host is None
+            else pool.run(host, _unit_lines, chunks, project)
+        )
+    return HEADER + "".join(line for chunk in rows for line in chunk)
 
 
 def _recipe(template: tuple[str, ...]) -> str:
@@ -1037,6 +1057,28 @@ def driver_identity() -> str:
     return "".join(f"{hashlib.sha256((root / name).read_bytes()).hexdigest()}  {name}\n" for name in names)
 
 
+def _version_files(shared: tuple[Project, dict[str, int]], version: str) -> dict[Path, str]:
+    """One version's build files; versions are independent, so they render in pool workers."""
+    project, named = shared
+    files: dict[Path, str] = {}
+    directory = project.root / "versions" / version
+    meta = project.version(version)
+    rom = relative(project, meta.baserom)
+    files[directory / "slices.mk"] = slices_mk(project, version)
+    files[directory / "symbols.ld"] = symbols_ld(project, version, named)
+    files[directory / f"{project.name}.ld"] = link_script(project, version)
+    files[directory / f"{project.name}.data.ld"] = data_link_script(project, version)
+    for unit in data_units(project, version):
+        if isinstance(unit, MixedData):
+            files[directory / "data" / f"{unit.name}.ld"] = mixed_data_link_script(project, version, unit)
+    for resource in resource_bindings(project, version):
+        if resource.assembler == "gnu":
+            files[directory / "resources" / f"{resource.name}.ld"] = resource_link_script(project, version, resource)
+    files[directory / "baserom.sha1"] = f"{meta.baserom_sha1}  {rom}\n"
+    files[directory / f"{project.name}.sha1"] = f"{meta.baserom_sha1}  build/{version}/{project.name}.z64\n"
+    return files
+
+
 def generate(project: Project, host: Host) -> dict[Path, bytes]:
     """Every build file, by path; refused when an original-asm source or row lacks its proved record."""
     from unbake.decomp import original_asm
@@ -1050,7 +1092,7 @@ def generate(project: Project, host: Host) -> dict[Path, bytes]:
     files: dict[Path, str] = {
         project.root / ".gitignore": hygiene.runtime_ignore_text(project),
         project.root / "Makefile": makefile(project, host),
-        project.root / "units.mk": units_mk(project),
+        project.root / "units.mk": units_mk(project, host=host),
         project.tools / "n64link.version": n64link_pin(host),
         project.tools / "compiler-driver.sha256": driver_identity(),
         project.tools / "compiler_contracts.py": Path(__file__)
@@ -1064,24 +1106,11 @@ def generate(project: Project, host: Host) -> dict[Path, bytes]:
         project.root / ".github/workflows/progress.yml": github_progress(project, host, verifier_payload=payload),
         project.root / ".gitlab-ci.yml": gitlab_progress(project, verifier_payload=payload),
     }
-    for version in project.versions:
-        directory = project.root / "versions" / version
-        meta = project.version(version)
-        rom = relative(project, meta.baserom)
-        files[directory / "slices.mk"] = slices_mk(project, version)
-        files[directory / "symbols.ld"] = symbols_ld(project, version)
-        files[directory / f"{project.name}.ld"] = link_script(project, version)
-        files[directory / f"{project.name}.data.ld"] = data_link_script(project, version)
-        for unit in data_units(project, version):
-            if isinstance(unit, MixedData):
-                files[directory / "data" / f"{unit.name}.ld"] = mixed_data_link_script(project, version, unit)
-        for resource in resource_bindings(project, version):
-            if resource.assembler == "gnu":
-                files[directory / "resources" / f"{resource.name}.ld"] = resource_link_script(
-                    project, version, resource
-                )
-        files[directory / "baserom.sha1"] = f"{meta.baserom_sha1}  {rom}\n"
-        files[directory / f"{project.name}.sha1"] = f"{meta.baserom_sha1}  build/{version}/{project.name}.z64\n"
+    named = address_named(project, host)
+    with tui.task("Rendering per-version build files", len(project.versions)):
+        rendered = pool.run(host, _version_files, list(project.versions), (project, named))
+    for part in rendered:
+        files.update(part)
     return {**{path: text.encode() for path, text in files.items()}, project.root / verify.BUNDLE: payload}
 
 

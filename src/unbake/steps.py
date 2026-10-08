@@ -284,6 +284,17 @@ class Step:
     ready: Callable[[Project], bool] | None = None
 
 
+def pooled_work() -> dict[str, tuple[Callable[..., Any], ...]]:
+    """The per-item workers each heavy step hands to the pool; a step looping over units in the parent is absent."""
+    from unbake import buildfiles
+    from unbake.layout import header_loss
+
+    return {
+        "buildfiles": (buildfiles._unit_lines, buildfiles._version_files, buildfiles._address_names),
+        "headers": (header_loss._header_job, header_loss._source_job),
+    }
+
+
 def _rom_facts_key(project: Project, host: Host) -> str:
     from unbake.layout import map as layout_map
     from unbake.typemap import mapping, storage

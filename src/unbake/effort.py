@@ -103,6 +103,22 @@ def counted() -> dict[str, tuple[int, int]]:
         return {name: (row[0], row[1]) for name, row in _counts.items()}
 
 
+# Items a stage may process in the parent alone before the guard names it; the pool width the command expects.
+PARENT_ITEMS = 256
+PARENT_ONLY = "parent-only: "
+_width = 1
+
+
+def expect_workers(count: int) -> None:
+    """The pool width this command runs with; a stage over PARENT_ITEMS that used no worker is then a finding."""
+    global _width
+    _width = count
+
+
+def parent_only(label: str, items: int, pooled: bool) -> bool:
+    return _width > 1 and items > PARENT_ITEMS and not pooled
+
+
 def record_stage(name: str, wall: float, cpu: float) -> None:
     """One finished stage: its wall seconds and the CPU seconds all processes spent in it."""
     with _lock:
@@ -249,7 +265,11 @@ def since(start: Mark) -> Effort:
 def step_findings(name: str, spent: Effort, budgets: Host) -> list[str]:
     """A step over the host's [budgets], each named by its budget key: its memory, its CPU, and a single-core
     stretch (this process's CPU above main_cpu_fraction of the step's, once it passes main_cpu_seconds)."""
-    found = []
+    found = [
+        f"budget.parent_only: {row[0].removeprefix(PARENT_ONLY)} ran in the parent process with workers > 1"
+        for row in spent.stages
+        if row[0].startswith(PARENT_ONLY)
+    ]
     for field_name, value, limit in (
         ("main_rss_bytes", spent.main_rss, budgets.main_rss_bytes),
         ("worker_rss_bytes", spent.worker_rss, budgets.worker_rss_bytes),

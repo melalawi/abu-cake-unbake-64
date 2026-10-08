@@ -409,7 +409,9 @@ def fold_source(
     from unbake.layout import header_loss
 
     header_loss.check(
-        project, {project.src / f"{function}.c": final.encode(), **{edit.path: edit.after.encode() for edit in edits}}
+        project,
+        {project.src / f"{function}.c": final.encode(), **{edit.path: edit.after.encode() for edit in edits}},
+        policy=policy,
     )
     return Folded(function, final, edits, removed, contract)
 
