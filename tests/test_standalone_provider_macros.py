@@ -3,6 +3,7 @@
 import gzip
 import hashlib
 import json
+import os
 from pathlib import Path
 from unittest.mock import patch
 
@@ -10,6 +11,7 @@ from tests.project_fixture import ProjectCase
 from tests.test_resource_armips import ArmipsResourceTests
 from tests.test_standalone_data_progress import prepare
 from unbake import buildfiles, cdecl, process
+from unbake.compilers import registry
 from unbake.project import publication_push
 from unbake.project.headers import Graph
 from unbake.report import data, progress
@@ -23,6 +25,10 @@ class StandaloneProviderMacroTests(ProjectCase):
 
     def setUp(self):
         super().setUp()
+        # The fixture compiler holds placeholder bytes, so its real pin digests cannot match.
+        patcher = patch.object(registry, "verify")
+        patcher.start()
+        self.addCleanup(patcher.stop)
         self.native = {}
         for row in MANIFEST["files"]:
             raw = gzip.decompress((FIXTURE / row["fixture"]).read_bytes())
@@ -46,6 +52,10 @@ class StandaloneProviderMacroTests(ProjectCase):
             path = self.project.build_link("us") / "data" / (self.unit.name + "." + ext)
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(raw)
+        # The producer recipe is read back from the generated Makefile, not the fixture placeholder.
+        make = self.project.root / "Makefile"
+        make.write_text(buildfiles.makefile(self.project, self.host))
+        os.utime(make, ns=(1, 1))  # producing inputs predate the accepted native bytes
 
     def test_actual_authored_provider_macros_retain_definition_and_export_96_native_bytes_without_replay(self):
         source = self.project.root / MANIFEST["source"]
@@ -87,6 +97,10 @@ class StandaloneProviderMacroTests(ProjectCase):
 class StandaloneArmipsEvidenceTests(ArmipsResourceTests):
     def test_actual_armips_pairs_preserve_exec_overlay_and_rom_storage_in_data_only_credit(self):
         prepare(self)
+        # The armips producing recipe is read back from the generated slices, not a missing placeholder.
+        slices = self.project.root / "versions/us/slices.mk"
+        slices.write_text(buildfiles.slices_mk(self.project, "us"))
+        os.utime(slices, ns=(1, 1))  # producing inputs predate the accepted native bytes
         result = self.admit()
         self.assertEqual(len(result["native_data"]), 4)
         bindings = [proof["payload"]["evidence"][0]["producer"]["unit"] for proof in result["native_data"]]

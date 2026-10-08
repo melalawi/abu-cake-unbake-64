@@ -850,6 +850,9 @@ def capture_producer(
     producer_paths.add(project.root / "versions" / version / "symbols.ld")
     if unit.kind == "data" or unit.assembler == "gnu":
         producer_paths.add(script)
+    if unit.kind != "data" and unit.assembler != "gnu":
+        # The slice rule is the producing recipe of every other resource assembler.
+        producer_paths.add(project.root / "versions" / version / "slices.mk")
     if any(not path.is_file() or path.is_symlink() for path in producer_paths):
         return None
     if any(path.stat().st_mtime_ns > native.stat().st_mtime_ns for path in freshness_paths):
