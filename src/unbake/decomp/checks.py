@@ -585,6 +585,27 @@ def unmarked(source: str | Path) -> list[GuardFinding]:
     return [finding for finding in run(source) if finding.fakematch is None]
 
 
+def resource_opcodes(source: Path) -> list[GuardFinding]:
+    """Standalone symbolic resources cannot import binaries or encode instruction dumps."""
+    text = source.read_text()
+    code = re.sub(r"/\*.*?\*/|//[^\n]*", lambda m: "\n" * m[0].count("\n"), text, flags=re.S)
+    executable = False
+    result = []
+    for line, content in enumerate(code.splitlines(), 1):
+        if re.match(r"\s*\.text\b", content):
+            executable = True
+        if re.match(r"\s*\.(?:data|rodata|rdata|sdata)\b", content):
+            executable = False
+        section = re.match(r'\s*\.section\s+([^,\s]+)(?:\s*,\s*"([^"]*)")?', content)
+        if section:
+            executable = "x" in (section[2] or "") or section[1] == ".text"
+        if re.search(r"\.incbin\b", content) or (
+            executable and re.search(r"\.(?:word|byte|half|short|long|dword|[248]byte|insn)\b", content)
+        ):
+            result.append(GuardFinding("resource-opcodes", line, content.strip(), None))
+    return result
+
+
 @dataclass(frozen=True)
 class SourceFinding:
     path: str

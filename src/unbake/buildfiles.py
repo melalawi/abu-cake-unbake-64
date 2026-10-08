@@ -26,7 +26,7 @@ from unbake.layout import split
 from unbake.process import named as cause_named
 
 # Bump when this step's output changes for the same inputs. Keys never digest the tool's code.
-SCHEMA = 11
+SCHEMA = 12
 
 # CI pins: full commit SHAs and an image digest (tool data, never config).
 CHECKOUT = ("actions/checkout", "11d5960a326750d5838078e36cf38b85af677262", "v4.4.0")
@@ -58,6 +58,16 @@ class Unit:
     start: int
     size: int
     kind: str = "c"
+
+
+@dataclass(frozen=True)
+class Resource(Unit):
+    """Symbolic assembler source stored in ROM separately from its execution address."""
+
+    source: str = ""
+    execution_address: int = 0
+    section: str = ""
+    asflags: tuple[str, ...] = ()
 
 
 def relative(project: Project, path: Path) -> str:
@@ -100,6 +110,7 @@ def units(project: Project, version: str) -> list[Unit]:
             )
         result.append(Unit(name, row.address, row.start, row.end - row.start, row.kind))
     result.extend(data_units(project, version))
+    result.extend(resource_bindings(project, version))
     if len({(unit.kind, unit.name) for unit in result}) != len(result):
         raise Held(
             cause_named(
@@ -177,6 +188,81 @@ def data_link_script(project: Project, version: str) -> str:
         "OUTPUT_ARCH(mips)\nSECTIONS\n{\n"
         "  .data : SUBALIGN(1) { *(.rdata .rdata.* .rodata .rodata.* .data .data.* .sdata .sdata.* .lit4 .lit8) }\n"
         "  /DISCARD/ : { *(*) }\n}\n"
+        f"INCLUDE versions/{version}/symbols.ld\n"
+    )
+
+
+def resource_bindings(project: Project, version: str, *, text: str | None = None) -> dict[Resource, str]:
+    """Explicit resource rows; the segment vram is resident storage, execution_vram is separate."""
+    path = project.version(version).split
+    _, _, segments = split.layout(path) if text is None else split.parse_layout(path, text)
+    result = {}
+    for segment in segments:
+        for row in segment.rows:
+            if row.kind != "resource":
+                continue
+            source = project.root / row.path
+            resources = project.root / "resources"
+            if (
+                Path(row.path).is_absolute()
+                or not source.resolve().is_relative_to(resources.resolve())
+                or source.suffix != ".s"
+                or source.is_symlink()
+                or (text is None and not source.is_file())
+            ):
+                raise Held(
+                    cause_named(
+                        "buildfiles.resource",
+                        f"{version}: resource source must exist under resources/: {row.path}",
+                        owner="buildfiles",
+                        stage="buildfiles",
+                    )
+                )
+            name = "_".join(source.relative_to(resources).with_suffix("").parts)
+            split.name(name, "resource name")
+            fields = segment.fields
+            execution = split.number(fields.get("execution_vram"), "resource execution_vram")
+            section = fields.get("resource_section", "")
+            if not re.fullmatch(r"\.[A-Za-z_][A-Za-z_0-9.]*", section):
+                raise Held(
+                    cause_named(
+                        "buildfiles.resource",
+                        "resource_section must name one native section",
+                        owner="buildfiles",
+                        stage="buildfiles",
+                    )
+                )
+            flags = tuple(fields.get("resource_asflags", "").split())
+            words(flags)
+            size = split.end(row) - row.start
+            address = split.address(row, path)
+            if size <= 0 or execution + size > 2**32 or address + size > 2**32:
+                raise Held(
+                    cause_named(
+                        "buildfiles.resource",
+                        "resource placement exceeds target bounds",
+                        owner="buildfiles",
+                        stage="buildfiles",
+                    )
+                )
+            if any(resource.name == name for resource in result):
+                raise Held(
+                    cause_named(
+                        "buildfiles.resource", "duplicate resource output name", owner="buildfiles", stage="buildfiles"
+                    )
+                )
+            resource = Resource(name, address, row.start, size, "resource", row.path, execution, section, flags)
+            result[resource] = row.path
+    return result
+
+
+def resource_link_script(project: Project, version: str, resource: Resource) -> str:
+    return (
+        "OUTPUT_ARCH(mips)\nSECTIONS\n{\n"
+        f"  .resource 0x{resource.execution_address:X} : AT(0x{resource.address:X}) "
+        f"{{ KEEP(*({resource.section})) }}\n"
+        "  /DISCARD/ : { *(*) }\n}\n"
+        f'ASSERT(SIZEOF(.resource) == {resource.size}, "resource size differs from ROM extent")\n'
         f"INCLUDE versions/{version}/symbols.ld\n"
     )
 
@@ -281,10 +367,17 @@ def slices_mk(project: Project, version: str) -> str:
         if unit.start > cursor:
             lines.append(f"{version}.S.{cursor:08X} := {cursor} {unit.start - cursor}\n")
             pieces.append(f"{build}/slices/{cursor:08X}.bin")
-        namespace = "D" if unit.kind == "data" else "U"
+        namespace = {"data": "D", "resource": "R"}.get(unit.kind, "U")
         lines.append(f"{version}.{namespace}.{unit.name} := 0x{unit.address:X}:0x{unit.start:X}:0x{unit.size:X}\n")
-        directory = {"c": "units", "hasm": "hasm", "data": "data"}[unit.kind]
+        directory = {"c": "units", "hasm": "hasm", "data": "data", "resource": "resources"}[unit.kind]
         pieces.append(f"{build}/{directory}/{unit.name}.bin")
+        if isinstance(unit, Resource):
+            lines.append(f"{version}.R.{unit.name}.ASFLAGS := {words(unit.asflags)}\n")
+            lines.append(
+                f"{build}/resources/{unit.name}.bin: {unit.source} Makefile versions/{version}/slices.mk "
+                f"versions/{version}/resources/{unit.name}.ld versions/{version}/symbols.ld | {build}/resources\n"
+                "\t$(Q)$(RESOURCE_BIN)\n"
+            )
         cursor = unit.start + unit.size
     if cursor > rom_size:
         raise Held(
@@ -403,6 +496,12 @@ DATA_BIN = read key < $< && \
     -o $(@D)/$(*F).elf $(@D)/$(*F).o && \
   $(OBJCOPY) -O binary --only-section=.data $(@D)/$(*F).elf $@ && \
   [ "$$(wc -c < $@)" -eq $$(( $(word 3,$(subst :, ,$($(VER).D.$(*F)))) )) ]
+RESOURCE_NAME = $(basename $(notdir $@))
+RESOURCE_BIN = $(AS) $($(VER).R.$(RESOURCE_NAME).ASFLAGS) -o $(@D)/$(RESOURCE_NAME).o $< && \
+  $(LD) -EB -T versions/$(VER)/resources/$(RESOURCE_NAME).ld \
+    -o $(@D)/$(RESOURCE_NAME).elf $(@D)/$(RESOURCE_NAME).o && \
+  $(OBJCOPY) -O binary --only-section=.resource $(@D)/$(RESOURCE_NAME).elf $@ && \
+  [ "$$(wc -c < $@)" -eq $$(( $(word 3,$(subst :, ,$($(VER).R.$(RESOURCE_NAME)))) )) ]
 SLICE = dd if=$($(VER).BASEROM) of=$@ bs=65536 iflag=skip_bytes,count_bytes status=none \
   skip=$(word 1,$($(VER).S.$(*F))) count=$(word 2,$($(VER).S.$(*F)))
 """
@@ -425,7 +524,7 @@ build/$1/slices/%.bin: $$($1.BASEROM) versions/$1/slices.mk | build/$1/slices
 	$$(Q)$$(SLICE)
 build/$1/$$(NAME).z64: $$($1.PIECES)
 	$$(Q)printf '%s\n' '$1 rom'; cat $$($1.PIECES) > $$@
-build/$1/src build/$1/units build/$1/hasm build/$1/data build/$1/slices:
+build/$1/src build/$1/units build/$1/hasm build/$1/data build/$1/resources build/$1/slices:
 	$$(Q)mkdir -p $$@
 endef
 $(foreach v,$(VERSIONS),$(eval $(call VERSION_RULES,$v)))
@@ -533,7 +632,8 @@ def makefile(project: Project, host: Host) -> str:
         *(line + "\n" for line in setup_recipe(project)),
         "\t@sha256sum --quiet -c tools/compilers.sha256\n\n",
         "clean:\n\trm -rf build/cas "
-        "$(foreach v,$(VERSIONS),build/$v/src build/$v/units build/$v/hasm build/$v/data build/$v/slices)\n\n",
+        "$(foreach v,$(VERSIONS),build/$v/src build/$v/units build/$v/hasm "
+        "build/$v/data build/$v/resources build/$v/slices)\n\n",
         "include $(foreach v,$(VERSIONS),versions/$v/slices.mk)\n",
         "include units.mk\n\n",
         *(_kind_recipes(kind) for kind in kinds),
@@ -697,6 +797,8 @@ def generate(project: Project, host: Host, *, receipts: dict[str, dict[str, Any]
         files[directory / "symbols.ld"] = symbols_ld(project, version)
         files[directory / f"{project.name}.ld"] = link_script(project, version)
         files[directory / f"{project.name}.data.ld"] = data_link_script(project, version)
+        for resource in resource_bindings(project, version):
+            files[directory / "resources" / f"{resource.name}.ld"] = resource_link_script(project, version, resource)
         files[directory / "baserom.sha1"] = f"{meta.baserom_sha1}  {rom}\n"
         files[directory / f"{project.name}.sha1"] = f"{meta.baserom_sha1}  build/{version}/{project.name}.z64\n"
     return {**{path: text.encode() for path, text in files.items()}, project.root / verify.BUNDLE: payload}
@@ -721,6 +823,7 @@ def input_key(project: Project, host: Host) -> str:
     # Contents, not just names: symbols.ld provides the address-named symbols these files spell.
     parts.extend(sorted(project.src.glob("*.c")))
     parts.extend(sorted(project.src.glob("*.s")))
+    parts.extend(sorted((project.root / "resources").rglob("*.s")))
     parts.append(cache.serialized(attempts.ledger(project).fuzzy_sources()))
     from unbake.project import hygiene
 

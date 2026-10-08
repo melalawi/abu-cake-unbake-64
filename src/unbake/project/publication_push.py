@@ -41,16 +41,14 @@ def admission(project: Project, host: Host, head: str, base: str) -> dict[str, A
         )
     )
     data_scopes = []
+    resource_scopes = []
     selected_sources = set(sources)
     for version in project.versions:
         meta = project.version(version)
         current = buildfiles.data_bindings(project, version)
-        previous = {}
         split_name = meta.split.relative_to(project.root).as_posix()
-        if split_name in changed:
-            previous = buildfiles.data_bindings(project, version, text=_git(project, "show", base + ":" + split_name))
-        else:
-            previous = current
+        prior_text = _git(project, "show", base + ":" + split_name) if split_name in changed else None
+        previous = buildfiles.data_bindings(project, version, text=prior_text) if prior_text is not None else current
         for unit, binding in current.items():
             source = project.src / (unit.name + ".c")
             if source in sources or previous.get(unit) != binding:
@@ -65,6 +63,17 @@ def admission(project: Project, host: Host, head: str, base: str) -> dict[str, A
                     )
                 data_scopes.append((version, unit))
                 selected_sources.add(source)
+        current_resources = buildfiles.resource_bindings(project, version)
+        previous_resources = (
+            buildfiles.resource_bindings(project, version, text=prior_text)
+            if prior_text is not None
+            else current_resources
+        )
+        for resource, source_name in current_resources.items():
+            source = project.root / source_name
+            if source_name in changed or resource not in previous_resources:
+                resource_scopes.append((version, resource))
+                selected_sources.add(source)
     from unbake.decomp import checks
 
     findings = checks.findings(project, tuple(sorted(selected_sources)), Cache(project.cache))
@@ -77,6 +86,17 @@ def admission(project: Project, host: Host, head: str, base: str) -> dict[str, A
                 stage="publish",
             )
         )
+    for _, resource in resource_scopes:
+        raw = checks.resource_opcodes(project.root / resource.source)
+        if raw:
+            raise Held(
+                cause_named(
+                    "publish.push_rules",
+                    f"{resource.source}: symbolic resource instructions required: {raw[0].text}",
+                    owner="project.publication_push",
+                    stage="publish",
+                )
+            )
     scopes = []
     work = {"native_bytes_read": 0, "rom_bytes_read": 0, "functions_compared": 0}
     for version in project.versions:
@@ -152,6 +172,44 @@ def admission(project: Project, host: Host, head: str, base: str) -> dict[str, A
         work["rom_bytes_read"] += len(original)
     if data_scopes:
         work["data_extents_compared"] = len(data_scopes)
+    for version, resource in resource_scopes:
+        native = project.build_link(version) / "resources" / (resource.name + ".bin")
+        if not native.is_file():
+            raise Held(
+                cause_named(
+                    "publish.native_missing",
+                    f"Native resource output missing; prepare: make -j12 {native.relative_to(project.root).as_posix()}",
+                    owner="project.publication_push",
+                    stage="publish",
+                )
+            )
+        linked = native.read_bytes()
+        with project.version(version).baserom.open("rb") as stream:
+            stream.seek(resource.start)
+            original = stream.read(resource.size)
+        if len(original) != resource.size or linked != original:
+            raise Held(
+                cause_named(
+                    "publish.native_mismatch",
+                    f"{resource.name} {version}: native resource bytes differ from ROM extent",
+                    owner="project.publication_push",
+                    stage="publish",
+                )
+            )
+        scopes.append(
+            {
+                "resource": resource.name,
+                "version": version,
+                "rom_start": resource.start,
+                "bytes": resource.size,
+                "execution_vma": resource.execution_address,
+                "resident_lma": resource.address,
+            }
+        )
+        work["native_bytes_read"] += len(linked)
+        work["rom_bytes_read"] += len(original)
+    if resource_scopes:
+        work["resource_extents_compared"] = len(resource_scopes)
     return {
         "ok": True,
         "head": head,
