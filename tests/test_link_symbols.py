@@ -163,6 +163,23 @@ class SymbolsLdOtherVersionTests(OtherVersionNameTests):
         self.assertNotIn("D_800C6500_eu", self.render(project, "de", dict(D_800C6500_eu=(header,))))
         self.assertNotIn("D_800C6504_eu", self.render(project, "us", suffixed))
 
+    @patch.object(buildfiles, "_version_defines", return_value={})
+    def test_a_declaration_is_not_a_reference_but_a_use_is(self, _defines: object) -> None:
+        tables = {"eu": {"gA": 0x100, "D_800C6504_eu": 0x150}, "de": {"gA": 0x110}}
+        project = self.project(tables)
+        declared = self.source(
+            "extern float D_800C6504_eu;\nextern void f(float *D_800C6504_eu);\n"
+            "typedef struct { float D_800C6504_eu; } T;\nvoid g(void) { gA; }\n"
+        )
+        self.assertEqual(buildfiles.other_version_names(project, "de", dict(D_800C6504_eu=(declared,))), {})
+        self.assertNotIn("D_800C6504_eu", self.render(project, "de", dict(D_800C6504_eu=(declared,))))
+        for used in ("float x = D_800C6504_eu;\n", "void g(void) { D_800C6504_eu = 1.0f; }\n"):
+            with self.assertRaises(Held) as caught:
+                self.render(project, "de", dict(D_800C6504_eu=(self.source("extern float D_800C6504_eu;\n" + used),)))
+            self.assertIn("D_800C6504_eu", caught.exception.reason)
+        # the probe link asks only for what the object leaves undefined, so a declared-only name is never defined
+        self.assertEqual(runner.derived_symbols(set(), frozenset(), "de", Path("a.c")), [])
+
     def test_an_expression_that_cannot_be_evaluated_is_refused_naming_it(self) -> None:
         with self.assertRaises(Held) as caught:
             buildfiles.active_text("#if FOO(1)\nx\n#endif\n", {}, "a.h")

@@ -628,6 +628,37 @@ def active_text(text: str, defines: dict[str, str], where: str) -> str:
     return "\n".join(kept)
 
 
+def referenced_text(text: str) -> str:
+    """TEXT (already through active_text) without its file-scope declarations: a top-level statement that ends
+    in `;` and has no initializer (extern declarations, prototypes, typedefs, struct/union/enum definitions)
+    never makes the linker need an address, so only definitions, function bodies and #directives remain."""
+    kept: list[str] = []
+    segment: list[str] = []
+    depth = 0
+    for line in text.split("\n"):
+        if depth == 0 and not segment and _DIRECTIVE.match(line):
+            kept.append(line)
+            continue
+        for char in line:
+            segment.append(char)
+            if char == "{":
+                depth += 1
+            elif char == "}":
+                depth = max(depth - 1, 0)
+                statement = "".join(segment)
+                if depth == 0 and statement.split("{", 1)[0].rstrip().endswith(")"):  # a function body
+                    kept.append(statement)
+                    segment = []
+            elif char == ";" and depth == 0:
+                statement = "".join(segment)
+                if "=" in statement:
+                    kept.append(statement)
+                segment = []
+        segment.append("\n")
+    kept.append("".join(segment))
+    return "\n".join(kept)
+
+
 def other_version_names(project: Project, version: str, suffixed: dict[str, tuple[str, ...]]) -> dict[str, int]:
     """Each version-suffixed name that another VERSION lists and VERSION does not, and that VERSION's own
     active text spells (its #if branches evaluated with its flags, comments dropped), at the address the
@@ -649,7 +680,7 @@ def other_version_names(project: Project, version: str, suffixed: dict[str, tupl
         spelled = None
         for source in sources:
             if source not in active:
-                active[source] = active_text(Path(source).read_text(errors="replace"), defines, source)
+                active[source] = referenced_text(active_text(Path(source).read_text(errors="replace"), defines, source))
             if re.search(rf"\b{re.escape(name)}\b", active[source]):
                 spelled = source
                 break
