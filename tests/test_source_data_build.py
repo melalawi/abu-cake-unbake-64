@@ -3,6 +3,7 @@
 import gzip
 import hashlib
 import json
+import os
 import re
 from pathlib import Path
 from unittest.mock import patch
@@ -50,6 +51,11 @@ class SourceDataBuildTests(ProjectCase):
             native = self.project.build_link("us") / "data" / (row["symbol"] + ".bin")
             rom[row["rom_start"] : row["rom_end"]] = native.read_bytes()
         meta.baserom.write_bytes(rom)
+        # The producer recipe is read back from the generated Makefile, not the fixture placeholder.
+        make = self.project.root / "Makefile"
+        make.write_text(buildfiles.makefile(self.project, self.host))
+        for producer in (make, self.project.include[-1] / "sn64_type_records.h"):
+            os.utime(producer, ns=(1, 1))  # producing inputs predate the accepted native bytes
         self.changed = {meta.split.relative_to(self.project.root).as_posix()}
         self.calls = []
 

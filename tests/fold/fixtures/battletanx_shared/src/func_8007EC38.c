@@ -52,8 +52,6 @@ struct func_8007EC38_S1 {
 #define NULL ((void *)0)
 
 
-#ifndef M2C_MACROS_H
-#define M2C_MACROS_H
 
 /* Unknown types */
 
@@ -71,7 +69,6 @@ struct func_8007EC38_S1 {
 
 /* Sh2 control register loads/stores */
 
-#endif
 s32 func_801146A0();                /* extern */
 extern void *D_801257D0[4]; 
 

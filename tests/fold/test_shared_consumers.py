@@ -9,6 +9,7 @@ from unittest.mock import patch
 from tests.preprocessor import expand, output
 from tests.project_fixture import ProjectCase
 from unbake import config, land, process
+from unbake.compilers.recipe_options import PHASES
 from unbake.config import Held
 from unbake.decomp import checks
 from unbake.fold import apply
@@ -63,6 +64,20 @@ class SharedConsumerTests(ProjectCase):
         self.header.write_text("#ifndef GROUP_H\n#define GROUP_H\n#endif\n")
         for name in (FUNCTION, CONSUMER):
             (self.project.src / f"{name}.c").write_bytes((FIXTURE / f"{name}.c").read_bytes())
+        # buildfiles.write is mocked below, so the generated build inputs the publication pins are placed here.
+        names = [
+            "Makefile",
+            "units.mk",
+            *(f"tools/{n}" for n in ("compilers.sha256", "n64link.version", "compiler-driver.sha256")),
+            "tools/compiler_contracts.py",
+            "tools/recipe_options.py",
+        ]
+        for version in self.project.versions:
+            names += [f"versions/{version}/{n}" for n in ("slices.mk", "symbols.ld", "fixture.ld", "fixture.data.ld")]
+        for name in names:
+            generated = self.project.root / name
+            generated.parent.mkdir(parents=True, exist_ok=True)
+            generated.touch()
         self.project = config.load(self.project.root)
         self.file = self.project.work / FUNCTION / f"{FUNCTION}.c"
         self.file.parent.mkdir(parents=True)
@@ -99,7 +114,7 @@ class SharedConsumerTests(ProjectCase):
         )
         self.compiled = []
         self.stack.enter_context(
-            patch("unbake.pool.run", side_effect=lambda host, fn, jobs, **kw: [fn(job) for job in jobs])
+            patch("unbake.pool.run", side_effect=lambda host, fn, jobs, *args, **kw: [fn(*args, job) for job in jobs])
         )
         self.stack.enter_context(patch("unbake.runner.build_unit", side_effect=self.build_unit))
         self.stack.enter_context(
@@ -116,11 +131,21 @@ class SharedConsumerTests(ProjectCase):
             patch.object(
                 land,
                 "exact_attempt",
-                side_effect=lambda project, function, file, **kwargs: SimpleNamespace(
+                side_effect=lambda project, host, function, file, **kwargs: SimpleNamespace(
                     compiler="ido-7.1",
                     function=function,
                     sha256=__import__("hashlib").sha256(file.read_bytes()).hexdigest(),
-                    versions={v: {"percent": 100, "exact": True} for v in project.versions},
+                    versions={
+                        v: {
+                            "percent": 100,
+                            "exact": True,
+                            "available": True,
+                            "provenance": {
+                                "unit_recipe": {"compiler": "ido-7.1", "options": {phase: [] for phase in PHASES}}
+                            },
+                        }
+                        for v in project.versions
+                    },
                     exact=True,
                 ),
             )
@@ -217,6 +242,9 @@ class SharedConsumerTests(ProjectCase):
             return "\0".join(str(path.relative_to(project.root)) for path in project.include[0].rglob("*.h")) + "\0"
         if args == ("rev-parse", "HEAD"):
             return "c0ffee\n"
+        if args[:1] == ("show",) and args[1].startswith("HEAD:"):
+            # The commit is mocked, so HEAD holds exactly what the landing wrote.
+            return (project.root / args[1][5:]).read_text()
         if "commit" in args and self.fail_commit:
             raise Held(named("fixture.refusal", "hook refused", owner="fixture", stage="land"))
         return ""
