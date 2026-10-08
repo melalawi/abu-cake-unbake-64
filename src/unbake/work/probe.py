@@ -83,11 +83,11 @@ def _disassemble(host: Host, binary: Path, listing: Path) -> None:
     atomic.text(listing, process.run_tool(argv, binary.parent, "probe"))
 
 
-def findings(source: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+def findings(source: str, *, library: bool) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Unmarked source-rule findings and, among them, the volatile ones (never landable)."""
     from unbake.decomp import checks
 
-    broken = [f for f in checks.run(source) if f.fakematch is None]
+    broken = [f for f in checks.run(source, library=library) if f.fakematch is None]
     rows = [{"rule": f.rule, "line": f.line, "text": f.text, "sentence": checks.plain(f)} for f in broken]
     return rows, [row for row in rows if row["rule"] == "volatile-storage"]
 
@@ -144,7 +144,7 @@ def run(
             _disassemble(host, out / f"{name}.bin", out / f"{name}.dis")
             files.append(f"{name}.dis")
     problems = placed.get("problems", [])
-    rules, volatile = findings(candidate.read_text())
+    rules, volatile = findings(candidate.read_text(), library=project.library(project.src / f"{function}.c"))
     landable = not rules
     document = {
         "function": function,

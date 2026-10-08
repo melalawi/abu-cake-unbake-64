@@ -50,7 +50,7 @@ def published_seed(project: Project, function: str) -> str | None:
     if "c" not in kinds:
         return None
     source = project.src / f"{function}.c"
-    if all(kind == "c" for kind in kinds) and not checks.unmarked(source):
+    if all(kind == "c" for kind in kinds) and not checks.unmarked(source, library=project.library(source)):
         raise Held(
             cause_named(
                 "draft.published",

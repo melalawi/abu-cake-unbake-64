@@ -16,7 +16,14 @@ from unbake.layout.split import Edit
 from unbake.process import capture
 from unbake.process import named as cause_named
 
-SOURCE_FINDINGS_SCHEMA = 4
+SOURCE_FINDINGS_SCHEMA = 5
+
+LIBRARY_KEY = "[build].library_units"
+VOLATILE_RULE = "volatile is only allowed for SDK hardware access or in SDK library units"
+# Hardware access macros of the SDK; their definitions name a volatile type but they are the allowed form.
+DEVICE_MACROS = frozenset({"IO_READ", "IO_WRITE"})
+KSEG1 = (0xA0000000, 0xC0000000)
+_HEX = re.compile(r"0[xX][\da-fA-F]+[uUlL]*")
 
 
 @dataclass(frozen=True)
@@ -70,11 +77,17 @@ def _finding(rule: str, source: str, match: re.Match[str]) -> GuardFinding:
             " in a shared paths.include header"
         )
     if rule == "volatile-storage":
-        text += (
-            "; accepted form: qualified shared declaration validated against the symbol inventory,"
-            " device access, or qualifier removal proved identical in every owning VERSION and mode"
-        )
+        text = refused_volatile(text)
     return GuardFinding(rule, line, text, None)
+
+
+def refused_volatile(text: str) -> str:
+    """A volatile finding's text: which case applied, the rule and the accepted forms."""
+    return (
+        f"{text}; {VOLATILE_RULE}; case: game unit, not declared in {LIBRARY_KEY}"
+        "; accepted form: IO_READ/IO_WRITE or a cast of a hardware address (PHYS_TO_K1, a KSEG1"
+        " literal or a *_REG constant) to a pointer to a volatile SDK type"
+    )
 
 
 def _matches(rule: str, pattern: str, source: str, code: str) -> list[GuardFinding]:
@@ -149,24 +162,36 @@ class _Syntax:
         return max(scopes, default=(0, len(self.words)))
 
 
+def _hardware(syntax: _Syntax, start: int) -> bool:
+    """Whether the operand at word `start` is a hardware address: PHYS_TO_K1(...), a KSEG1 literal or an
+    SDK *_REG register constant, possibly parenthesised or already expanded to `(x) | 0xA0000000`."""
+    words, pairs = syntax.words, syntax.pairs
+    if start >= len(words):
+        return False
+    stop = start
+    if words[start] == "(":
+        stop = pairs.get(start, start)
+    elif start + 1 < len(words) and words[start + 1] == "(":
+        stop = pairs.get(start + 1, start)
+    for word in words[start : stop + 1]:
+        if word == "PHYS_TO_K1" or re.fullmatch(r"[A-Za-z_]\w*_REG", word):
+            return True
+        if _HEX.fullmatch(word) and KSEG1[0] <= int(word.rstrip("uUlL"), 16) < KSEG1[1]:
+            return True
+    return False
+
+
 def volatile_tokens(code: str) -> list[re.Match[str]]:
-    """Return refused qualifier tokens with their original source offsets."""
+    """Return refused qualifier tokens with their original source offsets.
+
+    Allowed: hardware access, a cast of a hardware address to a pointer to a volatile type and pointers
+    initialised from one. Library units are exempt before this runs (run(library=True))."""
     syntax = _Syntax(code)
     words = syntax.words
     allowed: set[int] = set()
-    # Type queries do not declare storage. Parentheses around a dereferenced cast
-    # likewise do not change the existing cast exception.
     for opening, closing in syntax.pairs.items():
-        if words[opening] != "(":
-            continue
-        if opening and words[opening - 1] in ("sizeof", "_Alignof", "alignof"):
+        if words[opening] == "(" and syntax.pointer_type(opening, closing) and _hardware(syntax, closing + 1):
             allowed.update(range(opening, closing))
-        elif syntax.pointer_type(opening, closing):
-            preceding = opening - 1
-            while preceding >= 0 and words[preceding] == "(":
-                preceding -= 1
-            if preceding >= 0 and words[preceding] == "*" and syntax.unary(preceding):
-                allowed.update(range(opening, closing))
 
     # A pointer to a literal device address, and aliases of that pointer, qualify
     # the pointed-to device rather than introducing volatile local storage.
@@ -207,15 +232,10 @@ def volatile_tokens(code: str) -> list[re.Match[str]]:
         while opening < len(words) and words[opening] == "(" and opening in syntax.pairs:
             closing = syntax.pairs[opening]
             if syntax.pointer_type(opening, closing):
-                value = closing + 1
-                while value < len(words) and words[value] == "(":
-                    value += 1
-                if value < len(words) and re.fullmatch(r"0[xX][\da-fA-F]+[uUlL]*", words[value]):
-                    address = int(words[value].rstrip("uUlL"), 16)
-                    if 0xA4000000 <= address < 0xA8000000:
-                        allowed.update(range(opening, closing))
-                        literals.add(index)
-                        devices.append(binding(words[index - 1], index))
+                if _hardware(syntax, closing + 1):
+                    allowed.update(range(opening, closing))
+                    literals.add(index)
+                    devices.append(binding(words[index - 1], index))
                 break
             opening += 1
     for _ in assignments:
@@ -249,9 +269,6 @@ def volatile_tokens(code: str) -> list[re.Match[str]]:
         tail = re.match(r"\s*(?:[A-Za-z_]\w*\s+)*\*\s*([A-Za-z_]\w*)", code[syntax.tokens[index].end() :])
         if tail and binding(tail[1], index + 1) in devices:
             allowed.add(index)
-        # A function return qualifier is not a storage declaration.
-        if re.match(r"\s*(?:[A-Za-z_]\w*\s+)+[A-Za-z_]\w*\s*\(", code[syntax.tokens[index].end() :]):
-            allowed.add(index)
     return [token for index, token in enumerate(syntax.tokens) if token[0] == "volatile" and index not in allowed]
 
 
@@ -276,8 +293,21 @@ def volatile_aliases(context: str) -> set[str]:
             if _mentions(m[0], "volatile") or any(_mentions(m[0], a) for a in aliases):
                 found.add(m[1])
         if found == aliases:
-            return aliases
+            return aliases - DEVICE_MACROS
         aliases = found
+
+
+def _alias_hardware(code: str, at: int, alias: str) -> bool:
+    """Whether a volatile typedef or macro name sits in a pointer type used to access hardware: it is cast
+    from a hardware address on the same statement, e.g. `(vu32 *)PHYS_TO_K1(a)` or `vu32 *p = (vu32 *)0xA4600010`."""
+    start = code.rfind("\n", 0, at) + 1
+    end = code.find("\n", at)
+    line = code[start : end if end >= 0 else len(code)]
+    for cast in re.finditer(rf"\(\s*(?:const\s+)?{re.escape(alias)}\s*\*+\s*\)", line):
+        syntax = _Syntax(line[cast.end() :])
+        if syntax.words and _hardware(syntax, 0):
+            return True
+    return False
 
 
 def expanded_volatile(source: str, preprocessed: str, function: str) -> list[GuardFinding]:
@@ -289,8 +319,12 @@ def expanded_volatile(source: str, preprocessed: str, function: str) -> list[Gua
     for alias in sorted(volatile_aliases(preprocessed) | volatile_aliases(source)):
         for m in re.finditer(rf"\b{re.escape(alias)}\b", code):
             line = source.count("\n", 0, m.start()) + 1
-            if line not in own and not re.match(r"\s*(?:typedef\b|#\s*define\b)", lines[line - 1]):
-                text = f"{lines[line - 1].strip()}; {alias} is a volatile typedef or macro"
+            if (
+                line not in own
+                and not re.match(r"\s*(?:typedef\b|#\s*define\b)", lines[line - 1])
+                and not _alias_hardware(code, m.start(), alias)
+            ):
+                text = refused_volatile(f"{lines[line - 1].strip()}; {alias} is a volatile typedef or macro")
                 findings.append(GuardFinding("volatile-storage", line, text, None))
     expanded = _code(preprocessed)
     body = re.search(rf"\b{re.escape(function)}\s*\([^;{{}}]*\)\s*\{{", expanded)
@@ -302,7 +336,12 @@ def expanded_volatile(source: str, preprocessed: str, function: str) -> list[Gua
         if volatile_tokens(text):
             line = source.count("\n", 0, max(source.find(function), 0)) + 1
             findings.append(
-                GuardFinding("volatile-storage", line, f"{function} expands to volatile after preprocessing", None)
+                GuardFinding(
+                    "volatile-storage",
+                    line,
+                    refused_volatile(f"{function} expands to volatile after preprocessing"),
+                    None,
+                )
             )
     return findings
 
@@ -573,7 +612,7 @@ UNWAIVABLE = frozenset(
 # One plain sentence per rule id a finding can carry.
 SENTENCE = {
     "inline-asm": "inline assembly is never allowed",
-    "volatile-storage": "volatile storage is never allowed",
+    "volatile-storage": "volatile storage is refused",
     "raw-offset": "a raw byte offset is used instead of a typed field",
     "local-include": "a local include is not allowed",
     "tool-comment": "a tool comment is left in the source",
@@ -595,11 +634,14 @@ def plain(finding: GuardFinding) -> str:
     return f"line {finding.line}: {SENTENCE[finding.rule]} ({finding.text})"
 
 
-def run(source: str | Path, preprocessed: str | None = None, function: str = "") -> list[GuardFinding]:
+def run(
+    source: str | Path, preprocessed: str | None = None, function: str = "", *, library: bool = False
+) -> list[GuardFinding]:
     """Inspect source text or a file, retaining marked findings as accepted evidence.
 
     With the preprocessed text and the function name, volatile reaching the function through a typedef or
-    macro from a header is a finding too."""
+    macro from a header is a finding too. `library` marks an SDK library unit, where volatile is the SDK's
+    own source; every other unit may use volatile only for hardware access."""
     if isinstance(source, Path):
         try:
             source = source.read_text()
@@ -620,6 +662,8 @@ def run(source: str | Path, preprocessed: str | None = None, function: str = "")
     code = _code(source)
     findings = [finding for rule in RULES for finding in rule.check(source, code)]
     findings.extend(expanded_volatile(source, preprocessed or "", function))
+    if library:
+        findings = [finding for finding in findings if finding.rule != "volatile-storage"]
     reason = "; ".join(reasons) if reasons else None
     return [
         GuardFinding(
@@ -632,9 +676,9 @@ def run(source: str | Path, preprocessed: str | None = None, function: str = "")
     ]
 
 
-def unmarked(source: str | Path) -> list[GuardFinding]:
+def unmarked(source: str | Path, *, library: bool = False) -> list[GuardFinding]:
     """Findings without a FAKEMATCH reason: what refuses a land and holds `unbake check`."""
-    return [finding for finding in run(source) if finding.fakematch is None]
+    return [finding for finding in run(source, library=library) if finding.fakematch is None]
 
 
 def resource_opcodes(source: Path) -> list[GuardFinding]:
@@ -723,13 +767,13 @@ def iter_findings(
     pins = {"recipe:source-rules": recipe_key}
     scans = 0
 
-    def read(text: str) -> tuple[GuardFinding, ...]:
-        content_key = key(recipe_key, text)
+    def read(text: str, library: bool) -> tuple[GuardFinding, ...]:
+        content_key = key(recipe_key, "library" if library else "game", text)
 
         def compute() -> list[dict[str, object]]:
             nonlocal scans
             scans += 1
-            return [asdict(row) for row in run(text)]
+            return [asdict(row) for row in run(text, library=library)]
 
         try:
             data = cache.value("source-findings", content_key, retention.JSON, compute)
@@ -757,8 +801,13 @@ def iter_findings(
         path: inputs.digest(path, algorithm="sha256", reuse=retention.configured()) if path.is_file() else "missing"
         for path in requested
     }
+    libraries = {path: project.library(path) for path in requested}
     content_keys = {
-        path: key(recipe_key, (proposed or {}).get(path, path.read_text() if path.is_file() else ""))
+        path: key(
+            recipe_key,
+            "library" if libraries[path] else "game",
+            (proposed or {}).get(path, path.read_text() if path.is_file() else ""),
+        )
         for path in requested
     }
     ordered = sorted(
@@ -777,11 +826,11 @@ def iter_findings(
         )
         pins[name] = digests[path]
         baseline = path.read_text() if path.is_file() else ""
-        old = read(baseline)
+        old = read(baseline, libraries[path])
         proposed_text = (proposed or {}).get(path, baseline)
         # Line movement does not erase the provenance of an existing offending token sequence.
         identities = {(row.rule, " ".join(row.text.split())) for row in old}
-        current = old if proposed_text == baseline else read(proposed_text)
+        current = old if proposed_text == baseline else read(proposed_text, libraries[path])
         rows = tuple(SourceFinding(name, row, (row.rule, " ".join(row.text.split())) in identities) for row in current)
         yield Findings(rows, {"recipe:source-rules": recipe_key, name: pins[name]}, scans - previous_scans)
     if not requested:

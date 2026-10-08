@@ -155,7 +155,11 @@ def fold(
                 "fold.source", f"fold.source: {function}: fold produced no source", owner="fold.apply", stage="fold"
             )
         )
-    blockers = [finding for finding in checks.run(folded) if finding.fakematch is None]
+    blockers = [
+        finding
+        for finding in checks.run(folded, library=project.library(project.src / f"{function}.c"))
+        if finding.fakematch is None
+    ]
     if blockers:
         raise Held(
             cause_named(

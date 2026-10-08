@@ -228,7 +228,11 @@ def measure(
             expanded = runner.preprocess(project, host, file, selected[0], unit=function)
         except Held:
             expanded = None  # the compile below reports the same failure with its cause
-    broken = [finding for finding in checks.run(content.decode(), expanded, function) if finding.fakematch is None]
+    broken = [
+        finding
+        for finding in checks.run(content.decode(), expanded, function, library=project.library(file))
+        if finding.fakematch is None
+    ]
     preconditions = [checks.message(finding) for finding in broken]
     rule_lines = [checks.plain(finding) for finding in broken]
     results: dict[str, Measurement] = {}

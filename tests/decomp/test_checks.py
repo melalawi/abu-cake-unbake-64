@@ -49,8 +49,6 @@ class ChecksTest(unittest.TestCase):
             "p->words.w0 = raw; /* GBI_RAW: dynamic opcode cannot be decoded */",
             "typedef int SharedDomain;",
             '/* asm volatile */ void f(void) { puts("__asm__"); }',
-            "int x = *(volatile int *)&p->field;",
-            "int x = *(Entry * volatile *)&p->field;",
             "x = array[3]; y = p->field; z = (int*)p;",
             '#include "types.h"\nint x;',
             "void f(void) {\n#ifdef VERSION_US\nx = 1;\n#else\nx = 2;\n#endif\n}",
@@ -136,12 +134,15 @@ class ChecksTest(unittest.TestCase):
 
     def test_volatile_distinguishes_storage_from_type_and_device_access(self) -> None:
         cases = [
-            ("parenthesized cast", "x = *((volatile float *) (&p->field));", 0),
-            ("extra parentheses", "x = *(((volatile float *) (&p->field)));", 0),
-            ("sizeof type", "char pad[4 - sizeof(volatile int)];", 0),
-            ("sizeof pointer", "char pad[8 - sizeof(volatile Entry *)];", 0),
-            ("alignment type", "x = _Alignof(volatile int);", 0),
-            ("return qualifier", "volatile unsigned long long f(void) {}", 0),
+            ("parenthesized cast", "x = *((volatile float *) (&p->field));", 1),
+            ("extra parentheses", "x = *(((volatile float *) (&p->field)));", 1),
+            ("sizeof type", "char pad[4 - sizeof(volatile int)];", 1),
+            ("sizeof pointer", "char pad[8 - sizeof(volatile Entry *)];", 1),
+            ("alignment type", "x = _Alignof(volatile int);", 1),
+            ("return qualifier", "volatile unsigned long long f(void) {}", 1),
+            ("kseg1 uncached literal", "p = (volatile u32 *)0xBFC00000;", 0),
+            ("PHYS_TO_K1 cast", "x = *(volatile u32 *)PHYS_TO_K1(PI_STATUS_REG);", 0),
+            ("register constant cast", "x = *(volatile u32 *)PI_STATUS_REG;", 0),
             ("device cast", "p = (volatile u32 *)0xA4600010;", 0),
             (
                 "device alias",

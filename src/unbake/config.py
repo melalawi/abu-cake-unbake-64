@@ -5,6 +5,7 @@ Both refuse a missing or invalid value by name. Nothing has a packaged default.
 
 from __future__ import annotations
 
+import fnmatch
 import math
 import os
 import re
@@ -175,6 +176,20 @@ class Project:
     work_include: tuple[Path, ...] = ()
     source_bindings: tuple[tuple[str, str], ...] = ()
     admitted_roots: tuple[Path, ...] = ()
+    library_units: tuple[str, ...] = ()
+
+    def library(self, source: str | Path) -> bool:
+        """Whether a source file is an SDK library unit: it matches a [build].library_units glob.
+
+        Globs match the source path relative to src/ without its suffix, for example "libultra/*"."""
+        path = Path(source)
+        if path.is_absolute():
+            try:
+                path = path.resolve().relative_to(self.src.resolve())
+            except ValueError:
+                return False
+        name = path.with_suffix("").as_posix()
+        return any(fnmatch.fnmatchcase(name, glob) for glob in self.library_units)
 
     @property
     def roms(self) -> Path:
@@ -701,6 +716,9 @@ def load(root: Path, *, text: str | None = None) -> Project:
         flags("cppflags"),
         flags("gnu_asflags"),
         _resident(path, build["resident_mappings"]) if "resident_mappings" in build else {},
+        library_units=_strings(build["library_units"], _label(path, "build", "library_units"))
+        if "library_units" in build
+        else (),
     )
 
 
