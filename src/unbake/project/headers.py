@@ -686,7 +686,23 @@ class Graph:
                 text = self.read(path).decode()
                 typedefs.update(cdecl.declarations(text).typedefs)
                 providers.append(text)
-        active = source_views.version_source(project, declarations.cleaned_unit(raw.decode()), version, source.stem)
+        cleaned = declarations.cleaned_unit(raw.decode())
+        try:
+            active = source_views.version_source(project, cleaned, version, source.stem)
+        except Held as error:
+            if error.key != "source.conditions":
+                raise
+            # Unresolved unrelated declarations cannot attest conditional
+            # initializers. Preserve only unconditional file-scope statements.
+            depth = 0
+            lines = []
+            for line in cleaned.splitlines(keepends=True):
+                directive = re.match(r"\s*#\s*(if|ifdef|ifndef|elif|else|endif)\b", line)
+                masked = depth > 0 or directive is not None
+                if directive:
+                    depth += 1 if directive[1] in {"if", "ifdef", "ifndef"} else -1 if directive[1] == "endif" else 0
+                lines.append(re.sub(r"[^\n]", " ", line) if masked else line)
+            active = "".join(lines)
         try:
             tree = cdecl.parser(typedefs).parse(declarations.cleaned_unit(active), filename=str(source))
         except cdecl.ParseError as error:
