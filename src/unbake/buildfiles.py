@@ -418,7 +418,8 @@ build/$1/units/%.bin: build/$1/src/%.key versions/$1/symbols.ld versions/$1/$$(N
 	$$(Q)$$(UNIT_BIN)
 build/$1/hasm/%.bin: src/%.s Makefile versions/$1/symbols.ld versions/$1/$$(NAME).ld | build/$1/hasm
 	$$(Q)$$(HASM_BIN)
-build/$1/data/%.bin: build/$1/src/%.key versions/$1/slices.mk versions/$1/symbols.ld versions/$1/$$(NAME).data.ld | build/$1/data
+build/$1/data/%.bin: build/$1/src/%.key versions/$1/slices.mk \
+  versions/$1/symbols.ld versions/$1/$$(NAME).data.ld | build/$1/data
 	$$(Q)$$(DATA_BIN)
 build/$1/slices/%.bin: $$($1.BASEROM) versions/$1/slices.mk | build/$1/slices
 	$$(Q)$$(SLICE)
