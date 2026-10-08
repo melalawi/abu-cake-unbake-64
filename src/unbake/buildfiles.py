@@ -26,7 +26,7 @@ from unbake.layout import split
 from unbake.process import named as cause_named
 
 # Bump when this step's output changes for the same inputs. Keys never digest the tool's code.
-SCHEMA = 10
+SCHEMA = 11
 
 # CI pins: full commit SHAs and an image digest (tool data, never config).
 CHECKOUT = ("actions/checkout", "11d5960a326750d5838078e36cf38b85af677262", "v4.4.0")
@@ -51,7 +51,7 @@ MAKE_VALUES: dict[str, tuple[str, ...]] = {
 
 @dataclass(frozen=True)
 class Unit:
-    """One published unit in one version: its row in the ROM; kind c (src/NAME.c) or hasm (src/NAME.s)."""
+    """One native producer in one version: C code, original assembly, or initialized DATA."""
 
     name: str
     address: int
@@ -99,7 +99,86 @@ def units(project: Project, version: str) -> list[Unit]:
                 )
             )
         result.append(Unit(name, row.address, row.start, row.end - row.start, row.kind))
+    result.extend(data_units(project, version))
+    if len({(unit.kind, unit.name) for unit in result}) != len(result):
+        raise Held(
+            cause_named(
+                "buildfiles.source",
+                "ambiguous duplicate source unit",
+                owner="buildfiles",
+                stage="buildfiles",
+            )
+        )
     return sorted(result, key=lambda unit: unit.start)
+
+
+def data_bindings(project: Project, version: str, *, text: str | None = None) -> dict[Unit, tuple[str, str]]:
+    """Explicit C source paths in existing DATA rows, independently of function inventory."""
+    path = project.version(version).split
+    _, _, segments = split.layout(path) if text is None else split.parse_layout(path, text)
+    result = {}
+    for segment in segments:
+        for row in segment.rows:
+            declared = Path(row.path)
+            if row.kind.lstrip(".") not in {"data", "rodata", "rdata", "sdata"} or declared.suffix != ".c":
+                continue
+            source = project.root / declared
+            if source.parent != project.src or source.is_symlink():
+                raise Held(
+                    cause_named(
+                        "buildfiles.source",
+                        f"{version}: declared DATA source missing or outside src: {row.path}",
+                        owner="buildfiles",
+                        stage="buildfiles",
+                    )
+                )
+            stop = split.end(row)
+            if stop <= row.start:
+                raise Held(
+                    cause_named(
+                        "buildfiles.data",
+                        "initialized DATA row has invalid bounds",
+                        owner="buildfiles",
+                        stage="buildfiles",
+                    )
+                )
+            unit = Unit(source.stem, split.address(row, path), row.start, stop - row.start, "data")
+            if any(existing.name == unit.name for existing in result):
+                raise Held(
+                    cause_named(
+                        "buildfiles.source",
+                        "duplicate DATA source binding",
+                        owner="buildfiles",
+                        stage="buildfiles",
+                    )
+                )
+            result[unit] = (row.path, row.kind)
+    return result
+
+
+def data_units(project: Project, version: str) -> list[Unit]:
+    """Declared initialized DATA sources must exist; never replace them with raw ROM."""
+    result = data_bindings(project, version)
+    for unit in result:
+        if not (project.src / (unit.name + ".c")).is_file():
+            raise Held(
+                cause_named(
+                    "buildfiles.source",
+                    f"{version}: declared DATA source missing: src/{unit.name}.c",
+                    owner="buildfiles",
+                    stage="buildfiles",
+                )
+            )
+    return sorted(result, key=lambda unit: unit.start)
+
+
+def data_link_script(project: Project, version: str) -> str:
+    return (
+        "OUTPUT_ARCH(mips)\nSECTIONS\n{\n"
+        "  .data : SUBALIGN(1) { *(.rdata .rdata.* .rodata .rodata.* .data .data.* .sdata .sdata.* .lit4 .lit8) }\n"
+        "  /DISCARD/ : { *(*) }\n}\n"
+        f"INCLUDE versions/{version}/symbols.ld\n"
+    )
 
 
 def windows(project: Project, version: str) -> list[tuple[int, int, int]]:
@@ -202,8 +281,10 @@ def slices_mk(project: Project, version: str) -> str:
         if unit.start > cursor:
             lines.append(f"{version}.S.{cursor:08X} := {cursor} {unit.start - cursor}\n")
             pieces.append(f"{build}/slices/{cursor:08X}.bin")
-        lines.append(f"{version}.U.{unit.name} := 0x{unit.address:X}:0x{unit.start:X}:0x{unit.size:X}\n")
-        pieces.append(f"{build}/{'units' if unit.kind == 'c' else 'hasm'}/{unit.name}.bin")
+        namespace = "D" if unit.kind == "data" else "U"
+        lines.append(f"{version}.{namespace}.{unit.name} := 0x{unit.address:X}:0x{unit.start:X}:0x{unit.size:X}\n")
+        directory = {"c": "units", "hasm": "hasm", "data": "data"}[unit.kind]
+        pieces.append(f"{build}/{directory}/{unit.name}.bin")
         cursor = unit.start + unit.size
     if cursor > rom_size:
         raise Held(
@@ -230,7 +311,7 @@ def units_mk(project: Project, *, receipts: dict[str, dict[str, Any]] | None = N
     fuzzy = attempts.ledger(project).fuzzy_sources() if receipts is None else receipts
     names = sorted({path.stem for path in project.src.glob("*.c")})
     for name in names:
-        targets = f"build/%/src/{name}.i build/%/src/{name}.key build/%/units/{name}.bin"
+        targets = f"build/%/src/{name}.i build/%/src/{name}.key build/%/units/{name}.bin build/%/data/{name}.bin"
         compiler = project.compiler_for(name)
         effective = [
             *(f"-I{relative(project, path)}" for path in project.include),
@@ -311,6 +392,17 @@ HASM_BIN = printf '%s\n' '$(VER) $(*F)'; \
   $(N64LINK) place $(@D)/$(*F).o -o $(@D)/$(*F).placed.o --rom $($(VER).BASEROM) --text $($(VER).U.$(*F)) \
   $(addprefix --map ,$($(VER).MAP)) --symbols versions/$(VER)/symbols.ld --trim && \
   $(LINK_BIN)
+DATA_BIN = read key < $< && \
+  cp build/cas/$$key.o $(@D)/$(*F).o && \
+  $(OBJCOPY) --set-section-flags .rdata=alloc,load,readonly,data,contents \
+    --set-section-flags .rodata=alloc,load,readonly,data,contents \
+    --set-section-flags .data=alloc,load,data,contents \
+    --set-section-flags .sdata=alloc,load,data,contents $(@D)/$(*F).o && \
+  $(LD) -EB -T versions/$(VER)/$(NAME).data.ld \
+    --section-start=.data=$(firstword $(subst :, ,$($(VER).D.$(*F)))) \
+    -o $(@D)/$(*F).elf $(@D)/$(*F).o && \
+  $(OBJCOPY) -O binary --only-section=.data $(@D)/$(*F).elf $@ && \
+  [ "$$(wc -c < $@)" -eq $$(( $(word 3,$(subst :, ,$($(VER).D.$(*F)))) )) ]
 SLICE = dd if=$($(VER).BASEROM) of=$@ bs=65536 iflag=skip_bytes,count_bytes status=none \
   skip=$(word 1,$($(VER).S.$(*F))) count=$(word 2,$($(VER).S.$(*F)))
 """
@@ -326,11 +418,13 @@ build/$1/units/%.bin: build/$1/src/%.key versions/$1/symbols.ld versions/$1/$$(N
 	$$(Q)$$(UNIT_BIN)
 build/$1/hasm/%.bin: src/%.s Makefile versions/$1/symbols.ld versions/$1/$$(NAME).ld | build/$1/hasm
 	$$(Q)$$(HASM_BIN)
+build/$1/data/%.bin: build/$1/src/%.key versions/$1/symbols.ld versions/$1/$$(NAME).data.ld | build/$1/data
+	$$(Q)$$(DATA_BIN)
 build/$1/slices/%.bin: $$($1.BASEROM) versions/$1/slices.mk | build/$1/slices
 	$$(Q)$$(SLICE)
 build/$1/$$(NAME).z64: $$($1.PIECES)
 	$$(Q)printf '%s\n' '$1 rom'; cat $$($1.PIECES) > $$@
-build/$1/src build/$1/units build/$1/hasm build/$1/slices:
+build/$1/src build/$1/units build/$1/hasm build/$1/data build/$1/slices:
 	$$(Q)mkdir -p $$@
 endef
 $(foreach v,$(VERSIONS),$(eval $(call VERSION_RULES,$v)))
@@ -412,7 +506,7 @@ def makefile(project: Project, host: Host) -> str:
         f"VERSIONS := {' '.join(project.versions)}\n",
         "ROMS := $(foreach v,$(VERSIONS),build/$v/$(NAME).z64)\n",
         "CPP := cpp\nAS := mips-linux-gnu-as\nLD := mips-linux-gnu-ld\n",
-        "N64LINK := n64link\n",
+        "N64LINK := n64link\nOBJCOPY := mips-linux-gnu-objcopy\n",
         f"INCLUDES := {words(includes)}\n",
         f"CPPFLAGS := {words(list(project.cppflags))}\n",
         f"PREPROCESS_FLAGS = $(INCLUDES) {words(list(default_preprocess))} $(VERSION_DEFINES) $(CONSUMER)\n",
@@ -438,7 +532,7 @@ def makefile(project: Project, host: Host) -> str:
         *(line + "\n" for line in setup_recipe(project)),
         "\t@sha256sum --quiet -c tools/compilers.sha256\n\n",
         "clean:\n\trm -rf build/cas "
-        "$(foreach v,$(VERSIONS),build/$v/src build/$v/units build/$v/hasm build/$v/slices)\n\n",
+        "$(foreach v,$(VERSIONS),build/$v/src build/$v/units build/$v/hasm build/$v/data build/$v/slices)\n\n",
         "include $(foreach v,$(VERSIONS),versions/$v/slices.mk)\n",
         "include units.mk\n\n",
         *(_kind_recipes(kind) for kind in kinds),
@@ -601,6 +695,7 @@ def generate(project: Project, host: Host, *, receipts: dict[str, dict[str, Any]
         files[directory / "slices.mk"] = slices_mk(project, version)
         files[directory / "symbols.ld"] = symbols_ld(project, version)
         files[directory / f"{project.name}.ld"] = link_script(project, version)
+        files[directory / f"{project.name}.data.ld"] = data_link_script(project, version)
         files[directory / "baserom.sha1"] = f"{meta.baserom_sha1}  {rom}\n"
         files[directory / f"{project.name}.sha1"] = f"{meta.baserom_sha1}  build/{version}/{project.name}.z64\n"
     return {**{path: text.encode() for path, text in files.items()}, project.root / verify.BUNDLE: payload}

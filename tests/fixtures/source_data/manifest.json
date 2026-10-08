@@ -1,0 +1,160 @@
+[
+  {
+    "symbol": "sn64_intelligence_type_records",
+    "rom_start": 1019395,
+    "rom_end": 1039856,
+    "vram": 2148499971,
+    "bytes": 20461,
+    "records": 641,
+    "exact": true,
+    "section": ".rodata",
+    "argv": [
+      [
+        "/usr/bin/cpp",
+        "-P",
+        "-undef",
+        "-nostdinc",
+        "-D_LANGUAGE_C",
+        "-DF3DEX_GBI_2",
+        "-D__GNUC__=2",
+        "-DVERSION_US_REV1",
+        "-I/mnt/devstorage/AbuCode/.buildtmp/tmp/claude-1000/-mnt-devstorage-Workspaces/16a2299c-8f51-4270-9c1f-009829f453ab/scratchpad/cycles/rw-data-records/RageWars/include",
+        "/mnt/devstorage/AbuCode/.buildtmp/tmp/claude-1000/-mnt-devstorage-Workspaces/16a2299c-8f51-4270-9c1f-009829f453ab/scratchpad/cycles/rw-data-records/RageWars/src/sn64_intelligence_type_records.c"
+      ],
+      [
+        "/mnt/devstorage/AbuCode/.buildtmp/tmp/claude-1000/-mnt-devstorage-Workspaces/16a2299c-8f51-4270-9c1f-009829f453ab/scratchpad/cycles/rw-data-records/RageWars/tools/gcc-2.8.1-sn64/cc1",
+        "-quiet",
+        "-G0",
+        "-mips3",
+        "-O2",
+        "-mgas",
+        "-meb",
+        "-mcpu=VR4300",
+        "-mhard-float",
+        "-mgp32",
+        "-mfp64",
+        "-mno-fix4300",
+        "/mnt/devstorage/AbuCode/.buildtmp/tmp/claude-1000/-mnt-devstorage-Workspaces/16a2299c-8f51-4270-9c1f-009829f453ab/scratchpad/cycles/rw-data-records/RageWars/build/native-type-records/sn64_intelligence_type_records.i",
+        "-o",
+        "/mnt/devstorage/AbuCode/.buildtmp/tmp/claude-1000/-mnt-devstorage-Workspaces/16a2299c-8f51-4270-9c1f-009829f453ab/scratchpad/cycles/rw-data-records/RageWars/build/native-type-records/sn64_intelligence_type_records.s"
+      ],
+      [
+        "/mnt/devstorage/AbuCode/.buildtmp/tmp/claude-1000/-mnt-devstorage-Workspaces/16a2299c-8f51-4270-9c1f-009829f453ab/scratchpad/cutover/host/n64src/build/n64link",
+        "asn64",
+        "--as",
+        "/usr/bin/mips-linux-gnu-as",
+        "-march=vr4300",
+        "-mabi=32",
+        "-EB",
+        "-G0",
+        "--no-pad-sections",
+        "/mnt/devstorage/AbuCode/.buildtmp/tmp/claude-1000/-mnt-devstorage-Workspaces/16a2299c-8f51-4270-9c1f-009829f453ab/scratchpad/cycles/rw-data-records/RageWars/build/native-type-records/sn64_intelligence_type_records.s",
+        "-o",
+        "/mnt/devstorage/AbuCode/.buildtmp/tmp/claude-1000/-mnt-devstorage-Workspaces/16a2299c-8f51-4270-9c1f-009829f453ab/scratchpad/cycles/rw-data-records/RageWars/build/native-type-records/sn64_intelligence_type_records.o"
+      ],
+      [
+        "/usr/bin/mips-linux-gnu-objcopy",
+        "--set-section-flags",
+        ".rdata=alloc,load,readonly,data,contents",
+        "/mnt/devstorage/AbuCode/.buildtmp/tmp/claude-1000/-mnt-devstorage-Workspaces/16a2299c-8f51-4270-9c1f-009829f453ab/scratchpad/cycles/rw-data-records/RageWars/build/native-type-records/sn64_intelligence_type_records.o"
+      ],
+      [
+        "/usr/bin/mips-linux-gnu-ld",
+        "-T",
+        "/mnt/devstorage/AbuCode/.buildtmp/tmp/claude-1000/-mnt-devstorage-Workspaces/16a2299c-8f51-4270-9c1f-009829f453ab/scratchpad/cycles/rw-data-records/RageWars/build/native-type-records/sn64_intelligence_type_records.ld",
+        "-o",
+        "/mnt/devstorage/AbuCode/.buildtmp/tmp/claude-1000/-mnt-devstorage-Workspaces/16a2299c-8f51-4270-9c1f-009829f453ab/scratchpad/cycles/rw-data-records/RageWars/build/native-type-records/sn64_intelligence_type_records.elf",
+        "/mnt/devstorage/AbuCode/.buildtmp/tmp/claude-1000/-mnt-devstorage-Workspaces/16a2299c-8f51-4270-9c1f-009829f453ab/scratchpad/cycles/rw-data-records/RageWars/build/native-type-records/sn64_intelligence_type_records.o"
+      ],
+      [
+        "/usr/bin/mips-linux-gnu-objcopy",
+        "-O",
+        "binary",
+        "--only-section=.rodata",
+        "/mnt/devstorage/AbuCode/.buildtmp/tmp/claude-1000/-mnt-devstorage-Workspaces/16a2299c-8f51-4270-9c1f-009829f453ab/scratchpad/cycles/rw-data-records/RageWars/build/native-type-records/sn64_intelligence_type_records.elf",
+        "/mnt/devstorage/AbuCode/.buildtmp/tmp/claude-1000/-mnt-devstorage-Workspaces/16a2299c-8f51-4270-9c1f-009829f453ab/scratchpad/cycles/rw-data-records/RageWars/build/native-type-records/sn64_intelligence_type_records.bin"
+      ]
+    ],
+    "source_sha256": "22106e899ffb9cf9707e355f5b59df25b4b5bef454dacde79ee5c6817dec0d5e",
+    "binary_sha256": "91b4b3f6c3706c99204316deea91bb5c77a3c2cee49debfa96b4ba4840f299b7"
+  },
+  {
+    "symbol": "sn64_runtime_type_records",
+    "rom_start": 1039880,
+    "rom_end": 1052672,
+    "vram": 2148520456,
+    "bytes": 12792,
+    "records": 375,
+    "exact": true,
+    "section": ".rodata",
+    "argv": [
+      [
+        "/usr/bin/cpp",
+        "-P",
+        "-undef",
+        "-nostdinc",
+        "-D_LANGUAGE_C",
+        "-DF3DEX_GBI_2",
+        "-D__GNUC__=2",
+        "-DVERSION_US_REV1",
+        "-I/mnt/devstorage/AbuCode/.buildtmp/tmp/claude-1000/-mnt-devstorage-Workspaces/16a2299c-8f51-4270-9c1f-009829f453ab/scratchpad/cycles/rw-data-records/RageWars/include",
+        "/mnt/devstorage/AbuCode/.buildtmp/tmp/claude-1000/-mnt-devstorage-Workspaces/16a2299c-8f51-4270-9c1f-009829f453ab/scratchpad/cycles/rw-data-records/RageWars/src/sn64_runtime_type_records.c"
+      ],
+      [
+        "/mnt/devstorage/AbuCode/.buildtmp/tmp/claude-1000/-mnt-devstorage-Workspaces/16a2299c-8f51-4270-9c1f-009829f453ab/scratchpad/cycles/rw-data-records/RageWars/tools/gcc-2.8.1-sn64/cc1",
+        "-quiet",
+        "-G0",
+        "-mips3",
+        "-O2",
+        "-mgas",
+        "-meb",
+        "-mcpu=VR4300",
+        "-mhard-float",
+        "-mgp32",
+        "-mfp64",
+        "-mno-fix4300",
+        "/mnt/devstorage/AbuCode/.buildtmp/tmp/claude-1000/-mnt-devstorage-Workspaces/16a2299c-8f51-4270-9c1f-009829f453ab/scratchpad/cycles/rw-data-records/RageWars/build/native-type-records/sn64_runtime_type_records.i",
+        "-o",
+        "/mnt/devstorage/AbuCode/.buildtmp/tmp/claude-1000/-mnt-devstorage-Workspaces/16a2299c-8f51-4270-9c1f-009829f453ab/scratchpad/cycles/rw-data-records/RageWars/build/native-type-records/sn64_runtime_type_records.s"
+      ],
+      [
+        "/mnt/devstorage/AbuCode/.buildtmp/tmp/claude-1000/-mnt-devstorage-Workspaces/16a2299c-8f51-4270-9c1f-009829f453ab/scratchpad/cutover/host/n64src/build/n64link",
+        "asn64",
+        "--as",
+        "/usr/bin/mips-linux-gnu-as",
+        "-march=vr4300",
+        "-mabi=32",
+        "-EB",
+        "-G0",
+        "--no-pad-sections",
+        "/mnt/devstorage/AbuCode/.buildtmp/tmp/claude-1000/-mnt-devstorage-Workspaces/16a2299c-8f51-4270-9c1f-009829f453ab/scratchpad/cycles/rw-data-records/RageWars/build/native-type-records/sn64_runtime_type_records.s",
+        "-o",
+        "/mnt/devstorage/AbuCode/.buildtmp/tmp/claude-1000/-mnt-devstorage-Workspaces/16a2299c-8f51-4270-9c1f-009829f453ab/scratchpad/cycles/rw-data-records/RageWars/build/native-type-records/sn64_runtime_type_records.o"
+      ],
+      [
+        "/usr/bin/mips-linux-gnu-objcopy",
+        "--set-section-flags",
+        ".rdata=alloc,load,readonly,data,contents",
+        "/mnt/devstorage/AbuCode/.buildtmp/tmp/claude-1000/-mnt-devstorage-Workspaces/16a2299c-8f51-4270-9c1f-009829f453ab/scratchpad/cycles/rw-data-records/RageWars/build/native-type-records/sn64_runtime_type_records.o"
+      ],
+      [
+        "/usr/bin/mips-linux-gnu-ld",
+        "-T",
+        "/mnt/devstorage/AbuCode/.buildtmp/tmp/claude-1000/-mnt-devstorage-Workspaces/16a2299c-8f51-4270-9c1f-009829f453ab/scratchpad/cycles/rw-data-records/RageWars/build/native-type-records/sn64_runtime_type_records.ld",
+        "-o",
+        "/mnt/devstorage/AbuCode/.buildtmp/tmp/claude-1000/-mnt-devstorage-Workspaces/16a2299c-8f51-4270-9c1f-009829f453ab/scratchpad/cycles/rw-data-records/RageWars/build/native-type-records/sn64_runtime_type_records.elf",
+        "/mnt/devstorage/AbuCode/.buildtmp/tmp/claude-1000/-mnt-devstorage-Workspaces/16a2299c-8f51-4270-9c1f-009829f453ab/scratchpad/cycles/rw-data-records/RageWars/build/native-type-records/sn64_runtime_type_records.o"
+      ],
+      [
+        "/usr/bin/mips-linux-gnu-objcopy",
+        "-O",
+        "binary",
+        "--only-section=.rodata",
+        "/mnt/devstorage/AbuCode/.buildtmp/tmp/claude-1000/-mnt-devstorage-Workspaces/16a2299c-8f51-4270-9c1f-009829f453ab/scratchpad/cycles/rw-data-records/RageWars/build/native-type-records/sn64_runtime_type_records.elf",
+        "/mnt/devstorage/AbuCode/.buildtmp/tmp/claude-1000/-mnt-devstorage-Workspaces/16a2299c-8f51-4270-9c1f-009829f453ab/scratchpad/cycles/rw-data-records/RageWars/build/native-type-records/sn64_runtime_type_records.bin"
+      ]
+    ],
+    "source_sha256": "edf6c27e555a271e89fc9237658be773c685db8bd92cc6f734d439a5e7ff84d7",
+    "binary_sha256": "9c266e8aa132cca87d3c359d8b078984d22c68d0dd348b80fd84d6f49d8afffe"
+  }
+]

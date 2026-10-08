@@ -52,7 +52,9 @@ class BuildfileTests(ProjectCase):
         self.assertIn("alpha.key", plain)
         self.assertIn("PREPROCESS_FLAGS", plain)
         flagged = buildfiles.units_mk(replace(config.load(self.project.root), unit_flags={"alpha": ("-O1",)}))
-        self.assertIn("build/%/src/alpha.key build/%/units/alpha.bin: UNIT_CODEGEN := -O1", flagged)
+        self.assertIn(
+            "build/%/src/alpha.key build/%/units/alpha.bin build/%/data/alpha.bin: UNIT_CODEGEN := -O1", flagged
+        )
         self.assertNotIn("beta.bin: UNIT_CODEGEN", flagged)
 
     def test_makefile_builds_every_version_in_one_graph(self) -> None:
@@ -65,7 +67,7 @@ class BuildfileTests(ProjectCase):
                 self.assertIn("include $(foreach v,$(VERSIONS),versions/$v/slices.mk)\n", text)
                 self.assertIn("check: verify $(ROMS)\n", text)
                 self.assertNotIn("$(MAKE)", text)
-                self.assertNotIn("OBJCOPY", text)
+                self.assertIn("OBJCOPY := mips-linux-gnu-objcopy", text)
                 for version in versions:
                     slices = buildfiles.slices_mk(project, version)
                     self.assertIn(f"\n{version}.BASEROM := roms/baserom.{version}.z64\n", slices)

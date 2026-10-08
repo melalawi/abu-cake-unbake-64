@@ -7,7 +7,7 @@ from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
-from unbake import atomic, config, journal, process, strict_json
+from unbake import atomic, buildfiles, config, journal, process, strict_json
 from unbake.cache import Cache
 from unbake.config import Held, Host, Project
 from unbake.layout import split
@@ -21,7 +21,7 @@ def _git(project: Project, *args: str) -> str:
 
 
 def admission(project: Project, host: Host, head: str, base: str) -> dict[str, Any]:
-    """Only changed-function native linked bytes and relevant source hygiene."""
+    """Changed native code/DATA extents and relevant source hygiene, without rebuilding."""
     started = time.perf_counter_ns()
     if _git(project, "status", "--porcelain"):
         raise Held(
@@ -40,9 +40,34 @@ def admission(project: Project, host: Host, head: str, base: str) -> dict[str, A
             if (project.root / name).parent == project.src and Path(name).suffix in (".c", ".s")
         )
     )
+    data_scopes = []
+    selected_sources = set(sources)
+    for version in project.versions:
+        meta = project.version(version)
+        current = buildfiles.data_bindings(project, version)
+        previous = {}
+        split_name = meta.split.relative_to(project.root).as_posix()
+        if split_name in changed:
+            previous = buildfiles.data_bindings(project, version, text=_git(project, "show", base + ":" + split_name))
+        else:
+            previous = current
+        for unit, binding in current.items():
+            source = project.src / (unit.name + ".c")
+            if source in sources or previous.get(unit) != binding:
+                if not source.is_file():
+                    raise Held(
+                        cause_named(
+                            "publish.source_missing",
+                            f"Declared DATA source missing: {source.name}",
+                            owner="project.publication_push",
+                            stage="publish",
+                        )
+                    )
+                data_scopes.append((version, unit))
+                selected_sources.add(source)
     from unbake.decomp import checks
 
-    findings = checks.findings(project, sources, Cache(project.cache))
+    findings = checks.findings(project, tuple(sorted(selected_sources)), Cache(project.cache))
     if findings.rows:
         raise Held(
             cause_named(
@@ -97,6 +122,36 @@ def admission(project: Project, host: Host, head: str, base: str) -> dict[str, A
             work["native_bytes_read"] += len(linked)
             work["rom_bytes_read"] += len(original)
             work["functions_compared"] += 1
+    for version, unit in data_scopes:
+        native = project.build_link(version) / "data" / (unit.name + ".bin")
+        if not native.is_file():
+            target = native.relative_to(project.root).as_posix()
+            raise Held(
+                cause_named(
+                    "publish.native_missing",
+                    f"Native linked output missing; prepare: make -j12 {target}",
+                    owner="project.publication_push",
+                    stage="publish",
+                )
+            )
+        linked = native.read_bytes()
+        with project.version(version).baserom.open("rb") as stream:
+            stream.seek(unit.start)
+            original = stream.read(unit.size)
+        if len(original) != unit.size or linked != original:
+            raise Held(
+                cause_named(
+                    "publish.native_mismatch",
+                    f"{unit.name} {version}: native DATA bytes differ from ROM extent",
+                    owner="project.publication_push",
+                    stage="publish",
+                )
+            )
+        scopes.append({"data": unit.name, "version": version, "rom_start": unit.start, "bytes": unit.size})
+        work["native_bytes_read"] += len(linked)
+        work["rom_bytes_read"] += len(original)
+    if data_scopes:
+        work["data_extents_compared"] = len(data_scopes)
     return {
         "ok": True,
         "head": head,
