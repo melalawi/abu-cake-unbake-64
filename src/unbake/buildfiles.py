@@ -131,6 +131,7 @@ def data_bindings(project: Project, version: str, *, text: str | None = None) ->
     path = project.version(version).split
     _, _, segments = split.layout(path) if text is None else split.parse_layout(path, text)
     result = {}
+    names: set[str] = set()
     for segment in segments:
         for row in segment.rows:
             declared = Path(row.path)
@@ -157,7 +158,7 @@ def data_bindings(project: Project, version: str, *, text: str | None = None) ->
                     )
                 )
             unit = Unit(source.stem, split.address(row, path), row.start, stop - row.start, "data")
-            if any(existing.name == unit.name for existing in result):
+            if unit.name in names:
                 raise Held(
                     cause_named(
                         "buildfiles.source",
@@ -166,6 +167,7 @@ def data_bindings(project: Project, version: str, *, text: str | None = None) ->
                         stage="buildfiles",
                     )
                 )
+            names.add(unit.name)
             result[unit] = (row.path, row.kind)
     return result
 

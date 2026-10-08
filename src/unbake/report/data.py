@@ -342,8 +342,35 @@ def producer_binding(project: Project, version: str, unit: Any) -> dict[str, Any
     else:
         path = buildfiles.resource_bindings(project, version)[unit]
         section = "resource"
+    return _producer_binding(unit, path, section)
+
+
+def _producer_binding(unit: Any, path: str, section: str) -> dict[str, Any]:
     binding: dict[str, Any] = json.loads(attempts.encoded({"unit": asdict(unit), "source": path, "section": section}))
     return binding
+
+
+@dataclass(frozen=True)
+class _ProducerBindings:
+    layout: inputs.Signature
+    entries: dict[str, dict[str, Any]]
+
+
+def producer_bindings(project: Project, version: str) -> _ProducerBindings:
+    """One current-layout index per coverage operation; never retain stale bindings."""
+    from unbake import buildfiles
+
+    signature = inputs.signature(project.version(version).split)
+    result = {}
+    for unit, (path, section) in buildfiles.data_bindings(project, version).items():
+        binding = _producer_binding(unit, path, section)
+        result[digest(binding)] = binding
+    for resource, path in buildfiles.resource_bindings(project, version).items():
+        binding = _producer_binding(resource, path, "resource")
+        result[digest(binding)] = binding
+    if inputs.signature(project.version(version).split) != signature:
+        refuse("producer layout changed while indexing bindings")
+    return _ProducerBindings(signature, result)
 
 
 def canonical_configuration(value: dict[str, Any]) -> dict[str, Any]:
@@ -840,11 +867,14 @@ def current_dependencies(project: Project, event: dict[str, Any], version: str) 
 
 @attempts.with_ledger
 def coverage(
-    project: Project, version: str, sources: dict[str, tuple[str, set[str], bool]], record: dict[str, Any] | None
+    project: Project, version: str, sources: dict[str, tuple[str, set[str], bool]], record: dict[str, Any] | None,
+    *, bindings: _ProducerBindings | None = None,
 ) -> Coverage:
     if record is not None and {"legacy", "producers"} <= set(record) <= {"legacy", "producers", "input_projections"}:
         records = [event for event in [record["legacy"], *record["producers"]] if event is not None]
-        pieces = [coverage(project, version, sources, event) for event in records]
+        if bindings is None:
+            bindings = producer_bindings(project, version)
+        pieces = [coverage(project, version, sources, event, bindings=bindings) for event in records]
         empty = coverage(project, version, sources, None)
         combined_spans = sorted({span for piece in pieces for span in piece.matched})
         if any(left[1] > right[0] for left, right in pairwise(combined_spans)):
@@ -956,16 +986,14 @@ def coverage(
             refuse("complete final linked evidence required")
         producer = evidence.get("producer")
         if producer is not None:
-            from unbake import buildfiles
-
-            bindings = [
-                producer_binding(project, version, unit)
-                for unit in [
-                    *buildfiles.data_bindings(project, version),
-                    *buildfiles.resource_bindings(project, version),
-                ]
-            ]
-            if producer not in bindings or record["dependencies"]["values"].get("producer_binding") != producer:
+            if bindings is None:
+                bindings = producer_bindings(project, version)
+            if inputs.signature(project.version(version).split) != bindings.layout:
+                refuse("producer layout changed during coverage")
+            if (
+                bindings.entries.get(digest(producer)) != producer
+                or record["dependencies"]["values"].get("producer_binding") != producer
+            ):
                 return unknown("data.binding.changed", invalidated=True)
         resource = producer is not None and producer["unit"]["kind"] == "resource"
         sha(evidence["input_identity"], "input_identity")

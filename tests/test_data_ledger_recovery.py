@@ -18,7 +18,7 @@ from tests.test_standalone_data_progress import StandaloneDataProgressTests, rec
 from unbake import atomic, buildfiles, cache, config, journal, land, process
 from unbake.config import Held
 from unbake.project import publication_push
-from unbake.report import data, progress, verify
+from unbake.report import data, progress, state, verify
 from unbake.work import attempts
 
 
@@ -573,3 +573,31 @@ class DataLedgerRecoveryTests(StandaloneDataProgressTests):
         blob.symlink_to(target)
         with self.assertRaisesRegex(Held, "blob_missing"):
             attempts.Ledger(project)._refresh()
+
+    def test_actual_producer_coverage_builds_one_current_binding_index_and_rechecks_layout_and_symlink(self):
+        project, _ = self.capture_recipe()
+        current = state.inventory(project)
+        snapshot = data.snapshots(project)["us"]
+        before = copy.deepcopy(snapshot)
+        with (
+            patch.object(buildfiles, "data_bindings", wraps=buildfiles.data_bindings) as parses,
+            patch.object(data, "producer_binding", side_effect=AssertionError("per-evidence layout rebuild")),
+            patch.object(process, "run_native") as native,
+        ):
+            coverage = data.coverage(project, "us", current.sources, snapshot)
+        native.assert_not_called()
+        self.assertEqual(parses.call_count, 1)
+        self.assertEqual(coverage.manifest["verified_bytes"], 33253)
+        path = project.version("us").split
+        original = path.read_text()
+        path.write_text(original.replace("vram: 0x800C6968", "vram: 0x800C696C"))
+        self.assertEqual(data.coverage(project, "us", current.sources, snapshot).manifest["verified_bytes"], 0)
+        path.write_text(original)
+        source = project.src / (RECORDS[0]["symbol"] + ".c")
+        target = self.root / source.name
+        target.write_bytes(source.read_bytes())
+        source.unlink()
+        source.symlink_to(target)
+        with self.assertRaisesRegex(Held, "outside src"):
+            data.coverage(project, "us", current.sources, snapshot)
+        self.assertEqual(snapshot, before)
