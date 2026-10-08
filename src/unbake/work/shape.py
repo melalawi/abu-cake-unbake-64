@@ -52,9 +52,13 @@ def emitters(shapes: Iterable[Shape]) -> Shape:
 
 
 def configured(project: Project) -> tuple[dict[str, Shape], Shape]:
+    from unbake.compilers import drivers
+
     targets = {
-        unit: for_compiler(project.compiler_for(unit), (*project.compiler_for(unit).cflags, *flags))
-        for unit, flags in project.unit_flags.items()
+        unit: for_compiler(
+            project.compiler_for(unit), drivers.resolved(project, project.names_from, unit).phase("compile")
+        )
+        for unit, recipe in project.units.items()
     }
     base = {ident: for_compiler(compiler, compiler.cflags) for ident, compiler in project.compilers.items()}
     return {**base, **targets}, emitters([*base.values(), *targets.values()])

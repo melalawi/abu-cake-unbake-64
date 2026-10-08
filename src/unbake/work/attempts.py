@@ -962,7 +962,16 @@ class Ledger:
     ) -> str:
         from unbake.inputs import bytes_digest
 
-        kind = kind or ("fuzzy" if receipt is not None else "exact")
+        kind = kind or "exact"
+        if kind == "fuzzy":
+            raise Held(
+                cause_named(
+                    "publication.exact_only",
+                    "nonexact sources remain editable history",
+                    owner="work.attempts",
+                    stage="publication",
+                )
+            )
         digest = bytes_digest(source.encode(), algorithm="sha256")
         publication = {
             "kind": kind,

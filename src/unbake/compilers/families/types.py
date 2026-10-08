@@ -38,6 +38,8 @@ class Allocation:
     limitations: tuple[str, ...]
     hard_registers: tuple[int, ...]
     family: str = ""
+    instruction_origins: tuple[tuple[int, int, tuple[int, ...]], ...] = ()
+    linked_sha256: str | None = None
 
 
 @dataclass(frozen=True)

@@ -746,7 +746,7 @@ def _compile_includers(project: Project, edits: list[Edit], policy: Host, republ
 
     configured_flags = (
         *(compiler.cflags for compiler in project.compilers.values()),
-        *project.unit_flags.values(),
+        *(r.phase("compile") for r in project.units.values()),
     )
     search = list(project.include)
     for configured in configured_flags:
@@ -848,7 +848,10 @@ def _compile_includers(project: Project, edits: list[Edit], policy: Host, republ
             for index, (source, version, flags) in enumerate(includers):
                 compiler = project.compiler_for(source)
                 if compiler.id not in verified:
-                    toolchain.verify(project.tools / compiler.id, toolchain.specification(compiler.id))
+                    toolchain.verify(
+                        toolchain.compiler_directory(project.tools, toolchain.specification(compiler.id)),
+                        toolchain.specification(compiler.id),
+                    )
                     verified.add(compiler.id)
                 drivers.templates(compiler.kind)
                 flags = [flag.replace(str(project.root) + "/", str(overlay) + "/") for flag in flags]

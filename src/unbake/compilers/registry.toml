@@ -12,9 +12,6 @@
 # it is deliberately excluded from matching probes. -fno-defer-pop is accepted
 # by GCC but does not change this MIPS sample (there is no callee-pop ABI).
 
-[build_aliases]
-sn64_asflags = "gnu_asflags"
-
 [compilers."ido-7.1"]
 kind = "ido"
 family = "ido"
@@ -26,7 +23,9 @@ host = "linux-x86_64"
 cc = "cc"
 as = "as1"
 cflags = ["-c", "-G0", "-non_shared", "-mips2", "-O2"]
-flag_variants = [[], ["-O1"], ["-O2"], ["-O3"]]
+supported_options = ["-O1", "-O2", "-O3"]
+small_data = [0, 1, 2, 3, 4, 8]
+isa = [2, 3]
 decompme = "ido7.1"
 
 [compilers."ido-7.1".pins]
@@ -62,7 +61,9 @@ host = "linux-x86_64"
 cc = "cc"
 as = "as1"
 cflags = ["-c", "-G0", "-non_shared", "-mips2", "-O2"]
-flag_variants = [[], ["-O1"], ["-O2"], ["-O3"]]
+supported_options = ["-O1", "-O2", "-O3"]
+small_data = [0, 1, 2, 3, 4, 8]
+isa = [2, 3]
 decompme = "ido5.3"
 
 [compilers."ido-5.3".pins]
@@ -109,15 +110,9 @@ as = "policy:mips_as"
 cflags = ["-G0", "-mips3", "-mgp32", "-mfp32", "-O2"]
 # KMC: O1, strength reduction, scheduling, FP64, unsigned char and delayed
 # branches changed the probe's .text; O2/O3 matched its O2 baseline.
-flag_variants = [
-    [], ["-O1"], ["-O2"], ["-O3"],
-    ["-fno-strength-reduce"], ["-fno-expensive-optimizations"],
-    ["-fno-schedule-insns2"], ["-mgp32"], ["-mfp32"],
-    ["-mgp32", "-mfp32"], ["-mgp32", "-mfp64"],
-    ["-funsigned-char"], ["-fno-defer-pop"], ["-ffast-math"],
-    ["-fno-delayed-branch"], ["-fforce-addr"],
-    ["-fno-thread-jumps"], ["-fno-rerun-cse-after-loop"],
-]
+supported_options = ["-O1", "-O2", "-O3", "-fno-strength-reduce", "-fno-expensive-optimizations", "-fno-schedule-insns2", "-mgp32", "-mfp32", "-mfp64", "-funsigned-char", "-fno-defer-pop", "-ffast-math", "-fno-delayed-branch", "-fforce-addr", "-fno-thread-jumps", "-fno-rerun-cse-after-loop", "-fno-cse-follow-jumps", "-fno-cse-skip-blocks"]
+small_data = [0, 1, 2, 3, 4, 8]
+isa = [2, 3]
 decompme = "gcc2.7.2kmc"
 
 [compilers."gcc-2.7.2-kmc".pins]
@@ -142,15 +137,9 @@ cflags = ["-G0", "-mips3", "-O2", "-mgas", "-meb", "-mcpu=VR4300", "-mhard-float
 # SN64: O1, strength reduction, scheduling, FP32, unsigned char and delayed
 # branches changed the probe's .text; O2/O3 matched its O2 baseline. FP32 is
 # also used by real per-unit overrides, alongside strength/fast-math flags.
-flag_variants = [
-    [], ["-O1"], ["-O2"], ["-O3"],
-    ["-fno-strength-reduce"], ["-fno-expensive-optimizations"],
-    ["-fno-schedule-insns2"], ["-mgp32"], ["-mfp32"],
-    ["-mgp32", "-mfp32"], ["-mgp32", "-mfp64"],
-    ["-funsigned-char"], ["-fno-defer-pop"], ["-ffast-math"],
-    ["-fno-delayed-branch"], ["-fforce-addr"],
-    ["-fno-thread-jumps"], ["-fno-rerun-cse-after-loop"],
-]
+supported_options = ["-O1", "-O2", "-O3", "-fno-strength-reduce", "-fno-expensive-optimizations", "-fno-schedule-insns2", "-mgp32", "-mfp32", "-mfp64", "-funsigned-char", "-fno-defer-pop", "-ffast-math", "-fno-delayed-branch", "-fforce-addr", "-fno-thread-jumps", "-fno-rerun-cse-after-loop", "-fno-cse-follow-jumps", "-fno-cse-skip-blocks"]
+small_data = [0, 1, 2, 3, 4, 8]
+isa = [2, 3]
 decompme = "gcc2.8.1sn"
 
 [compilers."gcc-2.8.1-sn64".pins]

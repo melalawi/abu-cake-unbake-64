@@ -33,6 +33,24 @@ _NATIVE_MULTIPLY_POLICY = "-Wab,-r4300_mul"
 
 
 class Ido:
+    def option_space(self, spec: CompilerSpec) -> Any:
+        from unbake.compilers.options import option_space
+
+        return option_space(spec)
+
+    def validate_options(self, recipe: Any, baseline: tuple[str, ...] | None = None) -> None:
+        from unbake.compilers.options import validate_options
+        from unbake.compilers.registry import specification
+
+        validate_options(recipe, specification(recipe.compiler), self.accepts_codegen, baseline)
+
+    def capability_probe(self, request: Any) -> Any:
+        # Transport belongs to the existing native boundary; no implicit jobs.
+        return request()
+
+    def observe(self, capture: Any) -> Any:
+        return self.compiler_facts(capture.get("dumps", {}), capture.get("candidate", ()), capture.get("expanded", ""))
+
     def compare_dump_flags(self) -> tuple[str, ...]:
         return ()
 
@@ -113,8 +131,10 @@ class Ido:
         assert preprocess is not None
         dependency = render(("{cc}", "{preprocess}", "-M", "{source}"))
         return (
-            f"{dependency} > $(@D)/$(*F).deps && sed 's|^[^:]*:|$(@D)/$(*F).i:|' $(@D)/$(*F).deps > $(@D)/$(*F).d"
-            f" && rm $(@D)/$(*F).deps && {render(preprocess)} > $(@D)/$(*F).i"
+            f"python3 tools/compiler_contracts.py --contract ido-1 --output $(@D)/$(*F).deps -- {dependency} "
+            "&& sed 's|^[^:]*:|$(@D)/$(*F).i:|' $(@D)/$(*F).deps > $(@D)/$(*F).d"
+            f" && rm $(@D)/$(*F).deps "
+            f"&& python3 tools/compiler_contracts.py --contract ido-1 --output $(@D)/$(*F).i -- {render(preprocess)}"
         )
 
     def runtime_helpers(

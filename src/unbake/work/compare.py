@@ -32,26 +32,22 @@ class Compared:
     faults: dict[str, dict[str, Any]] = field(default_factory=dict)
     required_versions: tuple[str, ...] | None = None
     facts: dict[str, dict[str, Any]] = field(default_factory=dict)
+    project_root: Path | None = None
+    unit_recipe: dict[str, Any] | None = None
+    option_episode: dict[str, Any] | None = None
+    next_action: str = ""
 
     @property
     def required_exact(self) -> bool:
-        return (
-            self.exact
-            if self.required_versions is None
-            else (
-                bool(self.required_versions)
-                and not self.preconditions
-                and all(v in self.compares and self.compares[v].exact for v in self.required_versions)
-            )
-        )
+        return acceptance(self.compares, self.required_versions, self.preconditions)
 
     @property
     def identical_everywhere(self) -> bool:
-        return bool(self.compares) and all(result.exact for result in self.compares.values())
+        return acceptance(self.compares, tuple(self.compares), self.preconditions)
 
     @property
     def exact(self) -> bool:
-        return self.identical_everywhere and not self.preconditions
+        return self.identical_everywhere
 
     @property
     def best_percent(self) -> float | None:
@@ -63,6 +59,8 @@ class Compared:
 
     @property
     def next_command(self) -> str:
+        if self.next_action:
+            return self.next_action
         import shlex
 
         scope = "".join(" --require-version " + shlex.quote(v) for v in self.required_versions or ())
@@ -82,6 +80,9 @@ class Compared:
             "preconditions": list(self.preconditions),
             "seconds": round(self.seconds, 3),
             "compiler": self.compiler,
+            "recipe": self.unit_recipe,
+            "option_episode": self.option_episode,
+            "next_command": self.next_command,
             **({"facts": self.facts} if self.facts else {}),
             **(
                 {"required_versions": list(self.required_versions), "required_exact": self.required_exact}
@@ -110,6 +111,18 @@ class Compared:
                 + ("EXACT" if self.required_exact else "not exact")
             )
         return output
+
+
+def acceptance(
+    compares: dict[str, Measurement], required: tuple[str, ...] | None, preconditions: list[str] | tuple[str, ...] = ()
+) -> bool:
+    versions = tuple(compares) if required is None else required
+    return (
+        bool(versions)
+        and len(set(versions)) == len(versions)
+        and not preconditions
+        and all(version in compares and compares[version].exact for version in versions)
+    )
 
 
 def function_of(file: Path) -> str:
@@ -166,6 +179,7 @@ def measure(
     *,
     versions: tuple[str, ...] | None = None,
     retain_link_faults: bool = False,
+    score_cache: dict[str, Measurement] | None = None,
 ) -> Compared:
     """Measure without recording an attempt. Compile failures retain native faults and nonexact placeholders.
     Link failures refuse by default; explicit scoped comparison retains them per version so no optional
@@ -174,10 +188,14 @@ def measure(
     from unbake.decomp import checks
 
     started = time.monotonic()
-    function = function_of(file)
+    from unbake.work.source_scope import admit_source
+
+    function = admit_source(project, file).subject
     selected = versions or split.holding_versions(project, function)
     view = view_for(project, file, function)
     content = file.read_bytes()
+    input_view = view
+    dependency_before = operation_dependencies(input_view, host, file)
     non_matching = (
         file.resolve() == (project.src / f"{function}.c").resolve()
         and attempts.ledger(project).fuzzy(function) is not None
@@ -199,11 +217,16 @@ def measure(
             row = row_of(project, function, version)
             target = split.words(project, row)
             compiling = True
+            capture_info: dict[str, Any] = {}
             try:
                 options: dict[str, Any] = {"non_matching": True} if non_matching else {}
-                with runner.compile_unit(view, host, candidate, version, unit=function, **options) as obj:
+                with runner.compile_unit(
+                    view, host, candidate, version, unit=function, capture_info=capture_info, **options
+                ) as obj:
                     compiling = False
-                    linked, problems = runner.link_function(project, host, obj, version, row, file)
+                    linked, problems = runner.link_function(
+                        project, host, obj, version, row, file, capture_info=capture_info
+                    )
             except Held as error:
                 if not compiling and not retain_link_faults:
                     raise
@@ -213,7 +236,45 @@ def measure(
                 results[version] = unavailable(version, len(target) // 4, error.fault)
                 results[version].lines.append(f"VERSION {version}: {error.reason}")
                 continue
-            result = measure_words(version, target, linked)
+            import copy
+
+            from unbake.compilers.drivers import resolved
+            from unbake.compilers.recipe_options import recipe_digest
+
+            recipe = resolved(view, version, function)
+            equivalence = recipe_digest(
+                {
+                    "linked_sha256": hashlib.sha256(linked).hexdigest(),
+                    "relocations": capture_info.get("relocations"),
+                    "literals": capture_info.get("literal_layout"),
+                    "recipe": recipe.digest,
+                    "placement": capture_info.get("placement"),
+                    "target_sha256": hashlib.sha256(target).hexdigest(),
+                    "refusals": problems,
+                }
+            )
+            if score_cache is not None and equivalence in score_cache:
+                result = copy.deepcopy(score_cache[equivalence])
+            else:
+                result = measure_words(version, target, linked)
+                if score_cache is not None:
+                    score_cache[equivalence] = copy.deepcopy(result)
+            from unbake.compilers.drivers import resolved
+
+            result.provenance = {
+                **capture_info,
+                "source_sha256": hashlib.sha256(content).hexdigest(),
+                "recipe": resolved(view, version, function).document(),
+                "recipe_digest": resolved(view, version, function).digest,
+                "required_versions": list(selected),
+                "target_sha256": hashlib.sha256(target).hexdigest(),
+                "dependencies": dependency_before.document(),
+                "dependency_digest": dependency_before.digest,
+                "dependency_current": operation_dependencies(input_view, host, file) == dependency_before,
+                "unit_recipe": view.recipe_for(function).document(),
+            }
+            if not {"preprocessed_sha256", "object_sha256", "placed_object_sha256"} <= capture_info.keys():
+                result.strict = {"available": False, "reason": "native digest chain incomplete"}
             if problems:
                 assert result.typed is not None
                 result.typed["relocation"] += len(problems)
@@ -221,9 +282,11 @@ def measure(
             results[version] = result
     digest = hashlib.sha256(content).hexdigest()
     compiler = view.compiler_reference(function)
-    return Compared(
+    compared = Compared(
         function, file, digest, results, preconditions, time.monotonic() - started, compiler, rule_lines, faults
     )
+    compared.project_root, compared.unit_recipe = project.root, view.recipe_for(function).document()
+    return compared
 
 
 def _compare(
@@ -233,6 +296,7 @@ def _compare(
     *,
     required_versions: tuple[str, ...] | None = None,
     explain_schedule: bool = False,
+    flags: bool = False,
 ) -> Compared:
     """Measure every holding version (trying the other configured compilers when not exact) and record it."""
     from unbake.compilers import candidates
@@ -268,7 +332,24 @@ def _compare(
     )
     assert isinstance(chosen, Compared)
     measured = chosen
+    from unbake.work.compare_facts import attach
+
+    attach(project, chosen)
+    if flags:
+        from dataclasses import replace
+
+        from unbake.compilers.recipe_options import UnitRecipe
+        from unbake.search.pairs import option_episode
+
+        chosen_recipe = UnitRecipe.read(chosen.unit_recipe)
+        option_view = replace(project, units={**project.units, project.unit_path(chosen.function): chosen_recipe})
+        measured = option_episode(option_view, host, file, chosen)
     measured.required_versions = required
+    from unbake.work.source_scope import admit_source
+
+    measured.next_action = admit_source(project, file).saved_action(
+        file, exact=measured.required_exact, required_versions=required or ()
+    )
     from unbake.work.compare_facts import attach
 
     attach(project, measured)
@@ -284,15 +365,38 @@ def operation_dependencies(project: Project, host: Host, file: Path) -> Dependen
     from unbake.project.headers import Graph
 
     graph = Graph.capture(project)
-    closure = graph.closure((file,))
-    dependencies = closure.dependency_set
+    from unbake.compilers import drivers
+
+    function = function_of(file)
+    from unbake.layout import split
+
+    closures = [
+        graph.closure((file,), drivers.flags(project, version, function))
+        for version in split.holding_versions(project, function)
+    ]
+    dependencies = DependencySet(
+        tuple({pin.path: pin for closure in closures for pin in closure.dependency_set.files}.values()),
+        {
+            "holders": {
+                v: c.dependency_set.document()
+                for v, c in zip(split.holding_versions(project, function), closures, strict=True)
+            }
+        },
+        {k: value for closure in closures for k, value in closure.dependency_set.recipes.items()},
+    )
     modules = (
         "work/compare.py",
+        "fold/self_prototype.py",
+        "fold/provider_reuse.py",
+        "typemap/namespace.py",
         "work/compare_facts.py",
         "work/compare_dump.py",
         "runner.py",
         "process.py",
         "compilers/drivers.py",
+        "compilers/recipe_options.py",
+        "compilers/compiler_contracts.py",
+        "compilers/options.py",
         "compilers/candidates.py",
         "compilers/families/gcc/dump_facts.py",
         "compilers/families/gcc/__init__.py",
@@ -323,6 +427,16 @@ def operation_dependencies(project: Project, host: Host, file: Path) -> Dependen
     paths.update(
         path for version in project.versions for path in project.build_link(version).glob("*") if path.is_file()
     )
+    paths.update(
+        p
+        for p in (
+            project.tools / "compilers.sha256",
+            project.tools / "compiler-driver.sha256",
+            project.tools / "compiler_contracts.py",
+            project.tools / "recipe_options.py",
+        )
+        if p.is_file()
+    )
     pins = {pin.path: pin for pin in dependencies.files}
     for path in paths:
         pin = inputs.file_pin(path, root=project.root, root_id="project", reuse=cache.configured())
@@ -331,19 +445,20 @@ def operation_dependencies(project: Project, host: Host, file: Path) -> Dependen
         tuple(pins.values()),
         {
             **dependencies.values,
-            "compiler": project.compiler_reference(file.stem),
+            "compiler": project.compiler_reference(function),
             "versions": list(project.versions),
             "memory_worker_bytes": host.memory_worker_bytes,
             "cache_memory_bytes": host.cache_memory_bytes,
             "native": native,
             "native_flags": {
-                "compiler": list(project.compiler_for(file.stem).cflags),
+                "recipe": project.recipe_for(function).document(),
+                "compiler": list(project.compiler_for(function).cflags),
                 "as": list(project.asflags),
                 "gnu_as": list(project.gnu_asflags),
                 "cpp": list(project.cppflags),
             },
             "source_sha256": inputs.digest(file, algorithm="sha256", reuse=cache.configured()),
-            "dependencies_unknown": closure.unknown,
+            "dependencies_unknown": any(closure.unknown for closure in closures),
         },
         {**dependencies.recipes, "compare": recipe},
     )
@@ -356,9 +471,12 @@ def compare(
     *,
     required_versions: tuple[str, ...] | None = None,
     explain_schedule: bool = False,
+    flags: bool = False,
 ) -> Compared:
     if attempts.producer_operation() is not None:
-        return _compare(project, host, file, required_versions=required_versions, explain_schedule=explain_schedule)
+        return _compare(
+            project, host, file, required_versions=required_versions, explain_schedule=explain_schedule, flags=flags
+        )
     function = function_of(file)
     from unbake.work.attempts import RetryScope, command_ledger
 
@@ -372,11 +490,14 @@ def compare(
                 "path": str(file.relative_to(project.root)) if file.is_relative_to(project.root) else file.name,
                 "required_versions": list(required_versions) if required_versions is not None else None,
                 "explain_schedule": explain_schedule,
+                "flags": flags,
             },
             operation_dependencies(project, host, file),
         ) as scope,
     ):
-        result = _compare(project, host, file, required_versions=required_versions, explain_schedule=explain_schedule)
+        result = _compare(
+            project, host, file, required_versions=required_versions, explain_schedule=explain_schedule, flags=flags
+        )
         first = row_of(project, result.function, next(iter(result.compares)))
         observed = attempts.Attempt(
             attempts.now(),

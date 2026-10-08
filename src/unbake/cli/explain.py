@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from pathlib import Path
 
 from unbake.cli.args import Context
 from unbake.cli.output import Result
@@ -31,6 +32,8 @@ def READ_ONLY(args: argparse.Namespace) -> bool:
 
 
 def register(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--source-root", action="append", type=Path, default=[])
+    parser.add_argument("--include-root", action="append", type=Path, default=[])
     parser.add_argument("subject", metavar="FUNC|FILE")
     parser.add_argument("--section", choices=SECTIONS, action="append", help="Repeat to show several.")
 
@@ -39,7 +42,15 @@ def run(context: Context) -> Result:
     from unbake.work import explain
 
     sections = tuple(context.args.section or DEFAULT_SECTIONS)
-    report = explain.explain(context.project(), context.require_host(), context.args.subject, sections)
+    project = context.project()
+    subject = context.args.subject
+    if Path(subject).suffix == ".c":
+        from unbake.work.source_scope import scoped_project
+
+        project = scoped_project(
+            project, Path(subject).resolve(), tuple(context.args.source_root), tuple(context.args.include_root)
+        )
+    report = explain.explain(project, context.require_host(), subject, sections)
     return Result.ok(
         NAME, report.document(), report.lines(), context.cmd(*report.next_words) if report.next_words else None
     )

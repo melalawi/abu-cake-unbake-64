@@ -76,7 +76,6 @@ def environment(project: Project, policy: Host | None) -> str:
         tools.extend((ident, compiler.cc, compiler.sha256))
     configuration = asdict(project)
     configuration.pop("units", None)
-    configuration.pop("unit_flags", None)
     return key(
         "semantic-environment-v5",
         *(inputs.digest(path, algorithm="sha256", reuse=retention.configured()) for path in sources),

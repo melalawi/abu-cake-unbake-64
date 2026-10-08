@@ -14,7 +14,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal, overload
 
-from unbake.compilers.config import BUILD_KEYS, build_values
+from unbake.compilers.config import BUILD_KEYS
+from unbake.compilers.recipe_options import UnitRecipe, canonical_unit
 
 
 def relative_text(root: Path, text: str) -> str:
@@ -83,7 +84,7 @@ class Unfinished(Held, NotImplementedError):
 # ---------------------------------------------------------------------------
 # Project facts: config.toml with a fixed directory layout.
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 CONFIG_SECTIONS = frozenset({"schema", "project", "compilers", "units", "version", "build"})
 RETIRED_SECTIONS = ("paths", "workspace")
 
@@ -163,7 +164,7 @@ class Project:
     versions: tuple[str, ...]
     compilers: dict[str, Compiler]
     default_compiler: str
-    units: dict[str, str]
+    units: dict[str, UnitRecipe]
     version_map: dict[str, Version]
     id: str
     layout_cap: int
@@ -171,8 +172,9 @@ class Project:
     cppflags: tuple[str, ...]
     gnu_asflags: tuple[str, ...]
     resident_mappings: dict[str, tuple[ResidentMapping, ...]] = field(default_factory=dict)
-    unit_flags: dict[str, tuple[str, ...]] = field(default_factory=dict)
     work_include: tuple[Path, ...] = ()
+    source_bindings: tuple[tuple[str, str], ...] = ()
+    admitted_roots: tuple[Path, ...] = ()
 
     @property
     def roms(self) -> Path:
@@ -203,9 +205,55 @@ class Project:
     def tools(self) -> Path:
         return Layout(self.root).tools
 
+    def unit_path(self, unit: str | Path) -> str:
+        path = Path(unit)
+        if path.is_absolute() and path.is_relative_to(self.src):
+            return canonical_unit(path.relative_to(self.root).as_posix())
+        if str(path).startswith("src/"):
+            return canonical_unit(path.as_posix())
+        admitted = dict(self.source_bindings).get(str(path.resolve()))
+        if admitted is not None:
+            return canonical_unit(admitted)
+        if path.is_absolute() and path.is_relative_to(self.work):
+            from unbake.work.compare import function_of
+
+            path = Path(function_of(path))
+        if path.parent != Path(".") or path.suffix not in ("", ".c"):
+            raise Held(
+                _cause(
+                    "recipe.unit",
+                    f"{unit}: source path requires explicit logical TU admission",
+                    owner="config",
+                    stage="config",
+                )
+            )
+        name = path.stem
+        if not re.fullmatch(r"[A-Za-z_]\w*", name):
+            raise Held(_cause("recipe.unit", f"{unit}: invalid logical TU", owner="config", stage="config"))
+        from unbake.layout import split
+
+        placements = {
+            f"src/{row.path}.c"
+            for version in self.versions
+            for row in split.functions(self, version)
+            if name in row.aliases
+        }
+        if len(placements) > 1:
+            raise Held(
+                _cause(
+                    "recipe.unit",
+                    f"{name}: conflicting TU placements {sorted(placements)}",
+                    owner="config",
+                    stage="config",
+                )
+            )
+        return canonical_unit(next(iter(placements), f"src/{name}.c"))
+
+    def recipe_for(self, unit: str | Path) -> UnitRecipe:
+        return self.units.get(self.unit_path(unit), UnitRecipe(self.default_compiler))
+
     def compiler_reference(self, unit: str | Path) -> str:
-        """An exception unit names its compiler; every other unit uses the default."""
-        return self.units.get(Path(unit).stem, self.default_compiler)
+        return self.recipe_for(unit).compiler
 
     def compiler_for(self, unit: str | Path) -> Compiler:
         ident = self.compiler_reference(unit)
@@ -249,7 +297,7 @@ class PendingProject(Layout):
     def flags(self, key: str) -> tuple[str, ...]:
         """A [build] flag list that setup needs before it can probe compilers."""
         label = _label(self.root / "config.toml", "build", key)
-        values = build_values(dict(self.build_table), str(self.root / "config.toml"))
+        values = dict(self.build_table)
         if key not in values:
             raise Held(
                 _cause(
@@ -388,14 +436,38 @@ def discover(start: Path | None = None) -> Path:
 
 def load_pending(root: Path) -> PendingProject:
     root = Path(root).expanduser().resolve()
+    return _pending(root, _read(root / "config.toml"))
+
+
+def _pending(root: Path, data: dict[str, Any]) -> PendingProject:
+    """Validate the same parsed document used by every ready/staged caller."""
     path = root / "config.toml"
-    data = _read(path)
     _refuse_retired(path, data)
     schema = _required(data, "schema", _label(path, "", "schema"))
     if type(schema) is not int or schema != SCHEMA_VERSION:
         raise Held(
             _cause("config.load_pending", f"{path} schema: expected {SCHEMA_VERSION}", owner="config", stage="config")
         )
+    allowed = {
+        "project": {"id", "state", "name", "title", "versions", "names_from", "default_compiler", "layout_cap"},
+        "version": {"baserom", "baserom_sha1", "split", "symbols", "macros", "cartridge_id", "region", "description"},
+        "compilers": {"cflags", "supply"},
+    }
+    for section in set(data) - CONFIG_SECTIONS:
+        raise Held(_cause("config.unknown", f"{path} [{section}]: unknown section", owner="config", stage="config"))
+    for section, keys in allowed.items():
+        table = data.get(section, {})
+        rows = [table] if section == "project" else list(table.values()) if isinstance(table, dict) else [table]
+        for row in rows:
+            if not isinstance(row, dict) or set(row) - keys:
+                raise Held(
+                    _cause(
+                        "config.unknown",
+                        f"{path} [{section}]: unknown fields or invalid table",
+                        owner="config",
+                        stage="config",
+                    )
+                )
     project = _table(data, "project", f"{path} [project]")
     state = _required(project, "state", _label(path, "project", "state"))
     if state not in ("awaiting-roms", "ready"):
@@ -461,11 +533,6 @@ def load(root: Path, *, text: str | None = None) -> Project:
     """Load a ready project; text supplies staged config.toml content for this root."""
     root = Path(root).expanduser().resolve()
     path = root / "config.toml"
-    pending = load_pending(root)
-    if pending.state != "ready":
-        raise Held(
-            _cause("project.state", "project.state: awaiting-roms; run unbake setup", owner="config", stage="config")
-        )
     if text is None:
         data = _read(path)
     else:
@@ -477,6 +544,11 @@ def load(root: Path, *, text: str | None = None) -> Project:
             raise Held(
                 capture(error, cause=_cause(f"{path}", f"{path}: {error}", owner="config", stage="config"))
             ) from error
+    pending = _pending(root, data)
+    if pending.state != "ready":
+        raise Held(
+            _cause("project.state", "project.state: awaiting-roms; run unbake setup", owner="config", stage="config")
+        )
     _refuse_retired(path, data)
     unknown = sorted(set(data) - CONFIG_SECTIONS)
     if unknown:
@@ -529,7 +601,7 @@ def load(root: Path, *, text: str | None = None) -> Project:
                 stage="config",
             )
         )
-    from unbake.compilers.registry import specification
+    from unbake.compilers.registry import compiler_directory, specification
 
     tools = Layout(root).tools
     if not compiler_tables:
@@ -553,8 +625,8 @@ def load(root: Path, *, text: str | None = None) -> Project:
         compilers[ident] = Compiler(
             ident,
             spec.kind,
-            tools / ident / spec.cc,
-            Path(spec.as_) if spec.as_.startswith("policy:") else tools / ident / spec.as_,
+            compiler_directory(tools, spec) / spec.cc,
+            Path(spec.as_) if spec.as_.startswith("policy:") else compiler_directory(tools, spec) / spec.as_,
             cflags,
             tools / "compilers.sha256",
         )
@@ -569,37 +641,17 @@ def load(root: Path, *, text: str | None = None) -> Project:
             )
         )
     units = {}
-    unit_flags = {}
     for unit, row in units_table.items():
-        label = f"{path} [units].{unit}"
-        if not re.fullmatch(r"[A-Za-z_]\w*", unit):
-            raise Held(_cause(f"{label}", f"{label}: expected a function name", owner="config", stage="config"))
-        if not isinstance(row, dict) or set(row) - {"compiler", "flags"} or "compiler" not in row:
+        try:
+            canonical_unit(unit)
+            recipe = UnitRecipe.read(row)
+            if recipe.compiler not in compilers:
+                raise ValueError(f"unknown compiler {recipe.compiler}")
+        except ValueError as error:
             raise Held(
-                _cause(
-                    f"{label}", f"{label}: expected {{ compiler = ID, flags = [...] }}", owner="config", stage="config"
-                )
-            )
-        ident = _text(row["compiler"], label + ".compiler")
-        flags_row = _strings(row.get("flags", []), label + ".flags")
-        if ident not in compilers:
-            raise Held(
-                _cause(
-                    f"{label}.compiler", f"{label}.compiler: unknown compiler {ident}", owner="config", stage="config"
-                )
-            )
-        if ident == default_compiler and not flags_row:
-            raise Held(
-                _cause(
-                    f"{label}",
-                    f"{label}: equals the default compiler with no flags; remove the row",
-                    owner="config",
-                    stage="config",
-                )
-            )
-        units[unit] = ident
-        if flags_row:
-            unit_flags[unit] = flags_row
+                _cause("recipe.config", f"{path} [units].{unit}: {error}", owner="config", stage="config")
+            ) from error
+        units[unit] = recipe
     version_map = {}
     for v in versions:
         section = f"version.{v}"
@@ -630,8 +682,6 @@ def load(root: Path, *, text: str | None = None) -> Project:
                 )
             )
 
-    build = build_values(build, str(path))
-
     def flags(key: str) -> tuple[str, ...]:
         return _strings(value(build, "build", key), _label(path, "build", key))
 
@@ -651,7 +701,6 @@ def load(root: Path, *, text: str | None = None) -> Project:
         flags("cppflags"),
         flags("gnu_asflags"),
         _resident(path, build["resident_mappings"]) if "resident_mappings" in build else {},
-        unit_flags,
     )
 
 
@@ -692,7 +741,7 @@ HOST_KEYS: dict[str, dict[str, Kind]] = {
         "symbol_similarity_threshold": "fraction",
         "symbol_similarity_margin": "fraction",
     },
-    "search": {"stall_trials": "int", "beam": "int"},
+    "search": {"frontier": "int", "episode_recipes": "int", "episode_parents": "int"},
     # What a step chain may cost here (a project's .unbake/unbake.toml sets its own); over budget is a finding.
     "budgets": {
         "recompute_seconds": "int",
@@ -762,8 +811,6 @@ NEEDS: dict[str, tuple[str, ...]] = {
     "tidy": (*_RESOURCES, *_CACHE, "tools.cpp"),
     "search-variants": (
         *_COMPARE,
-        "search.stall_trials",
-        "search.beam",
         "tools.permuter_archive",
         "tools.permuter_sha256",
     ),
@@ -1026,8 +1073,13 @@ class Host:
     same_game_similarity = property(lambda self: self.get("setup.same_game_similarity"))
     symbol_similarity_threshold = property(lambda self: self.get("setup.symbol_similarity_threshold"))
     symbol_similarity_margin = property(lambda self: self.get("setup.symbol_similarity_margin"))
-    stall_trials = property(lambda self: self.get("search.stall_trials"))
-    search_beam = property(lambda self: self.get("search.beam"))
+    search_frontier = property(lambda self: self.get("search.frontier") if self.has("search.frontier") else 8)
+    episode_recipes = property(
+        lambda self: self.get("search.episode_recipes") if self.has("search.episode_recipes") else 8
+    )
+    episode_parents = property(
+        lambda self: self.get("search.episode_parents") if self.has("search.episode_parents") else 4
+    )
     cycle_min_bytes = property(lambda self: self.get("cycle.min_bytes"))
     cycle_max_bytes = property(lambda self: self.get("cycle.max_bytes"))
     cycle_min_history = property(lambda self: self.get("cycle.min_history"))

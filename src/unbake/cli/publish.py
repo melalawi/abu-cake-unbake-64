@@ -1,4 +1,4 @@
-"""publish: land exact functions or retain admitted fuzzy C through the same writer."""
+"""publish: land exact functions through the existing writer."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from unbake.cli.output import Result
 from unbake.process import named as cause_named
 
 NAME = "publish"
-HELP = "Publish exact FILEs or retain fuzzy C with --fuzzy."
+HELP = "Publish exact FILEs with current complete native proof."
 DESCRIPTION = """\
 Land each file whose function is exact in every version. For each one: build the ROM of every
 holding version with the new C, compare it with the original, and only then write src/FUNC.c,
@@ -41,13 +41,6 @@ function/version proofs before pushing. Use publish --push REMOTE without FILEs
 when retrying already committed work. An interrupted result has no final cause;
 its ready list remains eligible for retry.
 
---fuzzy retains source that passes source/ABI checks and compiles in every holding
-version, without a minimum matching percentage. Its body is guarded by NON_MATCHING;
-the default ROM build keeps the original assembly rows and exact progress does not
-increase. A later fuzzy source must have a higher measured, size-weighted score, or
-an equal score while removing committed source-rule violations and adding none.
-An unavailable comparison stays explicit and never authorizes replacement.
-
 An owning definition supplies its proposed entry contract during ordinary comparison.
 Publication adopts a changed contract only after the complete native target and
 current-consumer proofs succeed. Unsupported return/argument transport and
@@ -61,15 +54,26 @@ def READ_ONLY(args: argparse.Namespace) -> bool:
 
 
 def register(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--source-root",
+        action="append",
+        type=Path,
+        default=[],
+        help="Explicitly admit an external source/include root.",
+    )
+    parser.add_argument(
+        "--include-root",
+        action="append",
+        type=Path,
+        default=[],
+        help="Required include search root for this source scope.",
+    )
     parser.add_argument("files", type=Path, nargs="*", metavar="FILE")
     parser.add_argument("--compare", action="store_true", help="Measure each FILE before publication.")
     parser.add_argument(
         "--push", metavar="REMOTE", help="Rebase, reconcile affected proofs and push to the configured branch."
     )
     parser.add_argument("--events", action="store_true", help="Flush each commit receipt immediately as JSONL.")
-    parser.add_argument(
-        "--fuzzy", action="store_true", help="Retain admitted nonmatching C without changing default ROM bytes."
-    )
     parser.add_argument(
         "--require-version",
         action="append",
@@ -96,14 +100,20 @@ def run(context: Context) -> Result:
         if emitter is not None:
             emitter.emit("fn.committed", **record)
 
+    from unbake.work.source_scope import scoped_project
+
+    project = context.project()
+    for path in context.args.files:
+        project = scoped_project(
+            project, path.resolve(), tuple(context.args.source_root), tuple(context.args.include_root)
+        )
     done = land.publish(
-        context.project(),
+        project,
         context.require_host(),
         [path.resolve() for path in context.args.files],
         originals=tuple(context.args.original),
         required_versions=(tuple(context.args.require_version) if context.args.require_version is not None else None),
         on_commit=committed if emitter is not None else None,
-        **({"fuzzy": True} if context.args.fuzzy else {}),
         **({"compare_first": True} if getattr(context.args, "compare", False) else {}),
     )
     following = context.cmd("next")
@@ -116,8 +126,6 @@ def run(context: Context) -> Result:
                 words.extend(("--original", name))
         for version in context.args.require_version or ():
             words.extend(("--require-version", version))
-        if context.args.fuzzy:
-            words.append("--fuzzy")
         if getattr(context.args, "compare", False):
             words.append("--compare")
         if getattr(context.args, "push", None):

@@ -26,7 +26,7 @@ from unbake.config import Held, Host, Project
 from unbake.process import named as cause_named
 
 # Bump when the archive an extraction stores changes for the same inputs.
-EXTRACT_SCHEMA = 3
+EXTRACT_SCHEMA = 4
 
 _FINGERPRINT_PARTS = ("extract.py",)
 # A landed row (c, or hasm for original asm) goes back to asm for splat.
@@ -97,6 +97,51 @@ def function_symbols(path: Path) -> dict[int, str]:
     return found
 
 
+def storage_rows(text: str) -> str:
+    """Project-native producer segments are bounded storage to the extractor.
+
+    Splat must not decode a foreign processor at its storage VRAM. Native source,
+    execution mapping and producer metadata remain in the authoritative split.
+    """
+    from unbake.layout import split
+
+    _, lines, segments = split.parse_layout(Path("split"), text)
+    replacements: dict[int, str] = {}
+    removed: set[int] = set()
+    for segment in segments:
+        if split.plain(segment.fields.get("type", "")) != "resource":
+            continue
+        if segment.end is None or "start" not in segment.fields or not segment.rows:
+            raise Held(
+                cause_named(
+                    "extract.storage", "resource storage requires a bounded extent", owner="extract", stage="extract"
+                )
+            )
+        first = segment.rows[0].line
+        begin = next(index for index in range(first - 1, -1, -1) if re.match(r"^  - ", lines[index]))
+        stop = next((index for index in range(first + 1, len(lines)) if re.match(r"^  - ", lines[index])), len(lines))
+        start = split.number(segment.fields["start"], "resource storage start")
+        if start >= segment.end or any(row.kind != "resource" for row in segment.rows):
+            raise Held(
+                cause_named(
+                    "extract.storage",
+                    "resource storage has invalid extent or mixed processor rows",
+                    owner="extract",
+                    stage="extract",
+                )
+            )
+        name = split.plain(segment.fields.get("name", f"storage_{start:X}"))
+        if not re.fullmatch(r"[A-Za-z_]\w*", name):
+            raise Held(
+                cause_named(
+                    "extract.storage", "resource storage requires a stable asset name", owner="extract", stage="extract"
+                )
+            )
+        replacements[begin] = f"  - [0x{start:X}, bin, {name}]\n"
+        removed.update(range(begin + 1, stop))
+    return "".join(replacements.get(index, line) for index, line in enumerate(lines) if index not in removed)
+
+
 def splat_rows(project: Project, version: str) -> str:
     """The split splat extracts for VERSION (assembly_rows of the configured split and symbols)."""
     from unbake.cache import parsed
@@ -106,7 +151,7 @@ def splat_rows(project: Project, version: str) -> str:
     return parsed(
         "extract.splat_rows",
         (configured.split, configured.symbols),
-        lambda: assembly_rows(configured.split.read_text(), function_symbols(configured.symbols)),
+        lambda: assembly_rows(storage_rows(configured.split.read_text()), function_symbols(configured.symbols)),
     )
 
 
@@ -151,7 +196,6 @@ def _options(project: Project, version: str, staging: Path, symbols: Path) -> di
         "ld_legacy_generation": True,
         "create_asm_dependencies": False,
         "dump_symbols": True,
-        "extensions_path": str(project.tools / "splat_ext"),
         "compiler": _compiler_mode(project),
     }
 

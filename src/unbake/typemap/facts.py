@@ -30,6 +30,7 @@ from unbake import atomic as atomic_files
 from unbake import cache as retention
 from unbake import inputs, pool, tui
 from unbake.cache import Cache, key
+from unbake.compilers import drivers
 from unbake.config import Held, Host, Project
 from unbake.process import capture
 from unbake.process import named as cause_named
@@ -502,7 +503,7 @@ def source_facts(project: Project, policy: Host | None, output: Store, tasks: li
             # ABI/ISA and compiler pins remain part of the parse contract even when expansion bytes match.
             compiler = project.compiler_for(source.stem)
             parse_contract = key(
-                json.dumps([str(compiler.cc), compiler.cflags, project.unit_flags.get(source.stem, ())]),
+                drivers.resolved(project, version, source).digest,
                 inputs.digest(compiler.sha256, algorithm="sha256", reuse=retention.configured()),
             )
             identity = digest, parse_contract
@@ -521,7 +522,7 @@ def source_facts(project: Project, policy: Host | None, output: Store, tasks: li
             del text
         compiler = project.compiler_for(source.stem)
         parse_contract = key(
-            json.dumps([str(compiler.cc), compiler.cflags, project.unit_flags.get(source.stem, ())]),
+            drivers.resolved(project, version, source).digest,
             inputs.digest(compiler.sha256, algorithm="sha256", reuse=retention.configured()),
         )
         consumed_data, owned = units[digest, parse_contract]
@@ -633,9 +634,9 @@ def _source_tasks(
 
         compiler = project.compiler_for(source.stem)
         default = project.compilers[project.default_compiler]
-        unit_options, unit_codegen = drivers._options(list(project.unit_flags.get(source.stem, ())))
+        recipe = drivers.resolved(project, version, source)
         baseline, _ = drivers.stage_flags(default.id, list(default.cflags))
-        effective, _ = drivers.stage_flags(compiler.id, [*compiler.cflags, *unit_options, *unit_codegen])
+        effective, _ = drivers.stage_flags(compiler.id, [*recipe.phase("preprocess"), *recipe.phase("compile")])
         if compiler.cc != default.cc or effective != baseline:
             return None  # Header parts parsed in a different macro/language contract cannot be substituted.
     placeholder = _provenance(project, _FUNCTION, _VERSION, source)

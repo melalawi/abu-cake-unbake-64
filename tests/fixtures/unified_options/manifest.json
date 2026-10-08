@@ -1,0 +1,153 @@
+{
+  "schema": 1,
+  "payloads": [
+    {
+      "path": "bt-target.bin.gz",
+      "source": "bt-creative-800B1520/evidence/baseline/target.bin",
+      "sha256": "d210d533d64c8a00b0c27008332c35693bca1d7c416cbca44b45e2d86b022a93",
+      "bytes": 28652,
+      "evidence_class": "retained historical input; replay is not new native proof"
+    },
+    {
+      "path": "bt-baseline.bin.gz",
+      "source": "bt-creative-800B1520/evidence/baseline/candidate.bin",
+      "sha256": "0d94883c7e243d023deea6db3d557470f5bdb23a82fc54b46a1cadd6879868f5",
+      "bytes": 28652,
+      "evidence_class": "retained historical input; replay is not new native proof"
+    },
+    {
+      "path": "bt-split.bin.gz",
+      "source": "bt-creative-800B1520/evidence/split_delta/candidate.bin",
+      "sha256": "55edf7d3f9beb0bcd83e2801d19de547604954c58fb730279edb2b7af1fdff75",
+      "bytes": 28652,
+      "evidence_class": "retained historical input; replay is not new native proof"
+    },
+    {
+      "path": "bt-baseline.c.gz",
+      "source": "bt-creative-800B1520/evidence/baseline/source.c",
+      "sha256": "1fb6d9a8b98801fae70d26140de6b7dad48b52abf02ed97a1892730a62204883",
+      "bytes": 39241,
+      "evidence_class": "retained historical input; replay is not new native proof"
+    },
+    {
+      "path": "bt-exact.bin.gz",
+      "source": "bt-outside-box-800B1520/experiments/compose_text_full_duplicate_split_G8/linked.bin",
+      "sha256": "d210d533d64c8a00b0c27008332c35693bca1d7c416cbca44b45e2d86b022a93",
+      "bytes": 28652,
+      "evidence_class": "retained historical input; replay is not new native proof"
+    },
+    {
+      "path": "bt-exact.i.gz",
+      "source": "bt-outside-box-800B1520/experiments/compose_text_full_duplicate_split_G8/input.i",
+      "sha256": "3936de4b43b6a03fde1add69a1434604666e73fb1451ef45464b4ea0b4d43d9b",
+      "bytes": 43527,
+      "evidence_class": "retained historical input; replay is not new native proof"
+    },
+    {
+      "path": "bt-exact.o.gz",
+      "source": "bt-outside-box-800B1520/experiments/compose_text_full_duplicate_split_G8/func_800B1520_us.o",
+      "sha256": "eb94240d18201d13ea7c7f1d573949cc41941a62d67f69ba8bd3165de5246853",
+      "bytes": 58924,
+      "evidence_class": "retained historical input; replay is not new native proof"
+    },
+    {
+      "path": "bt-exact-commands.log.gz",
+      "source": "bt-outside-box-800B1520/experiments/compose_text_full_duplicate_split_G8/commands.log",
+      "sha256": "cbfe710dddc2c908eb5cbc723815064b2d4bb3af99f27b6774e8209e1ca1473a",
+      "bytes": 725,
+      "evidence_class": "retained historical input; replay is not new native proof"
+    },
+    {
+      "path": "bt-tail.bin.gz",
+      "source": "bt-outside-box-800B1520/experiments/compose_text_full_duplicate_G8/linked.bin",
+      "sha256": "db562ee0d4a6b2a17315125cebd8b5033c6d326d7b439428fbc6dafd305e0da0",
+      "bytes": 28660,
+      "evidence_class": "retained historical input; replay is not new native proof"
+    },
+    {
+      "path": "rw-original.Makefile.gz",
+      "source": "rw-data-evidence/provenance/pre-generated/Makefile",
+      "sha256": "329bd96fee40df88f6a10e52209056df61d5081aa2cd030f10455f44b2b3bd1c",
+      "bytes": 20385,
+      "evidence_class": "retained historical input; replay is not new native proof"
+    },
+    {
+      "path": "rw-refresh.Makefile.gz",
+      "source": "rw-data-evidence/publication-held-records10/Makefile",
+      "sha256": "c71af027ba173528127d6d400dc413d2bd7e1bedcecba7a3a372b6735a956122",
+      "bytes": 21333,
+      "evidence_class": "retained historical input; replay is not new native proof"
+    },
+    {
+      "path": "rw-recipe-equivalence.json.gz",
+      "source": "rw-data-evidence/GENERATED-CLOSURE-REFRESH.json",
+      "sha256": "9defa052e8adb6a4dc97e2e3bbbd4334e9d1fa76103260016a982f9ed5107c0c",
+      "bytes": 1467,
+      "evidence_class": "retained historical input; replay is not new native proof"
+    },
+    {
+      "path": "RW-AUDIT-INPUT.md.gz",
+      "source": "tool-impl-unified-astra/RW-AUDIT-INPUT.md",
+      "sha256": "4ab60877960a98892bb682ff55c641f3ce6d9fb068d4cb68e256cc482b70cc20",
+      "bytes": 3366,
+      "evidence_class": "retained historical input; replay is not new native proof"
+    },
+    {
+      "path": "bt-baseline.i.gz",
+      "source": "bt-outside-box-800B1520/experiments/smallG4/input.i",
+      "sha256": "e50b2dddc2fe24df472042debd0fd3b89eb793e9cbb60155c7cbc57758d88490",
+      "bytes": 43434,
+      "evidence_class": "retained historical input; replay is not new native proof"
+    },
+    {
+      "path": "bt-g8.bin.gz",
+      "source": "bt-outside-box-800B1520/experiments/smallG8/linked.bin",
+      "sha256": "0c519236a825603275b94d33f291373906ff20ef35d44e2af4f47241c6506b8c",
+      "bytes": 28652,
+      "evidence_class": "retained historical input; replay is not new native proof"
+    },
+    {
+      "path": "bt-local-g8.bin.gz",
+      "source": "bt-outside-box-800B1520/experiments/compose_local_delta_G8/linked.bin",
+      "sha256": "3196dd4bdd75de625ad37c691af8b10180177b83983de297cbd754bc3261a196",
+      "bytes": 28652,
+      "evidence_class": "retained historical input; replay is not new native proof"
+    },
+    {
+      "path": "rw-plateau.c.gz",
+      "source": "rw-compiler-7dd48/probes/continuation-late-store-baseline-entry/func_8027DD48_de.c",
+      "sha256": "9af0bacdd653fd6eb95d03b16422b989b3380cac35faa77275e9caceeb365621",
+      "bytes": 11202,
+      "evidence_class": "retained historical input; replay is not new native proof"
+    },
+    {
+      "path": "rw-target.bin.gz",
+      "source": "rw-compiler-7dd48/probes/continuation-late-store-baseline-entry/original.bin",
+      "sha256": "dd6a034fd172d69fb5c435d22da4c116a9a4548447921468d25842267eb79627",
+      "bytes": 2620,
+      "evidence_class": "retained historical input; replay is not new native proof"
+    },
+    {
+      "path": "rw-plateau.bin.gz",
+      "source": "rw-compiler-7dd48/probes/continuation-late-store-baseline-entry/linked.bin",
+      "sha256": "ce7517c70f1320bc360afd7cf504eb0784dadf96ba7ff4808099d2c89063de20",
+      "bytes": 2620,
+      "evidence_class": "retained historical input; replay is not new native proof"
+    },
+    {
+      "path": "rw-plateau-result.json.gz",
+      "source": "rw-compiler-7dd48/probes/continuation-late-store-baseline-entry/result.json",
+      "sha256": "f0afbafc04d97bf78ae1fea0fadbbf13eeec465e8accd2cd4c3225d307dd81d2",
+      "bytes": 3656,
+      "evidence_class": "retained historical input; replay is not new native proof"
+    },
+    {
+      "path": "rw-plateau.i.gz",
+      "source": "rw-compiler-7dd48/probes/continuation-late-store-baseline-entry/compiled.i",
+      "sha256": "db0a2e6cacaef40622b5c1281fab623e98d73a0c812623ce55799c3e670193fe",
+      "bytes": 309437,
+      "evidence_class": "retained historical input; replay is not new native proof"
+    }
+  ],
+  "counterfactuals": "Named mutations in tests are counterfactual inputs, never native success."
+}

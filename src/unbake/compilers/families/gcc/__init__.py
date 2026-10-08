@@ -26,8 +26,28 @@ if TYPE_CHECKING:
 
 
 class Gcc:
+    def option_space(self, spec: CompilerSpec) -> Any:
+        from unbake.compilers.options import option_space
+
+        return option_space(spec)
+
+    def validate_options(self, recipe: Any, baseline: tuple[str, ...] | None = None) -> None:
+        from unbake.compilers.options import validate_options
+        from unbake.compilers.registry import specification
+
+        validate_options(recipe, specification(recipe.compiler), self.accepts_codegen, baseline)
+
+    def capability_probe(self, request: Any) -> Any:
+        # Transport belongs to the existing native boundary; no implicit jobs.
+        return request()
+
+    def observe(self, capture: Any) -> Any:
+        return self.compiler_facts(capture.get("dumps", {}), capture.get("candidate", ()), capture.get("expanded", ""))
+
     def preprocessed(self, result: NativeResult) -> str:
-        return result.stdout
+        from unbake.compilers.compiler_contracts import validate_preprocessed
+
+        return validate_preprocessed(result.stdout, result.stderr, result.exit, "gcc-1")
 
     def diagnose(self, result: Any, context: Any) -> Any | None:
         return None
@@ -68,7 +88,7 @@ class Gcc:
         )
 
     def assembler_release(self) -> str | None:
-        return "n64link 0.3.1 (SN ASN64 2.81 rules)\n"
+        return "n64link 0.3.2 (SN ASN64 2.81 rules)\n"
 
     def dependency_command(self, command: list[str]) -> list[str]:
         command = [word for word in command if word not in ("-E", "-P")]

@@ -14,6 +14,9 @@ from unbake.process import named as cause_named
 from unbake.search.core import Context, Mutation
 from unbake.work.compare import Compared
 
+needs_preprocess = True
+needs_allocation = True
+
 
 @dataclass(frozen=True)
 class Local:

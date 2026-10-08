@@ -17,7 +17,7 @@ from unbake.config import Held
 UNAVAILABLE = "unavailable"
 _REG = r"\(reg(?:/[a-z]+)*:([A-Z]+) (\d+)(?: [^()]+)?\)"
 _START = re.compile(
-    r'\((?:insn|jump_insn|call_insn)(?:/[a-z]+)*(?::\w+)?\s+(\d+)\b|\(note\s+\d+[^\n]*?\("[^"\n]+"\)\s+(\d+)\)'
+    r'\((?:insn|jump_insn|call_insn|code_label|barrier)(?:/[a-z]+)*(?::\w+)?\s+(\d+)\b|\(note\s+\d+[^\n]*?\("[^"\n]+"\)\s+(\d+)\)'
 )
 
 
@@ -62,6 +62,7 @@ def records(text: str) -> list[dict[str, Any]]:
         result.append(
             {
                 "uid": int(match[1]),
+                "kind": rtl[1:].split()[0].split(":")[0].split("/")[0],
                 "rtl": rtl,
                 "source_line": line,
                 "registers": sorted({number for _, number in regs}),
@@ -151,6 +152,8 @@ def decisions(dumps: Mapping[str, str], candidate: tuple[int, ...], expanded: st
                     "priority": printed_priorities.get(p.number, UNAVAILABLE),
                     "hard_conflicts": [n for n in p.conflicts if n < 72] if p.number in conflict_rows else UNAVAILABLE,
                     "allocator": p.allocator,
+                    "live_range": p.live_range,
+                    "source_lines": p.source_lines,
                 }
             )
     early = records(dumps.get("sched", "") or dumps.get("lreg", ""))
@@ -229,7 +232,10 @@ def decisions(dumps: Mapping[str, str], candidate: tuple[int, ...], expanded: st
                 )
     if not schedule:
         limitations.append("scheduler ready lists unavailable")
+    from unbake.compilers.families.gcc.lineage import lineage
+
     return {
+        "lineage": lineage(dumps, instructions),
         "available": bool(pseudos or schedule),
         "family": "gcc",
         "pseudos": pseudos,

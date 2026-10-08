@@ -57,7 +57,9 @@ def _comment(line: str) -> bool:
 
 def verify_compiler(project: Project) -> None:
     for ident in project.compilers:
-        toolchain.verify(project.tools / ident, toolchain.specification(ident))
+        toolchain.verify(
+            toolchain.compiler_directory(project.tools, toolchain.specification(ident)), toolchain.specification(ident)
+        )
 
 
 def restore_roms(project: Project, source: Path) -> None:

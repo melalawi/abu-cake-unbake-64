@@ -62,6 +62,19 @@ A function that is exact in every version lands at once with a ROM proof and a c
 Run `unbake next` for the next step and `unbake --help` for every verb.
 Every command prints one JSON object on stdout. Human text goes to stderr.
 
+`compare FILE --flags` and a plateau in `search-variants FILE --method auto`
+use the same measured source × recipe frontier. Option episodes contain at most
+eight effective recipes crossed with four retained source parents. Saved sources,
+recipes, native refusals and next commands remain available under `build/work`.
+External source/include inputs require explicit roots. Advisory subsystem hints
+read retained facts and launch no native jobs or type solve.
+
+Config schema 2 stores phase options by canonical translation-unit path. For an
+existing project, use `migrate-state --plan`, review the complete plan, then
+`migrate-state --apply PLAN` before normal work. See
+[compiler ownership](docs/compiler-families.md) and
+[publication](docs/publication.md) for the recipe and proof contracts.
+
 ## Build without unbake
 
 ```sh

@@ -7,6 +7,7 @@ from unittest import mock
 from tests import project_fixture
 from tests.project_fixture import ProjectCase
 from unbake import buildfiles, config
+from unbake.compilers.recipe_options import PHASES, UnitRecipe
 
 ROWS = {"alpha": 0x40, "beta": 0x4C, "gamma": 0x58}
 ROM_END = 0x64
@@ -51,11 +52,19 @@ class BuildfileTests(ProjectCase):
         plain = buildfiles.units_mk(config.load(self.project.root))
         self.assertIn("alpha.key", plain)
         self.assertIn("PREPROCESS_FLAGS", plain)
-        flagged = buildfiles.units_mk(replace(config.load(self.project.root), unit_flags={"alpha": ("-O1",)}))
-        self.assertIn(
-            "build/%/src/alpha.key build/%/units/alpha.bin build/%/data/alpha.bin: UNIT_CODEGEN := -O1", flagged
+        flagged = buildfiles.units_mk(
+            replace(
+                config.load(self.project.root),
+                units={
+                    "src/alpha.c": UnitRecipe("ido-7.1", tuple((p, ("-O1",) if p == "compile" else ()) for p in PHASES))
+                },
+            )
         )
-        self.assertNotIn("beta.bin: UNIT_CODEGEN", flagged)
+        codegen = next(line for line in flagged.splitlines() if "alpha.key" in line and ": CODEGEN :=" in line)
+        self.assertIn("-O1", codegen)
+        self.assertNotIn("-O2", codegen)
+        beta = next(line for line in flagged.splitlines() if "beta.key" in line and ": CODEGEN :=" in line)
+        self.assertIn("-O2", beta)
 
     def test_makefile_builds_every_version_in_one_graph(self) -> None:
         for versions in (("us",), ("us", "eu", "eu-x", "de", "us-rev1")):
@@ -91,7 +100,9 @@ class BuildfileTests(ProjectCase):
         self.assertIn("read key < $< && $(N64LINK) place build/cas/$$key.o", link.replace("\\\n  ", ""))
         self.assertIn("$(LINK_BIN)", link)
         self.assertIn("--oformat binary -o $@", text[text.index("LINK_BIN =") : text.index("UNIT_BIN =")])
-        self.assertIn("build/$1/src/%.i: src/%.c Makefile units.mk | verify build/$1/src build/cas\n", text)
+        self.assertIn(
+            "build/$1/src/%.i: src/%.c Makefile units.mk tools/compiler_contracts.py tools/recipe_options.py", text
+        )
 
     def test_preprocess_writes_dependencies_in_one_cpp_pass(self) -> None:
         for kind, depend_pass in (("gnu", False), ("ido", True)):
@@ -104,7 +115,8 @@ class BuildfileTests(ProjectCase):
                     self.assertNotIn("$(CPP)", preprocess)
                 else:
                     self.assertIn("-MP -MT $(@D)/$(*F).i -MF $(@D)/$(*F).d", preprocess)
-                self.assertTrue(preprocess.endswith("> $(@D)/$(*F).i"))
+                self.assertIn("tools/compiler_contracts.py --contract", preprocess)
+                self.assertIn("--output $(@D)/$(*F).i", preprocess)
 
     def test_flags_with_shell_characters_are_refused(self) -> None:
         with self.assertRaisesRegex(config.Held, "buildfiles.flag"):

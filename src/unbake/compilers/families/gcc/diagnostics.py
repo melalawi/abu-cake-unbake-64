@@ -95,7 +95,6 @@ def diagnostic_input(
     """The exact GCC input of the unit (NON_MATCHING defined), optionally with source line directives."""
     from unbake.compilers import drivers
     from unbake.decomp.explain import _absolute_includes
-    from unbake.process import run_tool
 
     compiler = project.compiler_for(source.stem)
     flags = _absolute_includes(project, drivers.flags(project, version, source.stem))
@@ -103,10 +102,11 @@ def diagnostic_input(
     command = drivers.preprocess_command(
         project, str(policy.cpp), version, source.stem, source, non_matching=True, line_markers=preserve_lines
     )
-    expanded = run_tool(
+    expanded = drivers.run_preprocess(
+        project,
         command,
-        project.root,
-        "explain",
+        "preprocess",
+        unit=source,
         temporary_root=project.build,
         context={"source": str(source), "version": version},
     )
@@ -116,38 +116,45 @@ def diagnostic_input(
 
 
 def collect_allocation(project: Project, policy: Host, source: Path, version: str, work: Path) -> Allocation:
+    import hashlib
+
+    from unbake import runner
+    from unbake.compilers import drivers
     from unbake.compilers.families.gcc import Gcc
     from unbake.process import run_tool
+    from unbake.work.compare import row_of
+    from unbake.work.score import words
 
     family = Gcc()
-    expanded, codeflags = diagnostic_input(project, policy, source, version, work, preserve_lines=False)
-    input_path = work / "source.i"
-    atomic_files.text(input_path, expanded)
-    run_tool(
-        [
-            str(project.compiler_for(source).cc),
-            *codeflags,
-            *family.dump_flags(),
-            "-g",
-            str(input_path),
-            "-o",
-            str(work / "source.s"),
-        ],
-        work,
-        "explain",
+    expanded, _ = diagnostic_input(project, policy, source, version, work, preserve_lines=False)
+    name = source.stem
+    commands = drivers.steps(project, version, source, str(source), runner.tools(policy), non_matching=True)
+    atomic_files.text(work / (name + ".i"), expanded)
+    run_tool([str(project.compiler_for(source).cc), *family.dump_flags(), *commands.compile[1:]], work, "compile")
+    if commands.assemble:
+        run_tool(list(commands.assemble), work, "compile")
+    linked, problems = runner.link_function(
+        project, policy, work / (name + ".o"), version, row_of(project, name, version), source
     )
-    dumps = {}
-    for suffix in ("lreg", "greg", "lalloc", "galloc"):
-        paths = sorted(work.glob("*." + suffix))
-        if paths:
-            dumps[suffix] = "\n".join(function_dump(p.read_text(), source.stem) for p in paths)
-    result = family.allocation(dumps)
-    if "lreg" not in dumps:
+    if problems:
         raise Held(
             cause_named(
-                "dumps.lreg", "dumps.lreg: missing value", owner="compilers.families.gcc.diagnostics", stage="explain"
+                "diagnostic.placement", "; ".join(problems), owner="compilers.families.gcc.diagnostics", stage="explain"
             )
         )
+    dumps = {}
+    for suffix in ("rtl", "lreg", "greg", "lalloc", "galloc", "combine", "jump", "jump2", "sched", "sched2", "dbr"):
+        paths = sorted(work.glob("*." + suffix))
+        if paths:
+            dumps[suffix] = "\n".join(function_dump(path.read_text(), source.stem) for path in paths)
+    result = family.allocation(dumps)
+    parsed = family.compiler_facts(dumps, words(linked), expanded, name)
+    origins = tuple(
+        (offset, row["uid"], tuple(row["registers"]))
+        for row in parsed["instructions"].values()
+        for offset in row["candidate_offsets"]
+    )
+    result = replace(result, instruction_origins=origins, linked_sha256=hashlib.sha256(linked).hexdigest())
     return annotate(result, dumps["lreg"], source.read_text(), expanded)
 
 

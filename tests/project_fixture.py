@@ -10,6 +10,7 @@ from pathlib import Path
 
 from tests.kit import TempCase, host_values
 from unbake import config
+from unbake.compilers.registry import compiler_directory, specification
 from unbake.config import Host, Project
 from unbake.layout import map as ownership
 
@@ -28,11 +29,13 @@ def make(directory: Path, words: list[int] | None = None, versions: tuple[str, .
     words = [0x24020001, 0x03E00008, 0] if words is None else words
     bodies = {"alpha": words, "beta": [0x24020002, 0x03E00008, 0], "gamma": [0x24020003, 0x03E00008, 0]}
     root = directory / "project"
-    for relative in ("src", "include", "roms", "tools/ido-7.1", "build"):
+    for relative in ("src", "include", "roms", "build"):
         (root / relative).mkdir(parents=True, exist_ok=True)
     (root / "include" / "types.h").write_text("typedef int s32;\n")
+    compiler = compiler_directory(root / "tools", specification("ido-7.1"))
+    compiler.mkdir(parents=True)
     for name in ("cc", "as"):
-        (root / "tools/ido-7.1" / name).write_bytes(b"fixture " + name.encode())
+        (compiler / name).write_bytes(b"fixture " + name.encode())
     (root / "tools/compilers.sha256").write_text("")
     version_rows = []
     for v in versions:
@@ -67,12 +70,12 @@ def make(directory: Path, words: list[int] | None = None, versions: tuple[str, .
             f'macros = ["VERSION_{v.upper().replace("-", "_")}"]\n\n'
         )
     (root / "config.toml").write_text(
-        "schema = 1\n\n[project]\nlayout_cap = 2\n"
+        "schema = 2\n\n[project]\nlayout_cap = 2\n"
         'id = "00000000-0000-4000-8000-000000000001"\nstate = "ready"\nname = "fixture"\ntitle = "Fixture"\n'
         f'names_from = "{versions[0]}"\nversions = {list(versions)!r}\ndefault_compiler = "ido-7.1"\n\n'
         + "".join(version_rows)
         + '[compilers."ido-7.1"]\ncflags = ["-O2", "-G0", "-mips2"]\n\n[units]\n\n'
-        '[build]\nasflags = ["-EB", "-mips2", "-G0"]\ncppflags = []\nsn64_asflags = []\n'
+        '[build]\nasflags = ["-EB", "-mips2", "-G0"]\ncppflags = []\ngnu_asflags = []\n'
     )
     (root / "layout.toml").write_bytes(
         ownership.encoded(ownership.Map(2, tuple(ownership.Group(n, "main", "default", (n,)) for n in FUNCTIONS)))

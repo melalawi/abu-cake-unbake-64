@@ -1,27 +1,23 @@
-"""Measured source search with a content cache and bounded beam."""
+"""Measured source and recipe frontier with finite option episodes."""
 
 from __future__ import annotations
 
-import hashlib
 import json
 import math
 import re
-import subprocess
 import time
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
 
 from unbake import atomic as atomic_files
-from unbake import tui
 from unbake.compilers.families.types import Allocation
-from unbake.compilers.ranking import measured_candidate_rank
 from unbake.config import Held, Host, Project
 from unbake.decomp import explain
-from unbake.process import capture, read_text, temporary_environment
 from unbake.process import named as cause_named
-from unbake.work.compare import Compared, measure
+from unbake.process import read_text
+from unbake.work.compare import Compared
 
 
 @dataclass(frozen=True)
@@ -54,17 +50,9 @@ class SearchResult:
     trials: int
     steps: Path
     skips: tuple[dict[str, str], ...] = ()
-
-
-@dataclass(frozen=True)
-class _Candidate:
-    source: str
-    path: Path
-    trial: Compared
-
-    @property
-    def rank(self) -> tuple[bool, int, int, float]:
-        return measured_candidate_rank(self.trial.compares, self.trial.best_percent)
+    stop_reason: str = "finite_plan"
+    frontier: tuple[dict[str, Any], ...] = ()
+    telemetry: dict[str, Any] = field(default_factory=dict)
 
 
 def _positive(policy: Host, name: str) -> int:
@@ -93,46 +81,10 @@ def preprocess(project: Project, policy: Host, source: Path, version: str, deadl
                 stage="search",
             )
         )
-    try:
-        result = subprocess.run(
-            command,
-            cwd=project.root,
-            env=temporary_environment(project.build),
-            capture_output=True,
-            text=True,
-            timeout=remaining,
-        )
-    except subprocess.TimeoutExpired as error:
-        raise Held(
-            capture(
-                error,
-                cause=cause_named(
-                    "context.deadline",
-                    "context.deadline: preprocessing budget exhausted",
-                    owner="search.core",
-                    stage="search",
-                ),
-            )
-        ) from error
-    except OSError as error:
-        raise Held(
-            capture(
-                error,
-                cause=cause_named(
-                    "search.core.preprocess", f"preprocessor {command[0]}: {error}", owner="search.core", stage="search"
-                ),
-            )
-        ) from error
-    if result.returncode:
-        raise Held(
-            cause_named(
-                "search.core.preprocess",
-                f"preprocessor {command[0]} exited {result.returncode}: {result.stderr.strip()}",
-                owner="search.core",
-                stage="search",
-            )
-        )
-    expanded = re.sub(r"^\s*#\s*(?:line\s+)?\d+[^\n]*", "", result.stdout, flags=re.M)
+    output = drivers.run_preprocess(
+        project, command, "preprocess", unit=source, context={"source": str(source), "version": version}
+    )
+    expanded = re.sub(r"^\s*#\s*(?:line\s+)?\d+[^\n]*", "", output, flags=re.M)
     # Preprocessors discard comments; retain explicit source evidence in mutations.
     comments = re.findall(r'/\*.*?\*/|//[^\n]*|"(?:\\.|[^"\\])*"', source.read_text(), re.S)
     markers = [comment for comment in comments if comment.startswith("/") and "FAKEMATCH:" in comment]
@@ -148,253 +100,187 @@ def _focus_lines(allocation: Allocation, original: str, expanded: str) -> tuple[
 
 
 def run(
-    project: Project, policy: Host, source: Path, generators: Iterable[Generator], out: Path, budget_seconds: float
+    project: Project,
+    policy: Host,
+    source: Path,
+    generators: Iterable[Generator],
+    out: Path,
+    budget_seconds: float,
+    *,
+    external_roots: tuple[Path, ...] = (),
 ) -> SearchResult:
+    from unbake.compilers.recipe_options import recipe_digest
+    from unbake.search.frontier import coordinates
+    from unbake.search.pairs import Candidate, Pairs
     from unbake.search.permute import Permuter
+    from unbake.search.validate import validate_mutation
+    from unbake.work.source_scope import admit_source
 
-    width = _positive(policy, "search_beam")
-    stall_limit = _positive(policy, "stall_trials")
-    if (
-        isinstance(budget_seconds, bool)
-        or not isinstance(budget_seconds, (int, float))
-        or not math.isfinite(budget_seconds)
-        or budget_seconds <= 0
-    ):
+    width = _positive(policy, "search_frontier")
+    if width < 4:
         raise Held(
-            cause_named(
-                "budget_seconds", "budget_seconds: positive finite number required", owner="search.core", stage="search"
-            )
+            cause_named("search.frontier", "minimum frontier width is four", owner="search.core", stage="search")
+        )
+    if type(budget_seconds) not in (int, float) or not math.isfinite(budget_seconds) or budget_seconds <= 0:
+        raise Held(
+            cause_named("budget_seconds", "positive finite budget required", owner="search.core", stage="search")
         )
     generators = list(generators)
-    if not generators:
-        raise Held(cause_named("generators", "generators: missing value", owner="search.core", stage="search"))
-    for generator in generators:
-        if not callable(getattr(generator, "propose", None)):
-            raise Held(
-                cause_named(
-                    "search.core.run", f"generator {generator}: propose missing", owner="search.core", stage="search"
-                )
-            )
+    if not generators or any(not callable(getattr(g, "propose", None)) for g in generators):
+        raise Held(
+            cause_named("generators", "applicable source generators required", owner="search.core", stage="search")
+        )
     source = Path(source).resolve()
+    scope = admit_source(project, source, external_roots=external_roots)
     text = read_text(source, "search")
     out.mkdir(parents=True, exist_ok=True)
     steps = out / "steps.jsonl"
-    cache: dict[str, _Candidate | None] = {}
-    evaluated = 0
     deadline = time.monotonic() + budget_seconds
-    mutation_seconds = 0.0
-    prepared: dict[tuple[str, str], tuple[str, Allocation, tuple[int, ...]] | None] = {}
+    prepared: dict[tuple[str, str, str], tuple[str, Allocation, tuple[int, ...]] | None] = {}
     skips: list[dict[str, str]] = []
-    dump_prepared: set[str] = set()
+    episodes: set[str] = set()
 
-    def prepare(parent: _Candidate, generator: Generator, version: str, limit: float) -> None:
-        key = parent.trial.source_sha256, version
-        if getattr(generator, "needs_compiler_facts", False) and key[0] not in dump_prepared:
-            from unbake.work.compare_dump import collect
-            from unbake.work.compare_facts import attach
-
-            attach(project, parent.trial)
-            collect(project, policy, parent.trial)
-            dump_prepared.add(key[0])
-        if getattr(generator, "needs_compiler_facts", False):
-            if key not in prepared:
-                expanded = preprocess(project, policy, parent.path, version, limit)
-                prepared[key] = expanded, Allocation((), (), (), ()), ()
-            return
-        if key in prepared:
-            return
-        expanded = preprocess(project, policy, parent.path, version, limit)
-        try:
-            allocation = explain.allocation(project, policy, parent.path, version)
-        except Held as failure:
-            if not failure.key.startswith("dumps."):
-                raise
-            skip = {
-                "key": failure.key,
-                "reason": failure.reason,
-                "version": version,
-                "source_sha256": key[0],
-                "generator": getattr(generator, "name", type(generator).__name__),
-            }
-            skips.append(skip)
-            with atomic_files.stream(steps, "a", encoding="utf-8") as stream:
-                stream.write(json.dumps({**skip, "kind": "allocation.skip", "refusal": failure.reason}) + "\n")
-            prepared[key] = None
-        else:
-            prepared[key] = expanded, allocation, _focus_lines(allocation, parent.source, expanded)
-
-    def evaluate(
-        content: str, method: str, mutation: Mutation, version: str | None = None, incumbent: _Candidate | None = None
-    ) -> _Candidate | None:
-        nonlocal evaluated, mutation_seconds, deadline
-        digest = hashlib.sha256(content.encode()).hexdigest()
-        cached = digest in cache
-        error = None
-        measured_score: int | None = None
-        confirmed = False
-        if not cached:
-            started = time.monotonic()
-            evaluation_deadline = deadline
-            directory = out / digest
-            directory.mkdir(exist_ok=True)
-            path = directory / source.name
-            atomic_files.text(path, content, encoding="utf-8")
-            try:
-                result = (
-                    measure(project, policy, path)
-                    if version is None
-                    else measure(project, policy, path, versions=(version,))
-                )
-            except Held as failure:
-                error = failure.reason
-                cache[digest] = None
-            else:
-                if not result.compares:
-                    raise Held(
-                        cause_named(
-                            "trial.compares", "trial.compares: missing VERSION", owner="search.core", stage="search"
-                        )
-                    )
-                measured_score = min(
-                    (c.identical_words for c in result.compares.values() if c.identical_words is not None), default=None
-                )
-                cache[digest] = None
-                if version is None or (
-                    incumbent is not None
-                    and measured_candidate_rank(result.compares)
-                    < measured_candidate_rank({version: incumbent.trial.compares[version]})
-                ):
-                    if version is not None:
-                        confirmation_started = time.monotonic()
-                        try:
-                            result = measure(project, policy, path)
-                        except Held as failure:
-                            error = failure.reason
-                        else:
-                            confirmed = True
-                        deadline += time.monotonic() - confirmation_started
-                    else:
-                        confirmed = True
-                    if confirmed:
-                        cache[digest] = _Candidate(content, path, result)
-            evaluated += 1
-            if version is not None:
-                mutation_seconds = max(mutation_seconds, time.monotonic() - started - (deadline - evaluation_deadline))
-        candidate = cache[digest]
-        row = {
-            "generator": method,
-            "mutation": mutation.description,
-            "kind": mutation.kind,
-            "score": min(
-                (c.identical_words for c in candidate.trial.compares.values() if c.identical_words is not None),
-                default=None,
-            )
-            if candidate
-            else measured_score,
-            "versions": list(candidate.trial.compares) if candidate else ([version] if version else []),
-            "confirmed": confirmed or (cached and candidate is not None),
-            "fuzzy": candidate.trial.best_percent if candidate else None,
-            "source_sha256": digest,
-            "cached": cached,
-            "refusal": error,
-        }
+    def write(row: dict[str, Any]) -> None:
         with atomic_files.stream(steps, "a", encoding="utf-8") as stream:
             stream.write(json.dumps(row, sort_keys=True, allow_nan=False) + "\n")
-        return candidate
 
-    initial = evaluate(text, "initial", Mutation("initial", "starting source", text))
+    pairs = Pairs(project, policy, scope, write)
+    counters = pairs.counters
+    evaluate = pairs.evaluate
+
+    def prepare(
+        parent: Candidate, generator: Generator, version: str
+    ) -> tuple[str, Allocation, tuple[int, ...]] | None:
+        mode = (
+            "facts"
+            if getattr(generator, "needs_compiler_facts", False)
+            else "allocation"
+            if getattr(generator, "needs_allocation", False)
+            else "preprocess"
+            if getattr(generator, "needs_preprocess", False)
+            else "source"
+        )
+        key = parent.identity, version, mode
+        if key not in prepared:
+            try:
+                expanded = (
+                    preprocess(parent.project, policy, parent.path, version, deadline)
+                    if mode != "source"
+                    else parent.source
+                )
+                allocation = Allocation((), (), (), ())
+                if mode == "allocation":
+                    allocation = explain.allocation(parent.project, policy, parent.path, version)
+                if mode == "facts":
+                    from unbake.work.compare_dump import collect
+                    from unbake.work.compare_facts import attach
+
+                    attach(parent.project, parent.trial)
+                    collect(parent.project, policy, parent.trial)
+                prepared[key] = expanded, allocation, _focus_lines(allocation, parent.source, expanded)
+            except Held as failure:
+                row = {"key": failure.key, "reason": failure.reason, "version": version, "identity": parent.identity}
+                skips.append(row)
+                write({"kind": "preparation.refusal", **row})
+                prepared[key] = None
+        return prepared[key]
+
+    initial = evaluate(text, "baseline", "starting source and recipe", project)
     if initial is None:
         raise Held(
-            cause_named(
-                "search.core.run",
-                f"source {source}: initial trial failed; see {steps}",
-                owner="search.core",
-                stage="search",
-            )
+            cause_named("search.initial", f"initial trial failed; see {steps}", owner="search.core", stage="search")
         )
-    best = initial
-    # Baseline and initial compiler context are setup, outside the mutation budget.
-    representative = min(best.trial.compares, key=lambda v: (best.trial.compares[v].identical_words, v))
-    for generator in generators:
-        version = generator.version if isinstance(generator, Permuter) else representative
-        prepare(best, generator, version, time.monotonic() + budget_seconds)
-    deadline = time.monotonic() + budget_seconds
-    beam = [best]
-    stalls = 0
-    while time.monotonic() < deadline and not best.trial.identical_everywhere:
-        pool = {item.trial.source_sha256: item for item in beam}
-        fresh = False
-        previous = best.rank
-        for parent in beam:
-            generator_deadline = deadline - mutation_seconds
-            if time.monotonic() >= generator_deadline:
-                break
-            parent_digest = parent.trial.source_sha256
+    best, active = initial, [initial]
+    stop_reason = "finite_plan"
+    visited: set[tuple[str, str]] = set()
+    while time.monotonic() < deadline and not best.trial.exact:
+        prior = {row.identity for row in active}
+        for parent in tuple(active):
+            representative = min(
+                parent.trial.compares, key=lambda v: (parent.trial.compares[v].identical_words or 0, v)
+            )
             for generator in generators:
-                generator_deadline = deadline - mutation_seconds
-                if time.monotonic() >= generator_deadline:
+                method = getattr(generator, "name", type(generator).__name__)
+                route = parent.identity, method
+                if route in visited:
+                    continue
+                if time.monotonic() >= deadline:
                     break
+                visited.add(route)
                 version = generator.version if isinstance(generator, Permuter) else representative
-                key = parent_digest, version
-                prepare(parent, generator, version, generator_deadline)
-                preparation = prepared[key]
+                preparation = prepare(parent, generator, version)
                 if preparation is None:
                     continue
                 expanded, allocation, focus_lines = preparation
                 context = Context(
-                    project,
+                    parent.project,
                     policy,
                     out,
                     parent.path,
                     allocation,
                     focus_lines,
-                    generator_deadline,
+                    deadline,
                     parent.trial.facts.get(version) if getattr(generator, "needs_compiler_facts", False) else None,
                 )
-                method = getattr(generator, "name", type(generator).__name__)
-                proposals = iter(generator.propose(expanded, parent.trial, context))
-                while time.monotonic() < deadline - mutation_seconds:
-                    try:
-                        mutation = next(proposals)
-                    except StopIteration:
-                        break
-                    if time.monotonic() >= deadline:
-                        break
-                    if not isinstance(mutation, Mutation) or not isinstance(mutation.source, str):
-                        raise Held(
-                            cause_named(
-                                "search.core.run",
-                                f"generator {method}.mutation: Mutation with source text required",
-                                owner="search.core",
-                                stage="search",
-                            )
-                        )
-                    digest = hashlib.sha256(mutation.source.encode()).hexdigest()
-                    fresh |= digest not in cache
-                    candidate = evaluate(mutation.source, method, mutation, version, best)
-                    if candidate:
-                        pool[digest] = candidate
-                        if candidate.rank < best.rank:
-                            best = candidate
-                        if best.trial.identical_everywhere:
+                try:
+                    for mutation in generator.propose(expanded, parent.trial, context):
+                        if time.monotonic() >= deadline:
                             break
-                if best.trial.identical_everywhere or time.monotonic() >= deadline - mutation_seconds:
+                        try:
+                            content = validate_mutation(parent.source, mutation.source, scope.subject)
+                        except ValueError as error:
+                            write({"kind": "mutation.refusal", "method": method, "reason": str(error)})
+                            continue
+                        kind = (
+                            "composition"
+                            if {parent.kind, mutation.kind} == {"conversion-scope", "tail-duplicate"}
+                            else mutation.kind
+                        )
+                        candidate = evaluate(content, kind, mutation.description, parent.project)
+                        if candidate is not None and candidate.rank < best.rank:
+                            best = candidate
+                        if best.trial.exact:
+                            break
+                except Held as failure:
+                    skips.append({"key": failure.key, "reason": failure.reason, "generator": method})
+                if best.trial.exact:
                     break
-            if best.trial.identical_everywhere or time.monotonic() >= deadline - mutation_seconds:
+            if best.trial.exact:
                 break
-        beam = sorted(pool.values(), key=lambda item: item.rank)[:width]
-        stalls = 0 if best.rank < previous else stalls + 1
-        if stalls >= stall_limit:
-            beam = [best]
-            stalls = 0
-        if not fresh:
-            if beam != [best]:
-                beam = [best]
-            else:
+        active = pairs.active()
+        plateau = prior == {row.identity for row in active}
+        if plateau and not best.trial.exact:
+            episode_key = recipe_digest({"parents": sorted(row.identity for row in active), "targets": pairs.targets})
+            if episode_key in episodes:
                 break
-    mutations = evaluated - 1
-    if mutations == 0:
-        tui.line("tried 0 variants; no mutation proposed")
-    if best.trial.identical_everywhere:
-        tui.verdict("cracked", f"IDENTICAL {best.trial.function}: {best.path}")
-    return SearchResult(best.path, best.trial, evaluated, steps, tuple(skips))
+            episodes.add(episode_key)
+            episode = pairs.episode(active, deadline)
+            best = pairs.best()
+            write({"kind": "option.episode", **episode})
+            active = pairs.active()
+            if prior == {row.identity for row in active}:
+                break
+    if best.trial.exact:
+        stop_reason = "exact"
+    elif time.monotonic() >= deadline:
+        stop_reason = "deadline_after_start"
+    elif skips and counters["measured"] == 1:
+        stop_reason = "missing_prerequisite"
+    telemetry = {
+        "search": counters,
+        "external": [getattr(g, "telemetry", None) for g in generators if isinstance(g, Permuter)],
+    }
+    frontier = tuple(
+        {
+            "identity": row.identity,
+            "kind": row.kind,
+            "source": str(row.path),
+            "recipe": row.project.recipe_for(scope.unit).document(),
+            "coordinates": [value if math.isfinite(value) else None for value in coordinates(row.trial)],
+        }
+        for row in active
+    )
+    write({"kind": "search.stop", "stop_reason": stop_reason, "frontier": frontier, "telemetry": telemetry})
+    return SearchResult(
+        best.path, best.trial, counters["measured"], steps, tuple(skips), stop_reason, frontier, telemetry
+    )

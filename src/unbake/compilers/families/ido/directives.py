@@ -2,10 +2,11 @@
 
 import re
 
+from unbake.compilers.compiler_contracts import IDO_DIRECTIVE, validate_preprocessed
 from unbake.config import Held
 from unbake.process import Fault, NativeResult, SourceLocation, named
 
-_DIRECTIVE = re.compile(r"^cfe: Warning 605: (.+?): (\d+): #\s*error\b([^\n]*)", re.M)
+_DIRECTIVE = re.compile(IDO_DIRECTIVE, re.M)
 
 
 def preprocessed(result: NativeResult) -> str:
@@ -22,4 +23,4 @@ def preprocessed(result: NativeResult) -> str:
         )
         # Keep the actual zero exit and both complete streams; do not invent a native failure.
         raise Held(Fault(cause, (result,)))
-    return result.stdout
+    return validate_preprocessed(result.stdout, result.stderr, result.exit, "ido-1")

@@ -162,7 +162,7 @@ def progress(reports: dict[str, dict[str, Any]], descriptions: dict[str, str]) -
                     stage="report",
                 )
             )
-        byte_line = _line("bytes    ", document, version)
+        byte_line = _line("code     ", document, version)
         data_line = _line("data     ", document, version, data=True)
         function_line = _line("functions", document, version, functions=True)
         blocks.append(
@@ -170,7 +170,7 @@ def progress(reports: dict[str, dict[str, Any]], descriptions: dict[str, str]) -
             f"<br><code>{function_line}</code></pre> |"
         )
     if len(reports) > 1:
-        summaries = {"all": _aggregate(reports), **reports}
+        summaries = {"all": _aggregate(reports), **{v: _aggregate({v: row}) for v, row in reports.items()}}
         width = max(map(len, summaries))
         lines = [
             f"<code>{_line(version.ljust(width), document, version)} bytes</code>"
@@ -189,10 +189,12 @@ _FIGURE = re.compile(
 
 
 def _replace_figures(content: str, document: dict[str, Any], version: str, table: bool) -> str:
-    expected = {"bytes", "data", "functions"} if table else {version}
+    if table:
+        content = re.sub(r"(<code>)bytes( +\[)", r"\1code \2", content)
+    expected = {"code", "data", "functions"} if table else {version}
     if table and not re.search(r"<code>data +\[", content):
         pair = re.fullmatch(
-            r"(?P<before>.*?<code>)(?P<bytes>bytes[^<]+)(?P<between></code>.*?<code>)(?P<functions>functions[^<]+)(?P<after></code>.*?)",
+            r"(?P<before>.*?<code>)(?P<bytes>code[^<]+)(?P<between></code>.*?<code>)(?P<functions>functions[^<]+)(?P<after></code>.*?)",
             content,
             re.DOTALL,
         )
@@ -258,9 +260,7 @@ def _aggregate(reports: dict[str, dict[str, Any]]) -> dict[str, Any]:
     # Overall bytes include initialized DATA using the canonical exact-credit
     # counters. DATA contributes only verified similarity to the fuzzy figure.
     figures = [
-        _figures(document, version, data=data)
-        for version, document in reports.items()
-        for data in (False, True)
+        _figures(document, version, data=data) for version, document in reports.items() for data in (False, True)
     ]
     matched = sum(row[0] for row in figures)
     total = sum(row[1] for row in figures)
@@ -366,7 +366,7 @@ def render(template: str, reports: dict[str, dict[str, Any]], *, descriptions: d
     # Summary labels and their order belong to the template, including its all line.
     first_table = min(match.start() for _, match in matches)
     summary = block[:first_table]
-    summary_reports = {**reports, "all": _aggregate(reports)}
+    summary_reports = {**{v: _aggregate({v: row}) for v, row in reports.items()}, "all": _aggregate(reports)}
     for code in re.finditer(r"<code>(.*?)</code>", summary, re.DOTALL):
         figure = _FIGURE.fullmatch(code[1])
         if figure is None or figure["label"] not in summary_reports:

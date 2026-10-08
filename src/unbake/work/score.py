@@ -6,6 +6,7 @@ Differences are aligned and classified by the MIPS instruction fields that diffe
 
 from __future__ import annotations
 
+import hashlib
 import struct
 from collections import Counter, defaultdict
 from collections.abc import Sequence
@@ -35,6 +36,10 @@ class Measurement:
     register_changes: tuple[tuple[int, int, int, int], ...] = ()
     target: tuple[int, ...] = ()
     candidate: tuple[int, ...] = ()
+    strict: dict[str, Any] = field(
+        default_factory=lambda: {"available": False, "reason": "historical measurement lacks raw extents"}
+    )
+    provenance: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         import math
@@ -72,9 +77,60 @@ class Measurement:
             raise ValueError("measurement.unavailable: counts and score must be null with a fault")
 
     @property
+    def provenance_valid(self) -> bool:
+        import re
+
+        from unbake.compilers.recipe_options import recipe_digest
+        from unbake.work.attempts import dependency_record
+
+        proof = self.provenance
+        required = (
+            "source_sha256",
+            "preprocessed_sha256",
+            "object_sha256",
+            "placed_object_sha256",
+            "linked_sha256",
+            "target_sha256",
+            "recipe_digest",
+            "dependency_digest",
+            "compiler_pins",
+        )
+        if any(
+            not isinstance(proof.get(key), str) or re.fullmatch(r"[0-9a-f]{64}", proof[key]) is None for key in required
+        ):
+            return False
+        if proof.get("dependency_current") is not True or proof.get("placement_refusals") != []:
+            return False
+        if proof["linked_sha256"] != self.strict.get("linked_sha256") or proof["target_sha256"] != self.strict.get(
+            "target_sha256"
+        ):
+            return False
+        if recipe_digest(proof.get("recipe")) != proof["recipe_digest"] or not proof.get("recipe", {}).get("pins"):
+            return False
+        try:
+            dependencies = dependency_record(proof["dependencies"])
+        except (KeyError, TypeError, ValueError):
+            return False
+        return (
+            dependencies.digest == proof["dependency_digest"]
+            and dependencies.values.get("dependencies_unknown") is False
+            and bool(dependencies.files)
+            and bool(proof.get("placement"))
+            and bool(proof.get("compile_argv"))
+        )
+
+    @property
     def exact(self) -> bool:
         return (
             self.available
+            and self.provenance_valid
+            and self.strict.get("available") is True
+            and self.strict.get("target_bytes", 0) > 0
+            and self.strict.get("target_bytes") == self.strict.get("candidate_bytes")
+            and self.strict.get("positional_bytes") == 0
+            and self.strict.get("positional_words") == 0
+            and self.strict.get("size_delta") == 0
+            and self.strict.get("target_sha256") == self.strict.get("linked_sha256")
             and self.target_words > 0
             and self.target_words_different == 0
             and self.inserted_words == 0
@@ -94,6 +150,8 @@ class Measurement:
             "percent": round(self.percent, 6) if self.percent is not None else None,
             "exact": self.exact,
             "fault": self.fault.document() if self.fault else None,
+            "strict": self.strict,
+            "provenance": self.provenance,
         }
 
     @classmethod
@@ -109,10 +167,12 @@ class Measurement:
             "typed",
             "percent",
             "fault",
+            "strict",
+            "provenance",
         }
         if required - value.keys():
             raise ValueError("measurement.fields: complete M10 record required")
-        return cls(
+        result = cls(
             value["version"],
             value["available"],
             value["identical_words"],
@@ -124,6 +184,26 @@ class Measurement:
             value["percent"],
             Fault.read(value["fault"]) if value["fault"] else None,
         )
+        result.strict = value["strict"]
+        result.provenance = value["provenance"]
+        if result.strict.get("available") is True:
+            required_strict = {
+                "target_bytes",
+                "candidate_bytes",
+                "positional_bytes",
+                "positional_words",
+                "size_delta",
+                "target_sha256",
+                "linked_sha256",
+            }
+            if required_strict - result.strict.keys():
+                raise ValueError("measurement.strict: complete positional record required")
+            if any(
+                type(result.strict[k]) is not int or result.strict[k] < 0
+                for k in required_strict - {"size_delta", "target_sha256", "linked_sha256"}
+            ):
+                raise ValueError("measurement.strict: invalid extents/counts")
+        return result
 
     def description(self) -> str:
         if not self.available:
@@ -238,7 +318,7 @@ def measure_words(version: str, target: bytes, candidate: bytes) -> Measurement:
     ]
     if details:
         lines.append("first divergence: " + details[0])
-    return Measurement(
+    result = Measurement(
         version,
         True,
         identical,
@@ -254,6 +334,21 @@ def measure_words(version: str, target: bytes, candidate: bytes) -> Measurement:
         left,
         right,
     )
+    # Diagnostic padding above never enters positional raw byte equality.
+    result.strict = {
+        "available": True,
+        "target_bytes": len(target),
+        "candidate_bytes": len(candidate),
+        "positional_bytes": sum(a != b for a, b in zip(target, candidate, strict=False))
+        + abs(len(target) - len(candidate)),
+        "positional_words": sum(
+            target[i : i + 4] != candidate[i : i + 4] for i in range(0, max(len(target), len(candidate)), 4)
+        ),
+        "size_delta": len(candidate) - len(target),
+        "target_sha256": hashlib.sha256(target).hexdigest(),
+        "linked_sha256": hashlib.sha256(candidate).hexdigest(),
+    }
+    return result
 
 
 def weakest(scores: dict[str, float]) -> float:

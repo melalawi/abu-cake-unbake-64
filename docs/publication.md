@@ -100,3 +100,23 @@ canonical report bytes, README figures and the source/coverage manifest. Each re
 artifact retains the established version naming and gains a companion manifest with
 the immutable checkout revision, tool payload hash and report hash. Consumers must
 compare those identities with the requested revision before accepting numerical repair.
+
+Publication requires a complete current strict proof for every required or already
+published holder: identical bounded linked bytes, zero positional and size
+changes, resolved literal/relocation placement, no source-rule preconditions,
+and the current source/recipe/target/dependency identities. Aligned similarity is
+separate diagnostic evidence. Nonexact candidates remain editable history.
+
+The receipt lists the persistent source/header/provider, config, split, symbol,
+generated rule/helper, and compiler-pin inputs even when publication did not
+change their bytes. The existing publisher stages this bounded closure and reads
+it back from the committed tree. Default compiler selections retain unit options.
+
+Immutable producer qualification uses recorded native input, key, CAS, object,
+link and bounded ROM identities. Recursive used Make expressions establish recipe
+meaning; variable spelling and unrelated inventory are not producing commands.
+Reviewed migration can bind a semantic recipe certificate only to byte-verified
+original inputs and an existing immutable event. That event is never recaptured
+or relabeled. Changed used inputs refuse with a named provenance cause. Resource
+storage and execution bindings stay separate; missing historical assembler input
+identity remains unavailable, even when an output happens to equal ROM.

@@ -70,11 +70,6 @@ def attach_decisions(data: dict[str, Any], result: Measurement, parsed: dict[str
         for offset in insn["candidate_offsets"]:
             by_offset[offset].append(insn)
     by_pseudo = {p["pseudo"]: p for p in parsed["pseudos"]}
-    by_hard: defaultdict[int, list[int]] = defaultdict(list)
-    for p in parsed["pseudos"]:
-        if isinstance(p["candidate_hard"], list):
-            for hard in p["candidate_hard"]:
-                by_hard[hard].append(p["pseudo"])
     remaining = ROW_LIMIT
     for region in regions:
         lo, hi = region["target_span"]
@@ -91,11 +86,13 @@ def attach_decisions(data: dict[str, Any], result: Measurement, parsed: dict[str
                     if n in by_pseudo
                     and isinstance(by_pseudo[n]["candidate_hard"], list)
                     and candidate_hard in by_pseudo[n]["candidate_hard"]
+                    and (
+                        by_pseudo[n].get("live_range") is None
+                        or by_pseudo[n]["live_range"][0] <= insn["uid"] <= by_pseudo[n]["live_range"][1]
+                    )
                 }
             )
             unique = len(mapped) == len(numbers) == 1
-            if not numbers:
-                numbers = sorted(by_hard[candidate_hard])
             registers.append(
                 {
                     "target_offset": t,
@@ -104,9 +101,9 @@ def attach_decisions(data: dict[str, Any], result: Measurement, parsed: dict[str
                     "candidate_hard": candidate_hard,
                     "target_pseudo": UNAVAILABLE,
                     "mapping": "unique" if unique else "unavailable: ambiguous or missing RTL mapping",
-                    "pseudos": [by_pseudo[n] for n in numbers[:8]] or UNAVAILABLE,
+                    "pseudos": [by_pseudo[n] for n in numbers[:5]] or UNAVAILABLE,
                     "pseudos_total": len(numbers),
-                    "pseudos_truncated": len(numbers) > 8,
+                    "pseudos_truncated": len(numbers) > 5,
                 }
             )
         registers.sort(key=lambda r: (r["target_offset"], r["candidate_offset"], r["target_hard"]))
@@ -165,6 +162,7 @@ def attach_decisions(data: dict[str, Any], result: Measurement, parsed: dict[str
             "row_limit": ROW_LIMIT,
             "truncated": register_count > len(registers) or len(schedule) > len(bounded_schedule),
             "limitations": parsed["limitations"],
+            "lineage": parsed.get("lineage", {"available": False}),
         }
 
 
@@ -242,7 +240,10 @@ def collect(project: Project, host: Host, chosen: Compared) -> None:
                     row_of(project, chosen.function, version),
                     chosen.file,
                 )
-                if words(linked) != result.candidate:
+                if (
+                    __import__("hashlib").sha256(linked).hexdigest() != result.strict.get("linked_sha256")
+                    or words(linked) != result.candidate
+                ):
                     unavailable(regions, family_name, "unavailable: diagnostic recipe changed candidate bytes")
                     continue
                 dumps = {}

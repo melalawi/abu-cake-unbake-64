@@ -103,7 +103,13 @@ def write_facts(project: PendingProject, census: Census, *, name: str | None = N
 
 def exception_units(default_compiler: str, assignments: dict[str, str]) -> dict[str, dict[str, str]]:
     """A unit absent from [units] uses the default; list only the others, as { compiler = ID } rows."""
-    return {name: {"compiler": ident} for name, ident in sorted(assignments.items()) if ident != default_compiler}
+    from unbake.compilers.recipe_options import UnitRecipe
+
+    return {
+        f"src/{name}.c": UnitRecipe(ident).document()
+        for name, ident in sorted(assignments.items())
+        if ident != default_compiler
+    }
 
 
 def render_ready(

@@ -26,7 +26,7 @@ from unbake.layout import split
 from unbake.process import named as cause_named
 
 # Bump when this step's output changes for the same inputs. Keys never digest the tool's code.
-SCHEMA = 14
+SCHEMA = 15
 
 # CI pins: full commit SHAs and an image digest (tool data, never config).
 CHECKOUT = ("actions/checkout", "11d5960a326750d5838078e36cf38b85af677262", "v4.4.0")
@@ -610,40 +610,37 @@ def slices_mk(project: Project, version: str) -> str:
 def units_mk(project: Project, *, names: tuple[str, ...] | None = None) -> str:
     """Pattern-specific values (all versions) for units off the default compiler or with their own flags."""
     lines = [HEADER]
-    default = project.compilers[project.default_compiler]
     from unbake.work import attempts
 
-    selected = sorted({path.stem for path in project.src.glob("*.c")}) if names is None else names
+    selected = (
+        sorted({path.relative_to(project.src).with_suffix("").as_posix() for path in project.src.rglob("*.c")})
+        if names is None
+        else names
+    )
     for name in selected:
         targets = f"build/%/src/{name}.i build/%/src/{name}.key build/%/units/{name}.bin build/%/data/{name}.bin"
         compiler = project.compiler_for(name)
-        effective = [
-            *(f"-I{relative(project, path)}" for path in project.include),
-            *compiler.cflags,
-            "-DUNBAKE_VERSION_PLACEHOLDER",
-            *project.unit_flags.get(name, ()),
-        ]
-        prep, _ = drivers.stage_flags(compiler.id, effective)
-        rendered = words(list(prep)).replace("-DUNBAKE_VERSION_PLACEHOLDER", "$(VERSION_DEFINES) $(CONSUMER)")
-        if attempts.guard_present((project.src / (name + ".c")).read_text()):
-            rendered += " -DNON_MATCHING"
-        lines.append(f"{targets}: PREPROCESS_FLAGS = {rendered}\n")
-        if compiler.id != default.id:
-            c_includes, c_codegen, c_defines = drivers.compiler_parts(project, compiler.id)
-            lines.append(f"{targets}: KIND := {compiler.kind}\n")
-            lines.append(f"{targets}: CC := {relative(project, compiler.cc)}\n")
-            lines.append(f"{targets}: CODEGEN := {words(c_codegen)}\n")
-            lines.append(f"{targets}: COMPILER_INCLUDES := {words(c_includes)}\n")
-            lines.append(f"{targets}: COMPILER_DEFINES := {words(c_defines)}\n")
-            lines.append(f"{targets}: ASSEMBLER_FLAGS := {words(list(drivers.assembly_flags(project, compiler.id)))}\n")
-            lines.append(f"{targets}: TRIM := {'' if drivers.preserves_padding(compiler.kind) else '--trim'}\n")
-        u_includes, u_codegen, u_defines = drivers.unit_parts(project, name)
-        if u_includes:
-            lines.append(f"{targets}: UNIT_INCLUDES := {words(u_includes)}\n")
-        if u_codegen:
-            lines.append(f"{targets}: UNIT_CODEGEN := {words(u_codegen)}\n")
-        if u_defines:
-            lines.append(f"{targets}: UNIT_DEFINES := {words(u_defines)}\n")
+        for version in project.versions:
+            recipe = drivers.resolved(project, version, name)
+            effective = [
+                *(f"-I{relative(project, path)}" for path in project.include),
+                *recipe.phase("preprocess"),
+                *recipe.phase("compile"),
+            ]
+            prep, _ = drivers.stage_flags(compiler.id, effective)
+            rendered = words(list(prep)) + " $(CONSUMER)"
+            if attempts.guard_present((project.src / (name + ".c")).read_text()):
+                rendered += " -DNON_MATCHING"
+            version_targets = f"build/{version}/src/{name}.i build/{version}/src/{name}.key"
+            lines.append(f"{version_targets}: PREPROCESS_FLAGS = {rendered}\n")
+        resolved = drivers.resolved(project, project.versions[0], name)
+        _, codegen = drivers.stage_flags(compiler.id, drivers.flags(project, project.versions[0], name))
+        lines.append(f"{targets}: KIND := {compiler.kind}\n")
+        lines.append(f"{targets}: CC := {relative(project, compiler.cc)}\n")
+        lines.append(f"{targets}: CODEGEN := {words(list(codegen))}\n")
+        lines.append(f"{targets}: UNIT_CODEGEN :=\n")
+        lines.append(f"{targets}: ASSEMBLER_FLAGS := {words(list(resolved.phase('assemble')))}\n")
+        lines.append(f"{targets}: TRIM := {'' if drivers.preserves_padding(compiler.kind) else '--trim'}\n")
         guard = drivers.consumer_define(project, name)
         if guard is not None:
             lines.append(f"{targets}: CONSUMER := {guard}\n")
@@ -678,8 +675,8 @@ def native_compile_recipe(project: Project, name: str, tools: drivers.Tools) -> 
     spellings to make a historical key pass. Make's key strips only CURDIR.
     """
     compiler = project.compiler_for(name)
-    _, codegen, _ = drivers.compiler_parts(project, compiler.id)
-    _, unit_codegen, _ = drivers.unit_parts(project, name)
+    _, codegen = drivers.stage_flags(compiler.id, drivers.flags(project, project.versions[0], name))
+    unit_codegen: tuple[str, ...] = ()
     recipe = _kind_recipes(compiler.kind).split("COMPILE_" + compiler.kind + " = ", 1)[1].rstrip("\n")
     for variable, value in {
         "$(abspath $(CC))": relative(project, compiler.cc),
@@ -687,7 +684,7 @@ def native_compile_recipe(project: Project, name: str, tools: drivers.Tools) -> 
         "$(UNIT_CODEGEN)": words(unit_codegen),
         "$(N64LINK)": tools.n64link,
         "$(AS)": tools.mips_as,
-        "$(ASSEMBLER_FLAGS)": words(list(drivers.assembly_flags(project, compiler.id))),
+        "$(ASSEMBLER_FLAGS)": words(list(drivers.resolved(project, project.versions[0], name).phase("assemble"))),
         "$(*F)": name,
     }.items():
         recipe = recipe.replace(variable, value)
@@ -700,7 +697,8 @@ def native_compile_recipe(project: Project, name: str, tools: drivers.Tools) -> 
 # and two versions racing on one key write identical bytes. Place and link read the shared object and never write it.
 UNIT_RECIPES = r"""VER = $(word 2,$(subst /, ,$@))
 VERSION_DEFINES = $($(VER).DEFINES)
-TOOLCHAIN := $(firstword $(shell cat tools/compilers.sha256 tools/n64link.version | sha1sum))
+TOOLCHAIN := $(firstword $(shell cat tools/compilers.sha256 tools/n64link.version \
+  tools/compiler-driver.sha256 | sha1sum))
 UNIT_KEY = printf '%s\n' '$(VER) $(*F)'; \
   $(PREPROCESS_$(KIND)) && \
   set -- $$(printf '%s\n' '$(TOOLCHAIN) $(subst $(CURDIR)/,,$(COMPILE_$(KIND)))' | \
@@ -755,7 +753,8 @@ SLICE = dd if=$($(VER).BASEROM) of=$@ bs=65536 iflag=skip_bytes,count_bytes stat
 # Every version's units, slices and ROM are targets of one make, so -jN spreads over all of them. A slice is named
 # by its start only, so it is cut again whenever slices.mk changes (a new unit can shorten it).
 VERSION_RULES = r"""define VERSION_RULES
-build/$1/src/%.i: src/%.c Makefile units.mk | verify build/$1/src build/cas
+build/$1/src/%.i: src/%.c Makefile units.mk tools/compiler_contracts.py tools/recipe_options.py \
+  | verify build/$1/src build/cas
 	$$(Q)$$(UNIT_KEY)
 build/$1/src/%.key: build/$1/src/%.i
 	$$(Q)test -f $$@ || { $$(UNIT_KEY); }
@@ -806,14 +805,15 @@ def setup_recipe(project: Project) -> list[str]:
     specs = compiler_registry.registry()
     for ident in sorted(project.compilers):
         spec = specs[ident]
+        destination = relative(project, compiler_registry.compiler_directory(project.tools, spec))
         covered = {name for download in spec.downloads for name in download.files}
         missing = sorted(set(spec.pins) - covered)
         if missing:
-            lines.append(f"\t@echo 'tools/{ident}: supply {', '.join(missing)} yourself (see README)'")
+            lines.append(f"\t@echo '{destination}: supply {', '.join(missing)} yourself (see README)'")
         for index, download in enumerate(spec.downloads):
             archive = f"tools/.downloads/{download.sha256}.tar.gz"
             unpack = f"tools/.downloads/{ident}-{index}"
-            lines.append(f"\t@mkdir -p tools/.downloads tools/{ident} {unpack}")
+            lines.append(f"\t@mkdir -p tools/.downloads {destination} {unpack}")
             lines.append(f"\t@test -f {archive} || curl -fsSL -o {archive} {download.url}")
             lines.append(f"\t@echo '{download.sha256}  {archive}' | sha256sum --quiet -c")
             lines.append(f"\t@tar -xzf {archive} -C {unpack}")
@@ -821,8 +821,12 @@ def setup_recipe(project: Project) -> list[str]:
                 pin = spec.pins[name]
                 lines.append(
                     f"\t@for f in $$(find {unpack} -type f -name '{Path(name).name}'); do "
-                    f'[ "$$(sha256sum < $$f | cut -c1-64)" = {pin} ] && cp $$f tools/{ident}/{name} '
-                    f"&& chmod 755 tools/{ident}/{name} && break; done"
+                    f'[ "$$(sha256sum < $$f | cut -c1-64)" = {pin} ] && '
+                    f'{{ test -f {destination}/{name} && echo "{pin}  {destination}/{name}" | sha256sum --quiet -c || '
+                    f"{{ test ! -e {destination}/{name} && mkdir -p {destination}/{Path(name).parent} "
+                    f"&& cp $$f {destination}/{name}; }}; }} "
+                    f"&& break; done; test -f {destination}/{name} && "
+                    f"echo '{pin}  {destination}/{name}' | sha256sum --quiet -c"
                 )
             lines.append(f"\t@rm -rf {unpack}")
     return lines
@@ -989,7 +993,7 @@ def write_progress(project: Project, *, publish_branch: str) -> list[Path]:
     return list(outputs)
 
 
-# The n64link release these build files need: 0.3.1 relocates jump-table words before its ROM proof.
+# The n64link release these build files need: 0.3.2 also preserves constant-fragment CODE alignment.
 N64LINK_RELEASE = drivers.assembler_release()
 
 
@@ -1017,6 +1021,20 @@ def n64link_pin(host: Host) -> str:
     return N64LINK_RELEASE
 
 
+def driver_identity() -> str:
+    root = Path(__file__).parent
+    names = (
+        "compilers/drivers.py",
+        "compilers/recipe_options.py",
+        "compilers/compiler_contracts.py",
+        "compilers/options.py",
+        "compilers/families/gcc/__init__.py",
+        "compilers/families/ido/__init__.py",
+        "buildfiles.py",
+    )
+    return "".join(f"{hashlib.sha256((root / name).read_bytes()).hexdigest()}  {name}\n" for name in names)
+
+
 def generate(project: Project, host: Host) -> dict[Path, bytes]:
     """Every build file, by path; refused when an original-asm source or row lacks its proved record."""
     from unbake.decomp import original_asm
@@ -1032,6 +1050,15 @@ def generate(project: Project, host: Host) -> dict[Path, bytes]:
         project.root / "Makefile": makefile(project, host),
         project.root / "units.mk": units_mk(project),
         project.tools / "n64link.version": n64link_pin(host),
+        project.tools / "compiler-driver.sha256": driver_identity(),
+        project.tools / "compiler_contracts.py": Path(__file__)
+        .with_name("compilers")
+        .joinpath("compiler_contracts.py")
+        .read_text(),
+        project.tools / "recipe_options.py": Path(__file__)
+        .with_name("compilers")
+        .joinpath("recipe_options.py")
+        .read_text(),
         project.root / ".github/workflows/progress.yml": github_progress(project, host, verifier_payload=payload),
         project.root / ".gitlab-ci.yml": gitlab_progress(project, verifier_payload=payload),
     }
@@ -1063,6 +1090,8 @@ def input_key(project: Project, host: Host) -> str:
     parts: list[str | bytes | Path] = [
         "buildfiles",
         str(SCHEMA),
+        Path(__file__).with_name("compilers").joinpath("compiler_contracts.py"),
+        Path(__file__).with_name("compilers").joinpath("recipe_options.py"),
         hashlib.sha256(verify.bundle()).hexdigest(),
         project.root / "config.toml",
         Path(host.n64link),

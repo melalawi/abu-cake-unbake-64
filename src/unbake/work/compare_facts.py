@@ -212,6 +212,35 @@ def facts(result: Measurement, pc: int, names: dict[int, list[str]]) -> dict[str
     }
 
 
+def option_evidence(result: Measurement) -> list[dict[str, Any]]:
+    """Bound machine observations suggest experiments, never support or exactness."""
+    if not result.available or not result.strict.get("available"):
+        return []
+    digest = result.strict["target_sha256"]
+    gp = [
+        i * 4
+        for i, word in enumerate(result.target)
+        if word >> 26 in (*range(0x20, 0x40), 9) and (word >> 21) & 31 == 28
+    ]
+    materialization = [i * 4 for i, word in enumerate(result.target) if word >> 26 == 15]
+    rows = []
+    for kind, offsets, options in (
+        ("gp-relative", gp, ("-G4", "-G8")),
+        ("address-materialization", materialization, ("-G0",)),
+    ):
+        if offsets:
+            rows.append(
+                {
+                    "kind": kind,
+                    "artifact_digest": digest,
+                    "refs": [f"target:{digest}:+{offset:x}" for offset in offsets[:8]],
+                    "options": list(options),
+                    "compatible": True,
+                }
+            )
+    return rows
+
+
 def attach(project: Project, chosen: Compared) -> None:
     """Resolve each holding version's symbols only after Family chooses the recipe."""
     from unbake.layout import split
@@ -230,6 +259,7 @@ def attach(project: Project, chosen: Compared) -> None:
             "version": version,
             "source_sha256": chosen.source_sha256,
             "compiler": chosen.compiler,
+            "option_evidence": option_evidence(result),
         }
 
 

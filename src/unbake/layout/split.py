@@ -532,6 +532,11 @@ def _functions(project: Project, v: str) -> list[Function]:
     return result
 
 
+def recipe_binding(row: Function) -> str:
+    """Stable current placement identity, independent of scratch/display names."""
+    return f"{row.version}:{row.path}:{row.start:X}:{row.end:X}:{row.address:X}"
+
+
 def unit_members(row: Function) -> list[Function]:
     """Expand one build unit into address-deduplicated function intervals."""
     entries: dict[int, list[str]] = {0: list(dict.fromkeys((row.name, *row.aliases)))}

@@ -17,9 +17,12 @@ def alternatives(project: Project, function: str) -> list[str]:
 
 def selected(project: Project, function: str, ident: str) -> Project:
     """Apply one measured choice in memory, never to neighbouring items."""
-    units = {name: value for name, value in project.units.items() if name != function}
-    if ident != project.default_compiler:
-        units[function] = ident
+    from unbake.compilers.recipe_options import UnitRecipe
+
+    units = dict(project.units)
+    key = project.unit_path(function)
+    previous = project.recipe_for(function)
+    units[key] = UnitRecipe(ident, previous.options, previous.functions)
     return replace(project, units=units)
 
 
@@ -33,18 +36,13 @@ def build_choice(project: Project, function: str, exact: list[str]) -> tuple[str
 
 def fold_units(data: dict[str, Any], receipts: list[dict[str, Any]]) -> dict[str, Any]:
     """Record exact selections as exception units; the default needs no entry."""
-    default = data["project"]["default_compiler"]
+    from unbake.compilers.recipe_options import UnitRecipe
+
     units = dict(data.get("units", {}))
     for evidence in receipts:
         if not evidence.get("exact_candidates"):
             continue
-        function, ident = evidence["function"], evidence["selected"]
-        units.pop(function, None)
-        if ident != default:
-            units[function] = ident
-    data = dict(data)
-    if units:
-        data["units"] = dict(sorted(units.items()))
-    else:
-        data.pop("units", None)
-    return data
+        key = f"src/{evidence['function']}.c"
+        previous = UnitRecipe.read(units[key]) if key in units else UnitRecipe(data["project"]["default_compiler"])
+        units[key] = UnitRecipe(evidence["selected"], previous.options, previous.functions).document()
+    return {**data, "units": dict(sorted(units.items()))}

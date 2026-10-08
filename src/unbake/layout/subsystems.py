@@ -18,7 +18,7 @@ LABELS = (
     "ui_menus",
     "data_tables",
 )
-RECIPE = "subsystems-1"
+RECIPE = "subsystems-2"
 
 
 @dataclass(frozen=True)
@@ -145,8 +145,10 @@ def canonical(facts: Facts) -> Facts:
 def _keys(facts: Facts) -> tuple[str, str]:
     meaning = asdict(facts)
     # Provenance-only movement changes evidence context, not inferred meaning.
+    meaning.pop("meaning_refs")
     for row in meaning["evidence"]:
         row.pop("origin_ref")
+        row.pop("input_digest")
     meaning_key = cache.key(RECIPE, cache.serialized(meaning))
     return meaning_key, cache.key(meaning_key, cache.serialized(asdict(facts)))
 
@@ -207,16 +209,16 @@ def aggregate(facts: Facts) -> Snapshot:
             source, *targets = row.subjects
             for target in targets:
                 degree = max(len(neighbors[row.kind, source]), len(neighbors[row.kind, target]))
-                weight = 1000 * row.strength // (1 + degree)
+                weight = (1000 * row.strength // (1 + degree)) // len(targets)
                 for label in LABELS:
-                    value = weight * support[source][label] // (16000 * len(targets))
+                    value = weight * support[source][label]
                     contributions[target, label, row.kind] += value
                     if value and origins.get((source, label)):
                         next_origins.setdefault((target, label), set()).update(origins[source, label])
                         next_classes.setdefault((target, label), set()).add(row.kind)
         inherited: dict[tuple[str, str], int] = defaultdict(int)
         for (target, label, _kind), value in contributions.items():
-            inherited[target, label] += min(8000, value)
+            inherited[target, label] += min(8000, value // 16000)
         support = {
             key: {label: min(16000, direct[key][label] + min(6000, inherited[key, label])) for label in LABELS}
             for key in ids
@@ -451,3 +453,22 @@ def snapshot(
         return result
     except (Held, OSError, ValueError):
         return aggregate(facts)
+
+
+def invalidate(previous: Snapshot, facts: Facts) -> tuple[Snapshot, tuple[str, ...]]:
+    """Topology deletions refresh their whole affected core and three-round reverse closure.
+
+    Recompute with the same pure owner; bounded advisory inputs permit this cold
+    fallback without inventing a second incremental inference implementation.
+    """
+    current = aggregate(facts)
+    before = {row.entity_id: row for row in previous.memberships}
+    after = {row.entity_id: row for row in current.memberships}
+    changed = {key for key in before.keys() | after.keys() if before.get(key) != after.get(key)}
+    reverse = {key: set(value) for key, value in (*previous.reverse_dependencies, *current.reverse_dependencies)}
+    for _ in range(3):
+        changed.update(target for key in tuple(changed) for target in reverse.get(key, ()))
+    for family in (*previous.families, *current.families):
+        if changed.intersection(family.members):
+            changed.update(family.members)
+    return current, tuple(sorted(changed))

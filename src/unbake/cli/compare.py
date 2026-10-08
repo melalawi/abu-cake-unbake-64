@@ -32,6 +32,22 @@ def READ_ONLY(args: argparse.Namespace) -> bool:
 
 
 def register(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--source-root",
+        action="append",
+        type=Path,
+        default=[],
+        help="Explicitly admit an external source/include root.",
+    )
+    parser.add_argument(
+        "--include-root",
+        action="append",
+        type=Path,
+        default=[],
+        help="Required include search root for this source scope.",
+    )
+    parser.add_argument("--flags", action="store_true", help="Run one finite evidence-conditioned option episode.")
+    parser.add_argument("--recipe", type=Path, help="Serialized phase recipe for the admitted TU.")
     parser.add_argument("file", type=Path, metavar="FILE", help="build/work/FUNC/FUNC.c, FUNC.best.c or src/FUNC.c")
     parser.add_argument(
         "--explain-schedule",
@@ -47,9 +63,28 @@ def register(parser: argparse.ArgumentParser) -> None:
 
 
 def run(context: Context) -> Result:
-    from unbake.work import compare
+    from dataclasses import replace
 
-    project, host = context.ready("buildfiles")
+    from unbake import steps, strict_json
+    from unbake.compilers.recipe_options import UnitRecipe
+    from unbake.work import compare
+    from unbake.work.source_scope import scoped_project
+
+    project = scoped_project(
+        context.project(),
+        context.args.file.resolve(),
+        tuple(context.args.source_root),
+        tuple(context.args.include_root),
+    )
+    if context.args.recipe is not None:
+        recipe = UnitRecipe.read(strict_json.read(context.args.recipe))
+        key = project.unit_path(compare.function_of(context.args.file))
+        from unbake.compilers.options import admit_trial
+
+        admit_trial(project, key, recipe)
+        project = replace(project, units={**project.units, key: recipe})
+    host = context.require_host()
+    steps.ensure(project, host, ("buildfiles",))
     required = tuple(context.args.require_version) if context.args.require_version is not None else None
     measured = compare.compare(
         project,
@@ -57,11 +92,24 @@ def run(context: Context) -> Result:
         context.args.file.resolve(),
         required_versions=required,
         explain_schedule=context.args.explain_schedule,
+        flags=context.args.flags,
     )
     data = measured.document()
-    following = (
-        context.cmd("publish", context.args.file, *(word for v in required or () for word in ("--require-version", v)))
-        if measured.required_exact
-        else f"stop: edit {context.args.file}, then compare again"
+    if measured.unit_recipe is not None:
+        import json
+
+        from unbake import atomic
+
+        atomic.text(
+            context.args.file.with_suffix(".recipe.json"), json.dumps(measured.unit_recipe, sort_keys=True) + "\n"
+        )
+    from unbake.work.source_scope import admit_source
+
+    measured.next_action = admit_source(project, measured.file).saved_action(
+        measured.file,
+        exact=measured.required_exact,
+        config=context.config_path,
+        required_versions=measured.required_versions or (),
     )
+    following = measured.next_command
     return Result.ok(NAME, data, measured.lines(), following)

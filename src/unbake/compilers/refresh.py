@@ -38,7 +38,7 @@ def run(pending: PendingProject, policy: Host, confirm: str | None) -> list[str]
     measured = census.run(pending, policy, names_from=project.names_from)
     # Keep published C and measured exception units on their proved recipe.
     retained = {source.stem: project.compiler_reference(source) for source in project.src.rglob("*.c")}
-    retained.update(project.units)
+    retained.update({Path(name).stem: value.compiler for name, value in project.units.items()})
     proposal = compiler_proposal.propose_compilers(pending, measured, layout, policy, choices=retained)
     proposal["retained_assignments"] = {  # type: ignore[typeddict-unknown-key]
         "rule": "preserve published C and measured exception units on their proved compiler",
@@ -68,6 +68,7 @@ def run(pending: PendingProject, policy: Host, confirm: str | None) -> list[str]
     data["project"]["default_compiler"] = default
     data.pop("units", None)
     units = setup_config.exception_units(default, proposal["assignments"])
+    units.update({key: recipe.document() for key, recipe in project.units.items()})
     if units:
         data["units"] = units
     data["compilers"] = {ident: {"cflags": flags} for ident, flags in proposal["cflags"].items()}

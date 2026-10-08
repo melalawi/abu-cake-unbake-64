@@ -132,6 +132,9 @@ def compile_script(project: Project, policy: Host, source_path: Path, version: s
     lines = [
         "#!/bin/sh",
         "set -eu",
+        f"events={shlex.quote(str(work / 'compile-events.log'))}",
+        'printf "start\\n" >> "$events"',
+        'trap \'printf "failure\\n" >> "$events"\' EXIT',
         '[ "$#" -eq 3 ] && [ "$2" = "-o" ] || { echo "source -o output required" >&2; exit 2; }',
         'source=$(realpath -- "$1")',
         'output=$(realpath -m -- "$3")',
@@ -147,6 +150,8 @@ def compile_script(project: Project, policy: Host, source_path: Path, version: s
         lines.append(words(steps.assemble))
     lines.append(f'mv -- "$scratch/{unit}.o" "$output"')
     lines.append('rm -rf -- "$scratch"')
+    lines.append('sha256sum "$output" >> "$events"')
+    lines.append("trap - EXIT")
     return "\n".join(lines) + "\n"
 
 
@@ -155,6 +160,7 @@ class _RunResult:
     ran: bool
     # None means skipped or stopped at the deadline, rather than an early exit.
     returncode: int | None
+    stop_reason: str = "exit"
 
 
 def _run(command: Sequence[str], cwd: Path, environment: Mapping[str, str], budget: float, log: Path) -> _RunResult:
@@ -165,14 +171,14 @@ def _run(command: Sequence[str], cwd: Path, environment: Mapping[str, str], budg
             atomic_files.stream(log.with_suffix(log.suffix + ".stderr"), "wb") as errors,
         ):
             if budget <= 0:
-                return _RunResult(False, None)
+                return _RunResult(False, None, "deadline_before_start")
             with native_process.managed_group(command, cwd=cwd, env=environment, stdout=output, stderr=errors) as child:
                 try:
                     status = child.wait(timeout=budget)
                 except subprocess.TimeoutExpired:
                     status = None
             if status is None:
-                return _RunResult(True, None)
+                return _RunResult(True, None, "deadline_after_start")
         return _RunResult(True, status)
     except OSError as error:
         raise Held(
@@ -251,6 +257,7 @@ class Permuter:
     target_object: Path
     budget_seconds: float
     ran: bool = field(default=False, init=False)
+    telemetry: dict[str, Any] = field(default_factory=dict, init=False, compare=False)
 
     def propose(self, source: str, trial: Compared, ctx: Context) -> Iterator[Mutation]:
         """Yield external improvements for the common search loop to confirm."""
@@ -341,7 +348,10 @@ class Permuter:
                     stage="permute",
                 )
             )
-        toolchain.verify(project.tools / compiler.id, toolchain.specification(compiler.id))
+        toolchain.verify(
+            toolchain.compiler_directory(project.tools, toolchain.specification(compiler.id)),
+            toolchain.specification(compiler.id),
+        )
         try:
             if not target.is_file():
                 raise Held(
@@ -377,6 +387,30 @@ class Permuter:
             # Leave time to evaluate emitted candidates in the common search loop.
             log_path = work / "permuter.log"
             result = _run(command, work, environment, max(0, deadline - time.monotonic()) / 2, log_path)
+            events = (
+                (work / "compile-events.log").read_text().splitlines()
+                if (work / "compile-events.log").is_file()
+                else []
+            )
+            hashes = [line.split()[0] for line in events if re.match(r"^[0-9a-f]{64} ", line)]
+            object.__setattr__(
+                self,
+                "telemetry",
+                {
+                    "generated": None,
+                    "attempted": None,
+                    "compiles": events.count("start"),
+                    "failures": events.count("failure"),
+                    "duplicate_outputs": len(hashes) - len(set(hashes)),
+                    "internal_improvements": None,
+                    "exports": 0,
+                    "strict_confirmations": None,
+                    "unknown_reason": "pinned quiet log does not report internal attempts or improvements",
+                    "stop_reason": result.stop_reason,
+                    "returncode": result.returncode,
+                    "log": str(log_path),
+                },
+            )
             if not result.ran:
                 return
             object.__setattr__(self, "ran", True)
@@ -412,6 +446,7 @@ class Permuter:
                 if digest in seen:
                     continue
                 seen.add(digest)
+                self.telemetry["exports"] += 1
                 yield Mutation("permute", f"external score {score}", candidate)
         except (OSError, UnicodeError, ValueError) as error:
             raise Held(

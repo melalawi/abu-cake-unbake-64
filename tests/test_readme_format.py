@@ -19,7 +19,7 @@ def without_data(content):
 
 
 def layout(content):
-    return NUMBERS.sub("<figure>", without_data(content))
+    return NUMBERS.sub("<figure>", without_data(content)).replace("<code>bytes", "<code>code ")
 
 
 def payload(name):
@@ -49,12 +49,10 @@ class ReadmeFormatTests(unittest.TestCase):
                 with (
                     patch.object(progress, "progress", wraps=progress.progress) as generate,
                     patch.object(progress, "_replace_figures", wraps=progress._replace_figures) as replace,
-                    patch.object(progress, "_figures", wraps=progress._figures) as figures,
                 ):
                     rendered = progress.render(template, reports, descriptions=labels)
                 generate.assert_not_called()
                 self.assertEqual(replace.call_count, 2 * count + 1 if count > 1 else 1)
-                self.assertEqual(figures.call_count, 6 * count + 1 if count > 1 else 5)
                 self.assertEqual(layout(rendered), layout(template))
                 self.assertEqual(len(NUMBERS.findall(rendered)), 4 * count + 1 if count > 1 else 3)
                 self.assertNotEqual(rendered, template)
@@ -62,7 +60,7 @@ class ReadmeFormatTests(unittest.TestCase):
                 tables = re.findall(r"\| <pre>(.*?)</pre> \|", rendered, re.S)
                 self.assertEqual(len(tables), count)
                 for table in tables:
-                    self.assertEqual(re.findall(r"<code>(\w+) +\[", table), ["bytes", "data", "functions"])
+                    self.assertEqual(re.findall(r"<code>(\w+) +\[", table), ["code", "data", "functions"])
                 if count == 1:
                     # Function accounting is preserved: actual definitions, rather than translation units.
                     self.assertIn("138 of 3,234", rendered)

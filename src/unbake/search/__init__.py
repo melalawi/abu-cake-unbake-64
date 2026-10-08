@@ -8,7 +8,7 @@ from unbake.process import named as cause_named
 from unbake.search.core import Generator
 
 METHODS: dict[str, Generator] = {}
-BUILTINS = ("types", "registers", "order", "permute", "scheduler-birth")
+BUILTINS = ("auto", "creative", "types", "registers", "order", "permute", "scheduler-birth")
 
 
 def available() -> tuple[str, ...]:
@@ -31,7 +31,7 @@ def register(name: str, generator: Generator) -> None:
 
 def methods(names: str) -> list[Generator]:
     result: list[Generator] = []
-    for name in names.split(","):
+    for name in names.replace("auto", "creative,order").split(","):
         if name not in METHODS:
             if name not in BUILTINS:
                 raise Held(

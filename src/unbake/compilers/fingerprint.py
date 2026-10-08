@@ -17,6 +17,7 @@ from unbake.compilers.propose import (
 from unbake.compilers.propose import (
     receipt as receipt,
 )
+from unbake.compilers.recipe_options import UnitRecipe
 from unbake.compilers.registry import CompilerSpec
 from unbake.config import Held, Host, Project
 from unbake.layout.split import Function
@@ -382,7 +383,9 @@ def prove(project_scratch: Project, region: Region, candidates: Sequence[Compile
         for function in probes:
             try:
                 drafting = replace(
-                    project, default_compiler=candidates[0].id, units={**project.units, function.name: candidates[0].id}
+                    project,
+                    default_compiler=candidates[0].id,
+                    units={**project.units, project.unit_path(function.name): UnitRecipe(candidates[0].id)},
                 )
                 source = m2c.draft(
                     drafting,
@@ -403,7 +406,9 @@ def prove(project_scratch: Project, region: Region, candidates: Sequence[Compile
             for candidate in candidates:
                 try:
                     selected = replace(
-                        project, default_compiler=candidate.id, units={**project.units, function.name: candidate.id}
+                        project,
+                        default_compiler=candidate.id,
+                        units={**project.units, project.unit_path(function.name): UnitRecipe(candidate.id)},
                     )
                     with runner.compile_unit(selected, policy, source_file, version, unit=function.name) as out:
                         identical = reproduces(out, function.name, data[function.start : function.end])

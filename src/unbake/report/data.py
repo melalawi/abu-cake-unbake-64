@@ -375,13 +375,13 @@ def producer_bindings(project: Project, version: str) -> _ProducerBindings:
 
 
 def canonical_configuration(value: dict[str, Any]) -> dict[str, Any]:
-    """Generated build-root spelling is host layout, while recipe flags remain semantic."""
+    """Project effective phases, not regenerated target-line spelling."""
+    from unbake.compilers.recipe_options import merge_options, partition
+
+    phases = partition(tuple(value.get("flags", ())))
     return {
-        **value,
-        "unit_recipe": [
-            re.sub(r"build/%[./]+(?=(?:src|units|data|resources)/)", "build/%/", line)
-            for line in value.get("unit_recipe", [])
-        ],
+        **{k: v for k, v in value.items() if k not in {"unit_recipe", "flags"}},
+        "flags": {p: list(merge_options(tuple(tokens), phase=p)) for p, tokens in phases.items()},
     }
 
 
@@ -437,6 +437,55 @@ def _same_preprocessed_inputs(retained: str, current: str, obj: Any) -> bool:
     return normalize(retained) == normalize(current)
 
 
+def qualification_refusal(predicate: str, reason: str, evidence: dict[str, Any] | None = None) -> NoReturn:
+    raise Held(
+        cause_named(
+            "data.provenance." + predicate, reason, owner="report.data", stage="qualification", evidence=evidence or {}
+        )
+    )
+
+
+def published_producer_source(
+    project: Project, version: str, unit: Any, source: Path, receipt: dict[str, Any]
+) -> bytes:
+    """The common accepted receipt/source binding for every native producer."""
+    from unbake import process
+
+    check, head = receipt.get("check", {}), receipt.get("head")
+    role = "data" if unit.kind == "data" else "resource"
+    scopes = check.get("scopes", ())
+    matching = [
+        scope
+        for scope in scopes
+        if scope.get(role) == unit.name
+        and scope.get("version") == version
+        and scope.get("rom_start") == unit.start
+        and scope.get("bytes") == unit.size
+    ]
+    if (
+        not isinstance(head, str)
+        or re.fullmatch(r"[0-9a-f]{40}", head) is None
+        or check.get("head") != head
+        or check.get("ok") is not True
+        or check.get("source_findings") != []
+        or len(matching) != 1
+    ):
+        qualification_refusal("receipt", "accepted source/hygiene/scope publication receipt required")
+    if role == "resource" and (
+        matching[0].get("execution_vma") != unit.execution_address or matching[0].get("resident_lma") != unit.address
+    ):
+        qualification_refusal("binding", "retained storage/execution identity differs")
+    try:
+        published = process.run_tool(
+            ["git", "show", head + ":" + source.relative_to(project.root).as_posix()], project.root, "publish"
+        ).encode()
+    except Held:
+        qualification_refusal("published_source", "cannot read source at accepted publication head")
+    if published != source.read_bytes():
+        qualification_refusal("source", "source differs from accepted producing source")
+    return published
+
+
 def _immutable_producer_inputs(
     project: Project,
     host: Host,
@@ -453,75 +502,93 @@ def _immutable_producer_inputs(
     provenance, changed preprocessing or recipes remain unqualified. It neither
     edits timestamps nor manufactures an input pin for an old ledger event.
     """
-    from unbake import buildfiles, process, runner
+    from unbake import buildfiles, runner
     from unbake.compilers import drivers
     from unbake.objects import rodata
     from unbake.objects.elf import Object
 
-    check = receipt.get("check", {})
-    head = receipt.get("head")
-    scope = {"data": unit.name, "version": version, "rom_start": unit.start, "bytes": unit.size}
-    if (
-        not isinstance(head, str)
-        or re.fullmatch(r"[0-9a-f]{40}", head) is None
-        or check.get("head") != head
-        or check.get("ok") is not True
-        or check.get("source_findings") != []
-        or scope not in check.get("scopes", [])
-    ):
-        return None
-    try:
-        published = process.run_tool(
-            ["git", "show", head + ":" + source.relative_to(project.root).as_posix()],
-            project.root,
-            "publish",
-        ).encode()
-    except Held:
-        return None
-    if published != source.read_bytes():
-        return None
+    published = published_producer_source(project, version, unit, source, receipt)
     native = project.build_link(version) / "data" / (unit.name + ".bin")
     preprocessed = project.build_link(version) / "src" / (unit.name + ".i")
     key_path = preprocessed.with_suffix(".key")
     if any(not path.is_file() or path.is_symlink() for path in (preprocessed, key_path)):
-        return None
+        qualification_refusal("preprocessed", "retained preprocess/key files missing")
     key = key_path.read_text().strip()
     if re.fullmatch(r"[0-9a-f]{80}", key) is None:
-        return None
+        qualification_refusal("key", "native compiler key is malformed")
     compiler = project.compiler_for(unit.name)
     make = (project.root / "Makefile").read_text()
-    kind = buildfiles._kind_recipes(compiler.kind)
-    key_recipe = buildfiles.UNIT_RECIPES.split("UNIT_KEY =", 1)[1].split("LINK_BIN =", 1)[0]
-    data_recipe = buildfiles.UNIT_RECIPES.split("PLAIN_DATA_BIN =", 1)[1].split("MIXED_TOOL =", 1)[0]
+    from unbake.report import producer_recipe
+
+    leaves = {
+        "VER": version,
+        "*F": unit.name,
+        "NAME": project.name,
+        "KIND": compiler.kind,
+        f"{version}.D.{unit.name}.SECTION": getattr(unit, "section", ""),
+        "TOOLCHAIN": "$(TOOLCHAIN)",
+        "PREPROCESS_" + compiler.kind: "$(PREPROCESS_" + compiler.kind + ")",
+        "COMPILE_" + compiler.kind: "$(COMPILE_" + compiler.kind + ")",
+    }
+    try:
+        # Compare the selected producing expression after recursive expansion.
+        # Variable spelling and unused metadata are not native inputs.
+        for root in ("UNIT_KEY", "DATA_BIN"):
+            if producer_recipe.body(make, root, leaves) != producer_recipe.body(buildfiles.UNIT_RECIPES, root, leaves):
+                qualification_refusal("recipe", "used producing expression differs", {"root": root})
+        if (
+            project.root / "versions" / version / (project.name + ".data.ld")
+        ).read_text() != buildfiles.data_link_script(project, version):
+            qualification_refusal("link_script", "used DATA linker script differs")
+    except ValueError as error:
+        qualification_refusal("recipe", str(error))
+    expected_recipe = buildfiles.native_compile_recipe(project, unit.name, tools)
+    actual_rows = producer_recipe.definitions(make)
+    actual_rows.update(producer_recipe.unit_definitions((project.root / "units.mk").read_text(), unit.name, version))
+    actual = actual_rows.get("COMPILE_" + compiler.kind)
+    if actual is None:
+        qualification_refusal("compile_recipe", "actual native compiler/assembler template missing")
+    cc_word = actual_rows.get("CC", "")
+    cc_path = project.root / cc_word
+    from unbake.compilers.registry import specification
+
+    spec = specification(compiler.id)
     if (
-        kind not in make
-        or "UNIT_KEY =" + key_recipe not in make
-        or "PLAIN_DATA_BIN =" + data_recipe not in make
-        or (project.root / "versions" / version / (project.name + ".data.ld")).read_text()
-        != buildfiles.data_link_script(project, version)
+        not cc_path.is_file()
+        or cc_path.is_symlink()
+        or inputs.digest(cc_path, algorithm="sha256", reuse=False) != spec.pins[spec.cc]
     ):
-        return None
-    binding = producer_binding(project, version, unit)
-    configuration = producer_configuration(project, version, binding)
-    expected = buildfiles.units_mk(project, names=(unit.name,)).splitlines()[1:]
-    if configuration["unit_recipe"] != expected:
-        return None
-    recipe = buildfiles.native_compile_recipe(project, unit.name, tools)
-    toolchain = hashlib.sha1(
-        (project.tools / "compilers.sha256").read_bytes() + (project.tools / "n64link.version").read_bytes()
-    ).hexdigest()
+        qualification_refusal("compiler_pin", "actual producing compiler does not match immutable selected pin")
+    words = {"AS": tools.mips_as, "N64LINK": tools.n64link, "*F": unit.name, "CURDIR": str(project.root), "CC": cc_word}
+    try:
+        recipe = producer_recipe.expand(actual, actual_rows, words).replace(str(project.root) + "/", "")
+    except ValueError as error:
+        qualification_refusal("compile_recipe", str(error))
+    import shlex
+
+    actual_commands = shlex.split(recipe.replace(cc_word, "<pinned-cc>", 1))
+    current_commands = shlex.split(expected_recipe.replace(buildfiles.relative(project, compiler.cc), "<pinned-cc>", 1))
+    if producer_recipe.argv_identity(actual_commands) != producer_recipe.argv_identity(current_commands):
+        qualification_refusal(
+            "compile_recipe",
+            "actual effective compiler/assembler argv differs",
+            {"actual": actual_commands, "current": current_commands},
+        )
+    try:
+        used_toolchain = producer_recipe.toolchain_files(make)
+    except ValueError as error:
+        qualification_refusal("key_algorithm", str(error))
+    if any(not (project.root / name).is_file() or (project.root / name).is_symlink() for name in used_toolchain):
+        qualification_refusal("toolchain", "used toolchain pins are missing")
     expanded = preprocessed.read_bytes()
-    expected_key = hashlib.sha1((toolchain + " " + recipe + "\n").encode()).hexdigest()
-    expected_key += hashlib.sha1(expanded).hexdigest()
-    if key != expected_key:
-        return None
+    key_inputs = producing_key_inputs(project, used_toolchain, recipe, expanded, key, receipt["head"])
     original = project.root / "build" / "cas" / (key + ".o")
     copied = native.with_suffix(".o")
     paths = (preprocessed, key_path, original, copied, native.with_suffix(".elf"), native)
     if any(not path.is_file() or path.is_symlink() for path in paths):
-        return None
+        qualification_refusal("artifacts", "retained CAS/object/ELF/bin chain missing")
     if native.read_bytes() != linked:
-        return None
+        qualification_refusal("output", "native DATA output differs")
     hashes = {path: inputs.digest(path, algorithm="sha256", reuse=False) for path in paths}
     try:
         obj = Object(original)
@@ -534,46 +601,46 @@ def _immutable_producer_inputs(
                 if section[5]:
                     sections.append(index)
             elif section[5] and section[2] & 4:
-                return None
+                qualification_refusal("object", "pure DATA route has executable sections")
         if bytes(obj.data) != copied.read_bytes() or struct.unpack_from(">H", obj.data, 16)[0] != 1:
-            return None
+            qualification_refusal("copied_object", "DATA object is not the exact section-flag-adjusted CAS")
         if len(sections) != 1:
-            return None
+            qualification_refusal("sections", "pure DATA route requires one emitting DATA section")
         symbols = linker_symbols(
             project.root / "versions" / version / "symbols.ld",
             (project.root / "versions" / version / "symbols.ld").read_text(),
         )
         if symbols is None:
-            return None
+            qualification_refusal("symbols", "used linker symbols unavailable")
         material = rodata.relocated(
             obj, obj.names[sections[0]], 0, symbols=symbols, section_addresses={sections[0]: unit.address}
         )
         if material != linked:
-            return None
+            qualification_refusal("relocations", "relocated native DATA differs")
     except (ValueError, IndexError, struct.error):
-        return None
+        qualification_refusal("object", "malformed native object/relocations")
     # Capture before CPP and assert afterwards, including missing header probes.
     command = drivers.preprocess_command(project, str(host.cpp), version, unit.name, source, non_matching=False)
     captured = capture_inputs(
         project, source, version, command, compiler=project.compiler_reference(unit.name), non_matching=False
     )
     if captured.values.get("dependencies_unknown"):
-        return None
+        qualification_refusal("dependencies", "used input closure is unknown")
     try:
         current = runner.preprocess(project, host, source, version, unit=unit.name)
         assert_inputs(project, captured)
     except Held:
-        return None
+        qualification_refusal("preprocess", "current semantic preprocessing/input readback failed")
     if expanded.decode() != current and any(
-        flag.startswith("-g")
-        for flag in drivers.codegen_flags(list(compiler.cflags) + list(project.unit_flags.get(unit.name, ())))
+        flag.startswith("-g") for flag in drivers.resolved(project, version, unit.name).phase("compile")
     ):
-        return None
+        qualification_refusal("debug", "changed preprocessing under debug recipe")
     if not _same_preprocessed_inputs(expanded.decode(), current, obj):
-        return None
+        qualification_refusal("preprocess", "current emitting preprocessing differs")
     identity = {
         "producer_native_inputs": {
             "compiler_key": key,
+            "key_inputs": key_inputs,
             "compile_recipe_sha256": hashlib.sha256(recipe.encode()).hexdigest(),
             "preprocessed_sha256": hashes[preprocessed],
             "original_object_sha256": hashes[original],
@@ -581,12 +648,100 @@ def _immutable_producer_inputs(
             "final_artifact_sha256": hashes[native.with_suffix(".elf")],
             "native_bytes_sha256": hashes[native],
             "current_input_identity": captured.digest,
-            "publication_head": head,
+            "publication_head": receipt["head"],
             "publication_receipt_sha256": digest(receipt),
             "published_source_sha256": hashlib.sha256(published).hexdigest(),
         }
     }
     return hashes, identity, captured
+
+
+def producing_key_inputs(
+    project: Project, paths: tuple[str, ...], recipe: str, expanded: bytes, key: str, head: str
+) -> dict[str, Any]:
+    """Read back the actual historical key envelope without changing native lineage.
+
+    Current compiler/argv, CPP, CAS, copied object and relocated ROM checks stay
+    at the caller. A key salt need not have produced bytes, but its actual old
+    blob must reconstruct the retained key. An accepted commit supplies blobs;
+    neither the current linker version nor today's binary labels old outputs.
+    """
+    from unbake import process
+
+    def identity(blobs: dict[str, bytes]) -> str:
+        prefix = hashlib.sha1(b"".join(blobs[name] for name in paths)).hexdigest()
+        return hashlib.sha1((prefix + " " + recipe + "\n").encode()).hexdigest() + hashlib.sha1(expanded).hexdigest()
+
+    blobs = {name: (project.root / name).read_bytes() for name in paths}
+    origin = "current_content"
+    if identity(blobs) != key:
+        try:
+            blobs = {
+                name: process.run_tool(["git", "show", head + ":" + name], project.root, "publish").encode()
+                for name in paths
+            }
+        except Held:
+            qualification_refusal("key_inputs", "hash-backed historical native key inputs unavailable")
+        if identity(blobs) != key:
+            qualification_refusal("key", "historical effective recipe/toolchain/preprocess key differs")
+        origin = "accepted_commit"
+    return {
+        "origin": origin,
+        "head": head if origin == "accepted_commit" else None,
+        "compiler_key": key,
+        "files": {
+            name: {"sha256": hashlib.sha256(blob).hexdigest(), "content_hex": blob.hex()}
+            for name, blob in blobs.items()
+        },
+    }
+
+
+def retained_producer_inputs(
+    project: Project, version: str, unit: Any, linked: bytes, receipt: dict[str, Any] | None
+) -> tuple[dict[Path, str], dict[str, Any], inputs.DependencySet] | None:
+    """Reuse the existing accepted immutable chain by content, never by mtime."""
+    if receipt is None:
+        qualification_refusal("receipt", "retained accepted native producer receipt is required")
+    binding = producer_binding(project, version, unit)
+    published_producer_source(project, version, unit, project.root / binding["source"], receipt)
+    candidates = receipt.get("check", {}).get("native_data", ())
+    for proof in candidates:
+        dependencies = attempts.dependency_record(proof["dependencies"])
+        if dependencies.values.get("producer_binding") != binding:
+            continue
+        payload = proof.get("payload", {})
+        evidence = payload.get("evidence", ())
+        if payload.get("version") != version or payload.get("rom_sha1") != project.version(version).baserom_sha1:
+            qualification_refusal("binding", "retained native target identity differs")
+        if (
+            current_dependencies(
+                project, {"dependencies": proof["dependencies"], "result": {"value": {"native_data": payload}}}, version
+            )
+            is not None
+        ):
+            qualification_refusal("inputs", "retained used native producer inputs changed")
+        observed = [
+            extent
+            for row in evidence
+            if row.get("input_identity") == dependencies.digest
+            for extent in row.get("extents", ())
+        ]
+        if not any(
+            extent.get("rom_offset") == unit.start
+            and extent.get("size") == unit.size
+            and extent.get("bytes_sha256") == hashlib.sha256(linked).hexdigest()
+            for extent in observed
+        ):
+            qualification_refusal("output", "retained native extent does not prove current output")
+        return (
+            {},
+            {"retained_producer_input_identity": dependencies.digest, "retained_receipt_sha256": digest(receipt)},
+            dependencies,
+        )
+    qualification_refusal(
+        "native_chain",
+        "no complete retained producing input/output chain; preserve historical command and pin uncertainty",
+    )
 
 
 def capture_producer(
@@ -691,11 +846,16 @@ def capture_producer(
     if any(not path.is_file() or path.is_symlink() for path in producer_paths):
         return None
     if any(path.stat().st_mtime_ns > native.stat().st_mtime_ns for path in freshness_paths):
-        if unit.kind != "data" or mixed or host is None or producer_tools is None or publication_receipt is None:
-            return None
-        reusable = _immutable_producer_inputs(
-            project, host, version, unit, source, linked, producer_tools, publication_receipt
-        )
+        if unit.kind == "data" and not mixed:
+            if host is None or producer_tools is None or publication_receipt is None:
+                qualification_refusal(
+                    "prerequisites", "current preprocessing tools and accepted native receipt required"
+                )
+            reusable = _immutable_producer_inputs(
+                project, host, version, unit, source, linked, producer_tools, publication_receipt
+            )
+        else:
+            reusable = retained_producer_inputs(project, version, unit, linked, publication_receipt)
         if reusable is None:
             return None
         native_inputs, native_identity, preprocessing = reusable
@@ -719,6 +879,12 @@ def capture_producer(
             **native_identity,
         },
         recipes,
+    )
+    recipe_projection = producer_recipe_inputs(project, {"dependencies": dependencies.document()})
+    if recipe_projection is None:
+        qualification_refusal("recipe_projection", "used generated producer recipe cannot be projected")
+    dependencies = inputs.DependencySet(
+        dependencies.files, {**dependencies.values, "producer_recipe_inputs": recipe_projection}, dependencies.recipes
     )
     if current_dependencies(project, {"dependencies": dependencies.document()}, version) is not None:
         return None
@@ -1065,6 +1231,102 @@ def linker_inputs(
     return projected
 
 
+def producer_recipe_inputs(
+    project: Project, event: dict[str, Any], *, archive_root: Path | None = None
+) -> dict[str, Any] | None:
+    """Content-bound used producing recipe; historical certificates require readback."""
+    deps = attempts.dependency_record(event["dependencies"])
+    pins = {pin.path.name: pin for pin in deps.files}
+    pin = pins.get("project:Makefile")
+    root = archive_root or project.root
+    make = root / "Makefile"
+    if pin is None or pin.state != "file" or pin.sha256 is None or not make.is_file() or make.is_symlink():
+        return None
+    text = make.read_text()
+    if archive_root is not None and hashlib.sha256(text.encode()).hexdigest() != pin.sha256:
+        refuse("archived producing Makefile differs from captured pin")
+    version = deps.values.get("version")
+    slices_name = f"versions/{version}/slices.mk"
+    slices = root / slices_name
+    slices_text = slices.read_text() if slices.is_file() and not slices.is_symlink() else None
+    slices_pin = pins.get("project:" + slices_name)
+    if (
+        archive_root is not None
+        and slices_pin is not None
+        and slices_text is not None
+        and hashlib.sha256(slices_text.encode()).hexdigest() != slices_pin.sha256
+    ):
+        slices_text = None
+    return producer_recipe_content(
+        project.name, deps.values, text, pin.sha256, slices_text, slices_pin.sha256 if slices_pin else None
+    )
+
+
+def producer_recipe_content(
+    name: str,
+    values: Any,
+    text: str,
+    captured_sha256: str,
+    slices_text: str | None = None,
+    slices_sha256: str | None = None,
+) -> dict[str, Any] | None:
+    """Pure decoder shared by current readback and reviewed migration of pinned blobs."""
+    from unbake.compilers.registry import specification
+    from unbake.report import producer_recipe
+
+    binding = values.get("producer_binding")
+    if not binding:
+        return None
+    unit, version = binding["unit"], values["version"]
+    leaves = {
+        "VER": version,
+        "*F": unit["name"],
+        "NAME": name,
+        "TOOLCHAIN": "$(TOOLCHAIN)",
+        "RESOURCE_NAME": unit["name"],
+        f"{version}.D.{unit['name']}.SECTION": unit.get("section", ""),
+    }
+    try:
+        if unit["kind"] == "data":
+            spec = specification(values["producer_configuration"]["compiler"])
+            leaves.update(
+                {
+                    "abspath $(CC)": "cc:" + digest(spec.pins),
+                    "CC": "cc:" + digest(spec.pins),
+                    "COMPILE_" + spec.kind: "$(COMPILE_" + spec.kind + ")",
+                    "PREPROCESS_" + spec.kind: "$(PREPROCESS_" + spec.kind + ")",
+                    "KIND": spec.kind,
+                    **{key: "$(" + key + ")" for key in ("CODEGEN", "UNIT_CODEGEN", "PREPROCESS_FLAGS", "CPPFLAGS")},
+                }
+            )
+            roots: tuple[str, ...] = ("UNIT_KEY", "DATA_BIN", "COMPILE_" + spec.kind, "PREPROCESS_" + spec.kind)
+        elif unit.get("assembler") == "gnu":
+            roots = ("RESOURCE_BIN",)
+        else:
+            if slices_text is None or slices_sha256 is None:
+                return None
+            lines = slices_text.splitlines()
+            selected = [line for i, line in enumerate(lines) if unit["source"] in line for line in lines[i : i + 2]]
+            if not selected:
+                return None
+            return {
+                f"versions/{version}/slices.mk": {
+                    "captured_sha256": slices_sha256,
+                    "used": {"resource_group": selected},
+                }
+            }
+        used = {root: producer_recipe.body(text, root, leaves) for root in roots}
+        return {
+            "Makefile": {
+                "captured_sha256": captured_sha256,
+                "used": used,
+                "key_salts": list(producer_recipe.key_salts(text, used)) if unit["kind"] == "data" else [],
+            }
+        }
+    except (ValueError, KeyError, TypeError):
+        return None
+
+
 @attempts.with_ledger
 def record_input_projections(project: Project, archive_root: Path) -> list[str]:
     """Append hash-verified semantic readbacks of preserved producer inputs."""
@@ -1075,15 +1337,15 @@ def record_input_projections(project: Project, archive_root: Path) -> list[str]:
         event = history.events[identity_]
         if event["kind"] != "native.data" or "producer_binding" not in event["dependencies"]["values"]:
             continue
-        if event["dependencies"]["values"].get("producer_linker_inputs") is not None:
-            continue
         projection = linker_inputs(project, event, archive_root=archive_root)
-        if projection is None:
+        recipe_projection = producer_recipe_inputs(project, event, archive_root=archive_root)
+        if projection is None or recipe_projection is None:
             continue
         value = {
             "proof_event": identity_,
             "input_identity": attempts.dependency_record(event["dependencies"]).digest,
             "linker_inputs": projection,
+            "recipe_inputs": recipe_projection,
         }
         prior = history.latest("native.data.inputs", identity_)
         if prior is not None and prior["result"]["value"] == value:
@@ -1127,6 +1389,7 @@ def current_dependencies(project: Project, event: dict[str, Any], version: str) 
             project.version(version).split.relative_to(project.root).as_posix(),
         }
     projection = dependencies.values.get("producer_linker_inputs")
+    recipe_projection = dependencies.values.get("producer_recipe_inputs")
     if projection is None and "event_id" in event:
         certificate = attempts.ledger(project).latest("native.data.inputs", event["event_id"])
         if certificate is not None:
@@ -1139,10 +1402,34 @@ def current_dependencies(project: Project, event: dict[str, Any], version: str) 
                 and digest(value) in certificate["result"]["proof_ids"]
             ):
                 projection = value.get("linker_inputs")
+                recipe_projection = value.get("recipe_inputs")
     if projection is not None:
         if not isinstance(projection, dict) or not projection or projection != linker_inputs(project, event):
             return "data.linker_inputs.changed"
         semantic_paths.update(projection)
+    if recipe_projection is not None:
+        current_recipe = producer_recipe_inputs(project, event)
+        from unbake.report.producer_recipe import used_identity
+
+        if current_recipe is None or used_identity(recipe_projection) != used_identity(current_recipe):
+            return "data.producing_recipe.changed"
+        semantic_paths.update(recipe_projection)
+        # A salt is exempt only when the hash-bound producing certificate AND
+        # current recipe agree on its non-native role. Used commands and source
+        # dependencies retain their independent pins.
+        for name, row in recipe_projection.items():
+            if row.get("key_salts") != current_recipe[name].get("key_salts"):
+                return "data.producing_recipe.changed"
+            semantic_paths.update(row.get("key_salts", ()))
+        if binding and binding["unit"]["kind"] == "data":
+            from unbake.compilers.registry import specification, verify
+
+            compiler = project.compiler_for(binding["unit"]["name"])
+            try:
+                verify(compiler.cc.parent, specification(compiler.id))
+            except Held:
+                return "data.compiler_pin.changed"
+            semantic_paths.add("tools/compilers.sha256")
     pinned = set()
     for pin in dependencies.files:
         if pin.path.root != "project":

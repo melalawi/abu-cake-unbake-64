@@ -27,14 +27,49 @@ def READ_ONLY(args: argparse.Namespace) -> bool:
 
 
 def register(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--source-root",
+        action="append",
+        type=Path,
+        default=[],
+        help="Explicitly admit an external source/include root.",
+    )
+    parser.add_argument(
+        "--include-root",
+        action="append",
+        type=Path,
+        default=[],
+        help="Required include search root for this source scope.",
+    )
     parser.add_argument("file", type=Path, metavar="FILE")
-    parser.add_argument("--method", required=True, choices=("order", "registers", "permute", "scheduler-birth"))
+    parser.add_argument("--require-version", action="append", default=[])
+    parser.add_argument(
+        "--method", required=True, choices=("auto", "creative", "order", "registers", "permute", "scheduler-birth")
+    )
     parser.add_argument("--seconds", required=True, type=positive, metavar="N", help="Wall-clock budget.")
 
 
 def run(context: Context) -> Result:
+    from unbake import steps
     from unbake.work import search
+    from unbake.work.source_scope import scoped_project
 
-    project, host = context.ready("buildfiles")
-    found = search.search(project, host, context.args.file.resolve(), context.args.method, context.args.seconds)
-    return Result.ok(NAME, found.document(), found.lines(), context.cmd("compare", found.best_file))
+    project = scoped_project(
+        context.project(),
+        context.args.file.resolve(),
+        tuple(context.args.source_root),
+        tuple(context.args.include_root),
+    )
+    host = context.require_host()
+    steps.ensure(project, host, ("buildfiles",))
+    found = search.search(
+        project,
+        host,
+        context.args.file.resolve(),
+        context.args.method,
+        context.args.seconds,
+        external_roots=tuple(context.args.source_root),
+        required_versions=tuple(context.args.require_version),
+        config_path=context.config_path,
+    )
+    return Result.ok(NAME, found.document(), found.lines(), found.next_command)

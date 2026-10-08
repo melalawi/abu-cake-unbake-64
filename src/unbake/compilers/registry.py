@@ -55,6 +55,9 @@ class CompilerSpec:
     splat: str
     m2c: str
     permuter: str
+    supported_options: tuple[str, ...]
+    small_data: tuple[int, ...]
+    isa: tuple[int, ...]
 
 
 def _read(path: Path) -> dict[str, Any]:
@@ -242,6 +245,9 @@ def _registry() -> dict[str, CompilerSpec]:
             _text(_required(table, "splat", label), label + ".splat"),
             _target(_required(table, "m2c", label), label + ".m2c"),
             _target(_required(table, "permuter", label), label + ".permuter"),
+            _strings(_required(table, "supported_options", label), label + ".supported_options"),
+            tuple(table["small_data"]),
+            tuple(table["isa"]),
         )
     return result
 
@@ -361,7 +367,9 @@ def _replaced(path: Path, old: str | None, new: str) -> None:
 
 
 def _install(spec: CompilerSpec, cache: Path, source: Path | None, *, refresh: bool = False) -> Path:
-    destination = cache / spec.id
+    from unbake.compilers.recipe_options import recipe_digest
+
+    destination = cache / (spec.id + "-" + recipe_digest({"pins": spec.pins, "host": spec.host}))
     host = platform.system().lower() + "-" + platform.machine().lower()
     if host != spec.host:
         raise Held(
@@ -401,10 +409,10 @@ def _install(spec: CompilerSpec, cache: Path, source: Path | None, *, refresh: b
                     stage="setup",
                 )
             )
-        previous = _hashes(destination, spec)
-        if previous == spec.pins and not refresh:
+        if destination.exists():
             verify(destination, spec)
             return destination
+        previous: dict[str, str] = {}
         covered = {name for entry in spec.downloads for name in entry.files}
         supplied = {name: pin for name, pin in spec.pins.items() if name not in covered and previous.get(name) != pin}
         if supplied and source is None:
@@ -456,15 +464,7 @@ def _install(spec: CompilerSpec, cache: Path, source: Path | None, *, refresh: b
                 atomic_files.write(target, contents[pin])
                 target.chmod(0o755)
             verify(stage, spec)
-            if destination.exists():
-                for name, pin in spec.pins.items():
-                    target = destination / name
-                    if previous.get(name) != pin or target.is_symlink():
-                        target.parent.mkdir(parents=True, exist_ok=True)
-                        atomic_files.publish(stage / name, target)
-                        _replaced(target, previous.get(name), pin)
-            else:
-                os.replace(stage, destination)
+            os.replace(stage, destination)
             verify(destination, spec)
         return destination
 
@@ -500,6 +500,13 @@ def _supplies(project: Project, override: Path | None) -> dict[str, Path]:
             source = Path(value).expanduser()
             result[ident] = source if source.is_absolute() else project.root / source
     return result
+
+
+def compiler_directory(tools: Path, spec: CompilerSpec) -> Path:
+    """One immutable binary directory per exact pin set and host."""
+    from unbake.compilers.recipe_options import recipe_digest
+
+    return tools / (spec.id + "-" + recipe_digest({"pins": spec.pins, "host": spec.host}))
 
 
 def _ensure(project: Project, policy: Host | Host, override: Path | None) -> Path:
@@ -582,77 +589,29 @@ def _ensure(project: Project, policy: Host | Host, override: Path | None) -> Pat
     sources = _supplies(project, override)
     cache = cache_root / "compilers"
     cache.mkdir(parents=True, exist_ok=True)
-    installs = {}
-    for ident in sorted(compilers):
-        project_directory = tools / ident
-        if project_directory.is_symlink():
-            raise Held(
-                cause_named(
-                    f"{project_directory}",
-                    f"{project_directory}: expected directory for compiler files",
-                    owner="compilers.registry",
-                    stage="setup",
-                )
-            )
-        previous = _hashes(project_directory, specs[ident])
-        refresh = any(pin != specs[ident].pins[name] for name, pin in previous.items())
-        installs[ident] = _install(specs[ident], cache, sources.get(ident), refresh=refresh)
     tools.mkdir(parents=True, exist_ok=True)
-    manifest_path = tools / MANIFEST
-    if manifest_path.is_file():
-        for line in manifest_path.read_text().splitlines():
-            fields = line.split(maxsplit=1)
-            if len(fields) != 2 or not re.fullmatch(r"[0-9a-f]{64}", fields[0]):
-                continue
-            relative = Path(compiler_files.relative(fields[1]))
-            for ident in installs:
-                prefix = tools_relative / ident
-                if relative.is_relative_to(prefix) and relative.relative_to(prefix).as_posix() not in specs[ident].pins:
-                    target = root / relative
-                    if any(parent.is_symlink() for parent in target.parents):
-                        raise Held(
-                            cause_named(
-                                f"{target}",
-                                f"{target}: compiler parent is a symlink",
-                                owner="compilers.registry",
-                                stage="setup",
-                            )
-                        )
-                    if target.is_file() or target.is_symlink():
-                        target.unlink()
     manifest = []
-    for ident, directory in installs.items():
-        project_directory = tools / ident
-        if project_directory.is_symlink():
-            raise Held(
-                cause_named(
-                    f"{project_directory}",
-                    f"{project_directory}: expected directory for compiler files",
-                    owner="compilers.registry",
-                    stage="setup",
-                )
-            )
-        project_directory.mkdir(parents=True, exist_ok=True)
-        for name, pin in sorted(specs[ident].pins.items()):
-            target = project_directory / name
-            if any(parent.is_symlink() for parent in target.parents):
-                raise Held(
-                    cause_named(
-                        f"{target}",
-                        f"{target}: compiler parent is a symlink",
-                        owner="compilers.registry",
-                        stage="setup",
+    for ident in sorted(compilers):
+        spec = specs[ident]
+        project_directory = compiler_directory(tools, spec)
+        if project_directory.exists():
+            verify(project_directory, spec)
+        else:
+            directory = _install(spec, cache, sources.get(ident), refresh=False)
+            with tempfile.TemporaryDirectory(prefix=".compiler-", dir=tools) as temporary:
+                stage = Path(temporary) / "release"
+                stage.mkdir()
+                for name in spec.pins:
+                    target = stage / name
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    atomic_files.write(
+                        target, (directory / name).read_bytes(), mode=(directory / name).stat().st_mode & 0o777
                     )
-                )
-            target.parent.mkdir(parents=True, exist_ok=True)
-            old = inputs.digest(target, algorithm="sha256", reuse=retention.configured()) if target.is_file() else None
-            if old != pin or target.is_symlink():
-                atomic_files.write(
-                    target, (directory / name).read_bytes(), mode=(directory / name).stat().st_mode & 0o777
-                )
-                _replaced(target, old, pin)
-            manifest.append(f"{pin}  {(tools_relative / ident / name).as_posix()}\n")
-        verify(project_directory, specs[ident])
+                verify(stage, spec)
+                os.replace(stage, project_directory)
+        for name, pin in sorted(spec.pins.items()):
+            manifest.append(f"{pin}  {(project_directory / name).relative_to(root).as_posix()}\n")
+    manifest_path = tools / MANIFEST
     atomic_files.write(manifest_path, "".join(manifest).encode())
     return manifest_path
 

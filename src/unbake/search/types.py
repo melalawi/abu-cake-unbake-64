@@ -14,6 +14,8 @@ from unbake.process import named as cause_named
 from unbake.search.core import Context, Mutation
 from unbake.work.compare import Compared
 
+needs_preprocess = True
+
 _MASK = re.compile(r'/\*.*?\*/|//[^\n]*|"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'', re.S)
 _SPELLING = re.compile(r"\b(?:(?:unsigned|signed)\s+)?(?:long\s+long|char|short|int|long)\b|\b[su](?:8|16|32|64)\b")
 _WIDTHS = {"8": "16", "16": "8 32", "32": "16"}

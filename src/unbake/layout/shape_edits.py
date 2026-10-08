@@ -82,7 +82,7 @@ def scan(job: tuple[Project, str]) -> Scan:
             return []
         owner = Path(previous.path).name
         compiler = project.compiler_for(owner)
-        flags = project.unit_flags.get(owner, ())
+        flags = project.recipe_for(owner).phase("compile")
         bias = previous.address - previous.start
         known = {f.address - bias for f in rows}
         code = {at: int.from_bytes(image[at : at + 4], "big") for at in range(previous.start, previous.end, 4)}
@@ -99,7 +99,7 @@ def scan(job: tuple[Project, str]) -> Scan:
                 or segment_of[previous.start] != segment_of[following.start]
                 or following.address - following.start != bias
                 or project.compiler_for(name) != compiler
-                or project.unit_flags.get(name, ()) != flags
+                or project.recipe_for(name).phase("compile") != flags
                 or any(shape._frame_open(word) for word in words)
                 or not shape._reads_unset(words, target)
             ):

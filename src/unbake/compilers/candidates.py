@@ -24,17 +24,15 @@ def resolve(
     project: Project, host: Host, file: Path, configured: object, *, required_versions: tuple[str, ...] | None = None
 ) -> tuple[Choice, object]:
     """(choice, measured result) where configured is the configured compiler's Compared result or its Held."""
-    from unbake.work.compare import Compared, measure
+    from unbake.work.compare import Compared, function_of, measure
 
-    function = file.stem
+    function = function_of(file)
     own = project.compiler_reference(function)
 
     def required(result: Compared) -> bool:
-        return (
-            result.identical_everywhere
-            if required_versions is None
-            else all(version in result.compares and result.compares[version].exact for version in required_versions)
-        )
+        from unbake.work.compare import acceptance
+
+        return acceptance(result.compares, required_versions, result.preconditions)
 
     def rank(result: Compared) -> tuple[bool, int, int, float]:
         return measured_candidate_rank(

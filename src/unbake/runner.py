@@ -13,12 +13,13 @@ import re
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 
 from unbake import atomic as atomic_files
 from unbake import cache, inputs, process, scratch
 from unbake import cache as retention
 from unbake.compilers import drivers
+from unbake.compilers import registry as toolchain
 from unbake.config import Held, Host, Project
 from unbake.layout import split
 from unbake.process import capture
@@ -35,7 +36,9 @@ def tools(host: Host) -> drivers.Tools:
 def _compiler_pins(project: Project, unit: str) -> str:
     """The compiler tree's file digests; each digest is reused while the file's stat signature holds."""
     compiler = project.compiler_for(unit)
-    root = project.tools / compiler.id
+    spec = toolchain.specification(compiler.id)
+    root = toolchain.compiler_directory(project.tools, spec)
+    toolchain.verify(root, spec)
     files = sorted(path for path in root.rglob("*") if path.is_file())
     return cache.key(
         *(
@@ -59,6 +62,7 @@ def compile_unit(
     unit: str,
     non_matching: bool = False,
     verify_input: Callable[[str], None] | None = None,
+    capture_info: dict[str, Any] | None = None,
 ) -> Iterator[Path]:
     """Own one object lifetime; reuse the CAS by preprocessed text, commands and compiler."""
     file = Path(file).resolve()
@@ -101,10 +105,27 @@ def compile_unit(
         ) from error
     if verify_input is not None:
         verify_input(preprocessed)
+    if capture_info is not None:
+        capture_info.update(
+            {
+                "preprocessed_sha256": inputs.bytes_digest(preprocessed.encode(), algorithm="sha256"),
+                "compiler_pins": compiler_pins,
+                "preprocess_argv": list(commands.preprocess),
+                "compile_argv": list(commands.compile),
+                "assemble_argv": list(commands.assemble) if commands.assemble else None,
+            }
+        )
     absolute_cc = str(project.compiler_for(unit).cc)
     compile_argv = [absolute_cc, *commands.compile[1:]]
     content_key = cache.key(
         "object",
+        inputs.digest(Path(drivers.__file__), algorithm="sha256", reuse=retention.configured()),
+        inputs.digest(
+            Path(drivers.__file__).with_name("recipe_options.py"), algorithm="sha256", reuse=retention.configured()
+        ),
+        inputs.digest(
+            Path(drivers.__file__).with_name("compiler_contracts.py"), algorithm="sha256", reuse=retention.configured()
+        ),
         preprocessed,
         "\0".join(compile_argv[1:]),
         "\0".join(commands.assemble[1:] if commands.assemble else ()),
@@ -116,7 +137,7 @@ def compile_unit(
         if commands.assemble
         else "",
     )
-    name = Path(unit).name
+    name = Path(unit).stem
 
     def make(destination: Path) -> None:
         with scratch.temporary(host, project, "compile", prefix="compile-") as temporary:
@@ -139,6 +160,8 @@ def compile_unit(
         try:
             cached = cache.Cache(project.cache).produce("object", content_key, make)
             atomic_files.copyfile(cached, output)
+            if capture_info is not None:
+                capture_info["object_sha256"] = inputs.digest(output, algorithm="sha256", reuse=False)
         except Held as error:
             raise Held(
                 capture(
@@ -293,7 +316,10 @@ def initialized_layout(
     return rodata.initialized_sections(
         obj,
         Object(placed),
-        tuple(tuple(int(part, 16) for part in value.split(":")) for value in windows(project, version)),
+        tuple(
+            cast(tuple[int, int, int], tuple(int(part, 16) for part in value.split(":")))
+            for value in windows(project, version)
+        ),
         definition_sizes=sizes,
     )
 
@@ -412,7 +438,14 @@ def link(
 
 
 def link_function(
-    project: Project, host: Host, obj: Path, version: str, row: split.Function, source: Path
+    project: Project,
+    host: Host,
+    obj: Path,
+    version: str,
+    row: split.Function,
+    source: Path,
+    *,
+    capture_info: dict[str, Any] | None = None,
 ) -> tuple[bytes, list[str]]:
     """Score mode: the unit's linked words even when some constants are unproved, with those problems."""
     from unbake.objects import rodata
@@ -431,7 +464,21 @@ def link_function(
             for section in rodata.unresolved_sections(Object(placed))
             if section not in emitted
         )
-        return link(project, host, placed, version, row, work, source, obj, score=True), problems
+        linked = link(project, host, placed, version, row, work, source, obj, score=True)
+        if capture_info is not None:
+            capture_info.update(
+                {
+                    "placed_object_sha256": inputs.digest(placed, algorithm="sha256", reuse=False),
+                    "linked_sha256": inputs.bytes_digest(linked, algorithm="sha256"),
+                    "placement": {"address": row.address, "rom_start": row.start, "rom_end": row.end},
+                    "placement_refusals": list(problems),
+                    "literal_layout": [__import__("dataclasses").asdict(item) for item in layout],
+                    "relocations": [
+                        (name, Object(placed).relocations(index)) for index, name in enumerate(Object(placed).names)
+                    ],
+                }
+            )
+        return linked, problems
 
 
 def build_unit(project: Project, host: Host, unit: str, version: str, *, source: Path | None = None) -> bytes:

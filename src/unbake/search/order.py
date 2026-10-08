@@ -18,6 +18,8 @@ from unbake.search.loops import variants as loop_variants
 from unbake.search.loops import walk
 from unbake.work.compare import Compared
 
+needs_preprocess = True
+
 
 def _items(node: Any, ast: Any) -> list[Any]:
     return cast(list[Any], node.block_items or []) if isinstance(node, ast.Compound) else [node]
@@ -171,43 +173,43 @@ def _terminal_tails(function: Any, ast: Any, safety: _Safety) -> Iterator[tuple[
         ast.Continue,
         ast.Compound,
     )
-    for index, label in enumerate(items):
-        if not isinstance(label, ast.Label):
+    for block in walk(function.body):
+        if not isinstance(block, ast.Compound):
             continue
-        tail = [label.stmt]
-        for statement in items[index + 1 :]:
-            if isinstance(tail[-1], ast.Return):
-                break
-            tail.append(statement)
-        if not isinstance(tail[-1], ast.Return) or any(
-            isinstance(child, unsupported) for statement in tail for child in walk(statement)
-        ):
-            continue
-        refs = {child.name for statement in tail for child in walk(statement) if isinstance(child, ast.ID)}
-        if any(declarations[name] > 1 or (name in safety.types and name not in bindings) for name in refs):
-            continue
-        jumps = [
-            child
-            for statement in items[:index]
-            for child in walk(statement)
-            if isinstance(child, ast.Goto) and child.name == label.name
-        ]
-        all_jumps = [child for child in walk(function.body) if isinstance(child, ast.Goto) and child.name == label.name]
-        if not jumps or len(jumps) != len(all_jumps):
-            continue
+        items = block.block_items or []
+        for index, label in enumerate(items):
+            if not isinstance(label, ast.Label):
+                continue
+            tail = [label.stmt]
+            for statement in items[index + 1 :]:
+                if isinstance(tail[-1], ast.Return):
+                    break
+                tail.append(statement)
+            if not isinstance(tail[-1], ast.Return) or any(
+                isinstance(child, unsupported) for statement in tail for child in walk(statement)
+            ):
+                continue
+            refs = {child.name for statement in tail for child in walk(statement) if isinstance(child, ast.ID)}
+            if any(declarations[name] > 1 or (name in safety.types and name not in bindings) for name in refs):
+                continue
+            jumps = [child for child in walk(function.body) if isinstance(child, ast.Goto) and child.name == label.name]
+            if not jumps:
+                continue
 
-        def duplicate(target: Any, index: int = index, name: str = label.name, tail: list[Any] = tail) -> None:
-            predecessors = [child for child in walk(target) if isinstance(child, ast.Goto) and child.name == name]
-            for jump in predecessors:
-                _replace(target, jump, lambda _: ast.Compound(deepcopy(tail)))
-            # The original path keeps precisely its existing suffix, without its handled label.
-            target.block_items[index] = target.block_items[index].stmt
+            def duplicate(target: Any, name: str = label.name, tail: list[Any] = tail) -> None:
+                predecessors = [child for child in walk(target) if isinstance(child, ast.Goto) and child.name == name]
+                for jump in predecessors:
+                    _replace(target, jump, lambda _: ast.Compound(deepcopy(tail)))
+                # The original path keeps precisely its existing suffix, without its handled label.
+                labels = [child for child in walk(target) if isinstance(child, ast.Label) and child.name == name]
+                for handled in labels:
+                    _replace(target, handled, lambda node: node.stmt)
 
-        yield (
-            function.body,
-            f"expand labelled tail {label.name} ({len(jumps)} goto edges; fallthrough retained)",
-            duplicate,
-        )
+            yield (
+                function.body,
+                f"expand labelled tail {label.name} ({len(jumps)} goto edges; fallthrough retained)",
+                duplicate,
+            )
 
 
 def _variants(function: Any, ast: Any, printer: Any, tree: Any) -> Iterator[tuple[Any, str, Callable[[Any], Any]]]:

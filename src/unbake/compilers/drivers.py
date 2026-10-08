@@ -11,8 +11,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from unbake import atomic as atomic_files
-from unbake import cache as retention
 from unbake.compilers.families import Family
+from unbake.compilers.recipe_options import ResolvedRecipe, partition, resolve_options
 from unbake.config import Compiler, Held, Host, Project
 from unbake.process import named as cause_named
 
@@ -79,28 +79,85 @@ def render(template: tuple[str, ...], values: dict[str, tuple[str, ...]]) -> tup
     return tuple(result)
 
 
-def consumer_define(project: Project, unit: str) -> str | None:
+def consumer_define(project: Project, unit: str | Path) -> str | None:
     """Units with a generated consumer header see their own guard macro."""
     if any((include / "shared" / "consumers" / f"{unit}.h").is_file() for include in project.include):
-        return "-DUNBAKE_CONSUMER_" + hashlib.sha256(unit.encode()).hexdigest()[:16].upper() + "=1"
+        return "-DUNBAKE_CONSUMER_" + hashlib.sha256(str(unit).encode()).hexdigest()[:16].upper() + "=1"
     return None
 
 
-def flags(project: Project, version: str, unit: str, *, non_matching: bool = False) -> list[str]:
-    """Include roots, compiler flags, version macros, the consumer guard and the unit's own flags."""
-    root = project.root
-    unit = Path(unit).stem
+def resolved(project: Project, version: str, unit: str | Path) -> ResolvedRecipe:
+    from unbake.compilers.registry import specification
+
+    compiler = project.compiler_for(unit)
+    spec = specification(compiler.id)
+    adapter = _selection(compiler.id)[1]
+    defaults = partition(compiler.cflags)
+    defaults["assemble"] = list(assembly_flags(project, compiler.id))
+    recipe = project.recipe_for(unit)
+    binding = None
+    separate = False
+    if recipe.functions:
+        from unbake.layout import split
+
+        rows = [
+            row
+            for v in project.versions
+            for row in split.functions(project, v)
+            if f"src/{row.path}.c" == project.unit_path(unit)
+        ]
+        bindings = {split.recipe_binding(row): row for row in rows}
+        if set(dict(recipe.functions)) - bindings.keys():
+            raise Held(
+                cause_named(
+                    "recipe.scope",
+                    "function binding differs from current placement",
+                    owner="compilers.drivers",
+                    stage="compile",
+                )
+            )
+        if any(len(split.unit_members(bindings[key])) != 1 for key in dict(recipe.functions)):
+            raise Held(
+                cause_named(
+                    "recipe.scope",
+                    "whole-file options require a separately compiled function TU",
+                    owner="compilers.drivers",
+                    stage="compile",
+                )
+            )
+        selected = [row for row in rows if row.version == version]
+        if len(selected) == 1:
+            binding, separate = split.recipe_binding(selected[0]), True
+    try:
+        result = resolve_options(
+            project.unit_path(unit),
+            recipe,
+            defaults,
+            version_macros=project.version(version).macros,
+            pins=spec.pins,
+            binding=binding,
+            separately_compiled=separate,
+            specs=adapter.option_space(spec),
+        )
+        _selection(compiler.id)[1].validate_options(result, compiler.cflags)
+        return result
+    except ValueError as error:
+        raise Held(cause_named("recipe.options", str(error), owner="compilers.drivers", stage="compile")) from error
+
+
+def flags(project: Project, version: str, unit: str | Path, *, non_matching: bool = False) -> list[str]:
+    recipe = resolved(project, version, unit)
     result = [
-        f"-I{include.relative_to(root) if include.is_relative_to(root) else include}" for include in project.include
+        f"-I{include.relative_to(project.root) if include.is_relative_to(project.root) else include}"
+        for include in project.include
     ]
-    result.extend(project.compiler_for(unit).cflags)
-    result.extend("-D" + macro for macro in project.version(version).macros)
+    result.extend(recipe.phase("preprocess"))
+    result.extend(recipe.phase("compile"))
     if non_matching:
         result.append("-DNON_MATCHING=1")
-    guard = consumer_define(project, unit)
+    guard = consumer_define(project, Path(project.unit_path(unit)).stem)
     if guard is not None:
         result.append(guard)
-    result.extend(project.unit_flags.get(unit, ()))
     return result
 
 
@@ -130,38 +187,24 @@ def _options(values: list[str]) -> tuple[list[str], list[str]]:
 
 
 def _supported(selector: str, values: list[str]) -> None:
-    import tomllib
+    _kind, family = _selection(selector)
+    from unbake.compilers.registry import registry
 
-    from unbake import inputs
-    from unbake.cache import memo
-    from unbake.compilers.registry import REGISTRY_PATH
-
-    kind, family = _selection(selector)
-
-    def read() -> frozenset[str]:
-        definitions = tomllib.loads(REGISTRY_PATH.read_text())["compilers"]
-        return frozenset(
-            flag
-            for spec in definitions.values()
-            if spec["kind"] == kind
-            for flags in [spec["cflags"], *spec["flag_variants"]]
-            for flag in flags
+    specs = registry()
+    baseline = (
+        (*specs[selector].cflags, *specs[selector].supported_options)
+        if selector in specs
+        else tuple(
+            flag for spec in specs.values() if spec.kind == _kind for flag in (*spec.cflags, *spec.supported_options)
         )
-
-    supported = memo(
-        "compiler.supported-flags",
-        (kind, REGISTRY_PATH, inputs.signature(REGISTRY_PATH)),
-        read,
-        size=retention.memory_size,
-        copy_out=retention.clone,
     )
     for flag in values:
-        if flag in supported or family.accepts_codegen(flag):
+        if flag in baseline or family.accepts_codegen(flag):
             continue
         raise Held(
             cause_named(
                 "compile.flags",
-                f"compile.flags: {flag}: unsupported by the {kind} driver",
+                f"compile.flags: {flag}: unsupported by {selector} driver",
                 owner="compilers.drivers",
                 stage="compile",
             )
@@ -214,12 +257,13 @@ def compiler_parts(project: Project, ident: str) -> tuple[list[str], list[str], 
     return _split(list(project.compilers[ident].cflags))
 
 
-def unit_parts(project: Project, unit: str) -> tuple[list[str], list[str], list[str]]:
+def unit_parts(project: Project, unit: str | Path) -> tuple[list[str], list[str], list[str]]:
     """A unit's extra [units] flags as (includes, codegen, defines)."""
-    return _split(list(project.unit_flags.get(unit, ())))
+    recipe = project.recipe_for(unit)
+    return _split([*recipe.phase("preprocess"), *recipe.phase("compile")])
 
 
-def parts(project: Project, version: str, unit: str, *, non_matching: bool = False) -> Parts:
+def parts(project: Project, version: str, unit: str | Path, *, non_matching: bool = False) -> Parts:
     """Everything a template needs for UNIT in VERSION; the Makefile composes the same lists from variables."""
     compiler = project.compiler_for(unit)
     templates(compiler.kind)
@@ -231,16 +275,19 @@ def parts(project: Project, version: str, unit: str, *, non_matching: bool = Fal
     return Parts(compiler.kind, cc, tuple(includes), codegen, tuple(defines), preprocess, tuple(effective))
 
 
-def steps(project: Project, version: str, unit: str, source: str, tools: Tools, *, non_matching: bool = False) -> Steps:
+def steps(
+    project: Project, version: str, unit: str | Path, source: str, tools: Tools, *, non_matching: bool = False
+) -> Steps:
     """The commands for UNIT from SOURCE (a path relative to the project root, or any quoted word)."""
     owned = parts(project, version, unit, non_matching=non_matching)
+    recipe = resolved(project, version, unit)
     return from_flags(
         project.compiler_for(unit).id,
         owned.cc,
         owned.effective,
         project.cppflags,
-        assembly_flags(project, project.compiler_for(unit).id),
-        unit,
+        recipe.phase("assemble"),
+        Path(project.unit_path(unit)).stem,
         source,
         tools,
     )
@@ -252,7 +299,7 @@ def from_flags(
     effective: tuple[str, ...],
     cppflags: tuple[str, ...],
     asflags: tuple[str, ...],
-    unit: str,
+    unit: str | Path,
     source: str,
     tools: Tools,
 ) -> Steps:
@@ -282,7 +329,14 @@ def from_flags(
 
 
 def preprocess_command(
-    project: Project, cpp: str, version: str, unit: str, source: Path, *, non_matching: bool, line_markers: bool = False
+    project: Project,
+    cpp: str,
+    version: str,
+    unit: str | Path,
+    source: Path,
+    *,
+    non_matching: bool,
+    line_markers: bool = False,
 ) -> list[str]:
     """Exactly the build stage; callers run from the project root."""
     commands = steps(project, version, unit, str(source), Tools(cpp, "", ""), non_matching=non_matching)
@@ -296,7 +350,7 @@ def preprocess_command(
     return argv
 
 
-def analysis_command(project: Project, policy: Host, version: str, unit: str) -> list[str]:
+def analysis_command(project: Project, policy: Host, version: str, unit: str | Path) -> list[str]:
     """Family-owned host analysis in the unit's effective macro/include environment."""
     from unbake import scratch
     from unbake.compilers.families import family_for
@@ -310,7 +364,7 @@ def analysis_command(project: Project, policy: Host, version: str, unit: str) ->
     return [cpp, *family_for(compiler).analysis_cppflags(project.cppflags), *options, "-x", "c", "-"]
 
 
-def preprocess_text(project: Project, cpp: str, version: str, unit: str, text: str, phase: str) -> str:
+def preprocess_text(project: Project, cpp: str, version: str, unit: str | Path, text: str, phase: str) -> str:
     """Preprocess in-memory C through the same family stage, with source ownership supplied."""
     import tempfile
 
@@ -368,7 +422,7 @@ def run_preprocess(
     argv: list[str],
     phase: str,
     *,
-    unit: str | None = None,
+    unit: str | Path | None = None,
     context: dict[str, object] | None = None,
     temporary_root: Path | None = None,
 ) -> str:
@@ -378,4 +432,11 @@ def run_preprocess(
 
     compiler = project.compilers[project.default_compiler] if unit is None else project.compiler_for(unit)
     result = process.run_native(argv, project.root, phase, context=context, temporary_root=temporary_root)
-    return family_for(compiler).preprocessed(result)
+    try:
+        return family_for(compiler).preprocessed(result)
+    except ValueError as error:
+        raise Held(
+            process.Fault(
+                cause_named("preprocess.semantic", str(error), owner="compilers.drivers", stage="preprocess"), (result,)
+            )
+        ) from error

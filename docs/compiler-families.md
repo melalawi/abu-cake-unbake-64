@@ -1,7 +1,7 @@
 # Compiler ownership
 
 The registry owns compiler IDs, versions, families, execution-path kinds, pins,
-downloads, flag variants, external decompiler/scorer targets, extraction modes
+downloads, finite option spaces, external decompiler/scorer targets, extraction modes
 and persisted build-key compatibility. Kind selects a native execution path;
 compiler identity selects preprocessing semantics and assembler options.
 
@@ -45,3 +45,25 @@ conflicting owners are refused and installed SDK or human providers are retained
 Native selectors and reserved source operators come only from the family adapter.
 Standard vararg retrieval captures its cursor lvalue once; native evidence covers
 target sizes, alignment holes, floating prefixes and independent list copies.
+
+Scoped recipes use config schema 2. Each canonical `src/path.c` unit selects a
+pinned compiler and explicit ordered `preprocess`, `compile`, `assemble`, and
+`link` options. The resolver applies compiler defaults, version macros, unit,
+proved separate-function scope, then trial options. Exclusive groups replace an
+earlier value within their phase. Compiler `-G` never changes assembler `-G`.
+Unsupported link options and diagnostic-only build switches refuse before work.
+Declared per-unit ABI overrides remain valid; speculative ABI/ISA changes require
+compatible target/caller evidence. Both GCC and IDO expose the same option,
+capability, semantic preprocessing, and retained observation interfaces.
+
+`migrate-state --plan` reads legacy config before strict loading. Its immutable
+plan reports unknown fields, effective argv, verified binary copies, missing
+inputs, and evidence disposition. `--apply PLAN` verifies every input, preserves
+before-images and historical events, reads back the current config, and copies
+verified compiler bytes into digest directories. Used installs are never replaced.
+Historical comparisons remain explicitly unverified until compared again.
+
+Ordinary Make and tool preprocessing use the same portable semantic validator.
+Native keys include the driver/resolver/contracts and exact binary pins. Diagnostic
+captures are explicit, isolated, and accepted as observations only when their
+final linked bytes equal the ordinary build; they cannot become build options.

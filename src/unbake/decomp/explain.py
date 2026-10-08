@@ -16,10 +16,26 @@ from unbake.work.score import Measurement
 
 def align(allocation: Allocation, comparison: Measurement) -> Allocation:
     """Attach the trial's aligned register words to possible pseudos and winners."""
+    if allocation.linked_sha256 != comparison.strict.get("linked_sha256"):
+        return replace(
+            allocation,
+            differences=(),
+            instruction_origins=(),
+            limitations=(*allocation.limitations, "diagnostic recipe has no equal linked-byte proof"),
+        )
     differences = []
     for target_offset, draft_offset, before, after in comparison.register_changes:
-        candidates = tuple(p.number for p in allocation.pseudos if p.hard == after)
-        holders = tuple(p.number for p in allocation.pseudos if p.hard == before)
+        origins = [(uid, numbers) for offset, uid, numbers in allocation.instruction_origins if offset == draft_offset]
+        candidates = tuple(
+            p.number
+            for p in allocation.pseudos
+            if p.hard == after
+            and any(
+                p.number in numbers and (p.live_range is None or p.live_range[0] <= uid <= p.live_range[1])
+                for uid, numbers in origins
+            )
+        )
+        holders = ()  # target RTL is unavailable; hard-register names are not pseudo identity
         differences.append(
             RegisterDifference(
                 target_offset,
@@ -63,12 +79,14 @@ def render(allocation: Allocation) -> str:
         if allocation.family:
             rows.extend(family_named(allocation.family).allocation_hints(difference, by_number))
         for role, numbers in (("candidate", difference.candidates), ("holder", difference.holders)):
-            for number in numbers:
+            for number in numbers[:5]:
                 p = by_number[number]
                 rows.append(
                     f"  {role} pseudo {number}: priority={p.priority} refs={p.references} "
                     f"live={p.live_range} length={p.live_length} allocator={p.allocator}"
                 )
+                if len(numbers) > 5:
+                    rows.append(f"    {len(numbers) - 5} further relevant pseudos retained")
                 rows.extend(
                     f"    rejected {hard}: {why}" for hard, why in p.rejections if hard == difference.target_hard
                 )
@@ -91,7 +109,10 @@ def allocation(project: Project, policy: Host, source: Path, version: str) -> Al
     project.version(version)
     compiler = project.compiler_for(source)
     family = family_for(compiler)
-    toolchain.verify(project.tools / compiler.id, toolchain.specification(compiler.id))
+    toolchain.verify(
+        toolchain.compiler_directory(project.tools, toolchain.specification(compiler.id)),
+        toolchain.specification(compiler.id),
+    )
     root = project.work / "_explain"
     root.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix=source.stem + ".", dir=root) as temporary:
@@ -136,7 +157,10 @@ def order(project: Project, policy: Host, source: Path, version: str) -> Schedul
     family = family_for(compiler)
     if not family.schedule_available():
         return family.schedule(None)
-    toolchain.verify(project.tools / compiler.id, toolchain.specification(compiler.id))
+    toolchain.verify(
+        toolchain.compiler_directory(project.tools, toolchain.specification(compiler.id)),
+        toolchain.specification(compiler.id),
+    )
     root = project.work / "_explain"
     root.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix=source.stem + ".", dir=root) as temporary:

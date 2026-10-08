@@ -42,8 +42,9 @@
 # symbol_similarity_margin = 0.05
 
 [search]
-# stall_trials = 200
-# beam = 4
+# frontier = 8 # minimum 4
+# episode_recipes = 8
+# episode_parents = 4
 
 [budgets]
 # What a step chain may cost on this machine; a project's .unbake/unbake.toml may set its own.

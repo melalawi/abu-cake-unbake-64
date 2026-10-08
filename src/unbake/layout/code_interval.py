@@ -141,6 +141,7 @@ def prove(project: Project, version: str, start: int, end: int, policy: Host) ->
                 stage="split",
             )
         )
+    from unbake.compilers import drivers
     from unbake.work.shape import for_compiler
 
     compiler = project.compiler_for(row.path)
@@ -151,7 +152,7 @@ def prove(project: Project, version: str, start: int, end: int, policy: Host) ->
         address - start,
         {s["kind"] for s in sources},
         {f.address - (address - start) for f in functions},
-        for_compiler(compiler, (*compiler.cflags, *project.unit_flags.get(Path(row.path).name, ()))),
+        for_compiler(compiler, drivers.resolved(project, version, row.path).phase("compile")),
     )
     if not evidence.proven:
         raise Held(

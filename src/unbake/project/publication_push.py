@@ -196,6 +196,104 @@ def admission(
             ):
                 resource_scopes.append((version, resource))
                 selected_sources.add(source)
+    # CODE admission follows placement/recipe/header/symbol changes as well as
+    # C edits. An unchanged source newly bound to a version still needs proof.
+    code_scopes: list[tuple[str, Any, Path]] = []
+    for version in project.versions:
+        meta = project.version(version)
+        split_name = meta.split.relative_to(project.root).as_posix()
+        prior_text = _git(project, "show", base + ":" + split_name) if split_name in changed else meta.split.read_text()
+        _, _, prior_segments = split.parse_layout(meta.split, prior_text)
+        previous_code = set()
+        for segment in prior_segments:
+            for index, row in enumerate(segment.rows):
+                if row.kind in ("c", "hasm"):
+                    end = segment.rows[index + 1].start if index + 1 < len(segment.rows) else segment.end
+                    bias = split.number(segment.fields["vram"], "vram") - split.number(segment.fields["start"], "start")
+                    previous_code.add((row.kind, row.path, row.start, end, row.start + bias))
+        for code_row in split.functions(project, version):
+            if code_row.kind not in ("c", "hasm"):
+                continue
+            source = project.src / (code_row.path + (".s" if code_row.kind == "hasm" else ".c"))
+            binding_changed = (
+                code_row.kind,
+                code_row.path,
+                code_row.start,
+                code_row.end,
+                code_row.address,
+            ) not in previous_code
+            from unbake.compilers import drivers
+            from unbake.project.headers import Graph
+
+            key = source.relative_to(project.root).as_posix()
+            current_recipe = (
+                drivers.resolved(project, version, key).document() if code_row.kind == "c" else list(project.asflags)
+            )
+            previous_recipe = (
+                drivers.resolved(previous_project, version, key).document()
+                if code_row.kind == "c" and version in previous_project.versions
+                else list(previous_project.asflags)
+            )
+            recipe_changed = current_recipe != previous_recipe
+            if previous_recipes is not None and code_row.kind == "c":
+
+                def unit_lines(text: str, path: str = code_row.path) -> list[str]:
+                    return [line for line in text.splitlines() if "src/" + Path(path).name + "." in line]
+
+                recipe_changed |= unit_lines(previous_recipes) != unit_lines((project.root / "units.mk").read_text())
+            # Global generated Make/manifest changes matter only if the actual
+            # selected binary pins or owning native command changed. A units.mk
+            # inventory row for another TU never selects this holder.
+            if "tools/compilers.sha256" in changed and code_row.kind == "c":
+                old_manifest = _git(project, "show", base + ":tools/compilers.sha256")
+                spec = __import__("unbake.compilers.registry", fromlist=["specification"]).specification(
+                    project.compiler_reference(key)
+                )
+                old_pins = {
+                    line.split(maxsplit=1)[0] for line in old_manifest.splitlines() if len(line.split(maxsplit=1)) == 2
+                }
+                recipe_changed |= not set(spec.pins.values()) <= old_pins
+            symbol_paths = {
+                meta.symbols.relative_to(project.root).as_posix(),
+                f"versions/{version}/symbols.ld",
+            } & changed
+            used_inputs_changed = False
+            if changed_headers or symbol_paths:
+                if code_row.kind == "c":
+                    if graph is None:
+                        graph = Graph.capture(project)
+                    closure = graph.closure((source,), drivers.flags(project, version, key))
+                    used_paths = {source, *closure.paths}
+                    used_inputs_changed = bool(used_paths & changed_headers) or bool(
+                        closure.unknown and changed_headers
+                    )
+                else:
+                    used_paths = {source}
+                if symbol_paths:
+                    refs = data.linker_references(
+                        source,
+                        [*drivers.flags(project, version, key), *project.cppflags] if code_row.kind == "c" else [],
+                        {p: p.read_text() for p in used_paths if p.is_file()},
+                    )
+                    if refs is None:
+                        used_inputs_changed = True
+                    else:
+                        for name in symbol_paths:
+                            path = project.root / name
+                            if name not in symbol_versions:
+                                symbol_versions[name] = (
+                                    data.linker_symbols(path, _git(project, "show", base + ":" + name)),
+                                    data.linker_symbols(path, path.read_text()),
+                                )
+                            before, after = symbol_versions[name]
+                            used_inputs_changed |= (
+                                before is None
+                                or after is None
+                                or data.referenced_symbols(refs, before) != data.referenced_symbols(refs, after)
+                            )
+            if source in sources or binding_changed or recipe_changed or used_inputs_changed:
+                code_scopes.append((version, code_row, source))
+                selected_sources.add(source)
     from unbake.decomp import checks
 
     findings = checks.findings(project, tuple(sorted(selected_sources)), Cache(project.cache))
@@ -221,49 +319,43 @@ def admission(
             )
     scopes = []
     work = {"native_bytes_read": 0, "rom_bytes_read": 0, "functions_compared": 0}
-    for version in project.versions:
-        for row in split.functions(project, version):
-            if row.kind not in ("c", "hasm"):
-                continue
-            code_unit = Path(row.path).name
-            source = project.src / (code_unit + (".s" if row.kind == "hasm" else ".c"))
-            if source not in sources:
-                continue
-            if not source.is_file():
-                raise Held(
-                    cause_named(
-                        "publish.source_missing",
-                        f"Changed source missing: {source.name}",
-                        owner="project.publication_push",
-                        stage="publish",
-                    )
+    for version, row, source in code_scopes:
+        code_unit = row.path
+        if not source.is_file():
+            raise Held(
+                cause_named(
+                    "publish.source_missing",
+                    f"Changed source missing: {source.name}",
+                    owner="project.publication_push",
+                    stage="publish",
                 )
-            native = project.build_link(version) / ("hasm" if row.kind == "hasm" else "units") / (code_unit + ".bin")
-            if not native.is_file():
-                target = native.relative_to(project.root).as_posix()
-                raise Held(
-                    cause_named(
-                        "publish.native_missing",
-                        f"Native linked output missing; prepare: make -j12 {target}",
-                        owner="project.publication_push",
-                        stage="publish",
-                    )
+            )
+        native = project.build_link(version) / ("hasm" if row.kind == "hasm" else "units") / (code_unit + ".bin")
+        if not native.is_file():
+            target = native.relative_to(project.root).as_posix()
+            raise Held(
+                cause_named(
+                    "publish.native_missing",
+                    f"Native linked output missing; prepare: make -j12 {target}",
+                    owner="project.publication_push",
+                    stage="publish",
                 )
-            linked = native.read_bytes()
-            original = split.words(project, row)
-            if linked != original:
-                raise Held(
-                    cause_named(
-                        "publish.native_mismatch",
-                        f"{code_unit} {version}: native linked bytes differ from ROM slice",
-                        owner="project.publication_push",
-                        stage="publish",
-                    )
+            )
+        linked = native.read_bytes()
+        original = split.words(project, row)
+        if linked != original:
+            raise Held(
+                cause_named(
+                    "publish.native_mismatch",
+                    f"{code_unit} {version}: native linked bytes differ from ROM slice",
+                    owner="project.publication_push",
+                    stage="publish",
                 )
-            scopes.append({"function": code_unit, "version": version, "bytes": len(linked)})
-            work["native_bytes_read"] += len(linked)
-            work["rom_bytes_read"] += len(original)
-            work["functions_compared"] += 1
+            )
+        scopes.append({"function": code_unit, "version": version, "bytes": len(linked)})
+        work["native_bytes_read"] += len(linked)
+        work["rom_bytes_read"] += len(original)
+        work["functions_compared"] += 1
     for version, unit in data_scopes:
         native = project.build_link(version) / "data" / (unit.name + ".bin")
         if not native.is_file():
@@ -339,7 +431,27 @@ def admission(
                     stage="publish",
                 )
             )
-        proof = data.capture_producer(project, version, resource, linked, original)
+        resource_receipt = next(
+            (
+                r
+                for r in producer_receipts
+                if any(
+                    scope.get("resource") == resource.name and scope.get("version") == version
+                    for scope in r.get("check", {}).get("scopes", ())
+                )
+            ),
+            None,
+        )
+        proof = data.capture_producer(
+            project,
+            version,
+            resource,
+            linked,
+            original,
+            host=host,
+            producer_tools=producer_tools,
+            publication_receipt=resource_receipt,
+        )
         if proof is not None:
             proofs[version, resource] = proof
         scopes.append(

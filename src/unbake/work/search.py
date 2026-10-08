@@ -31,6 +31,10 @@ class Searched:
     measurements: dict[str, Measurement]
     seconds: float
     skips: tuple[dict[str, str], ...] = ()
+    stop_reason: str = "finite_plan"
+    frontier: tuple[dict[str, Any], ...] = ()
+    telemetry: dict[str, Any] | None = None
+    next_command: str = ""
 
     def document(self) -> dict[str, Any]:
         return {
@@ -42,6 +46,10 @@ class Searched:
             "mutations": self.mutations,
             "measurements": {version: value.document() for version, value in self.measurements.items()},
             "skips": list(self.skips),
+            "stop_reason": self.stop_reason,
+            "frontier": self.frontier,
+            "telemetry": self.telemetry,
+            "next_command": self.next_command,
         }
 
     def lines(self) -> list[str]:
@@ -122,13 +130,33 @@ def target_object(function: str, code: bytes) -> bytes:
     return bytes(content)
 
 
-def search(project: Project, host: Host, file: Path, method: str, seconds: int) -> Searched:
+def search(
+    project: Project,
+    host: Host,
+    file: Path,
+    method: str,
+    seconds: int,
+    *,
+    external_roots: tuple[Path, ...] = (),
+    required_versions: tuple[str, ...] = (),
+    config_path: Path | None = None,
+) -> Searched:
     from unbake import search as methods
     from unbake.search.core import run
     from unbake.search.permute import Permuter
 
     started = time.monotonic()
-    function = compare.function_of(file)
+    from unbake.work.source_scope import admit_source
+
+    scope = admit_source(project, file, external_roots=external_roots)
+    function = scope.subject
+    if required_versions and (
+        len(set(required_versions)) != len(required_versions)
+        or set(required_versions) - set(split.holding_versions(project, function))
+    ):
+        raise Held(
+            cause_named("search.versions", "distinct holding versions required", owner="work.search", stage="source")
+        )
     # The external permuter refuses a work directory inside the project, so every search works under the cache.
     host.cache_machine_root.mkdir(parents=True, exist_ok=True)
     out = Path(tempfile.mkdtemp(prefix=f"search-{function}-", dir=host.cache_machine_root))
@@ -143,11 +171,24 @@ def search(project: Project, host: Host, file: Path, method: str, seconds: int) 
         else:
             generators = methods.methods(method)
         # A draft under build/work/FUNC sees its own private headers first, as compare does.
-        result = run(compare.view_for(project, file, function), host, file, generators, out, float(seconds))
-        best = file.with_name(f"{function}.best.c")
-        atomic_files.copyfile(result.source, best)
-        steps = file.with_name(f"{function}.steps.jsonl")
+        result = run(
+            compare.view_for(project, file, function),
+            host,
+            file,
+            generators,
+            out,
+            float(seconds),
+            external_roots=external_roots,
+        )
+        best = result.source
+        steps = best.with_suffix(".steps.jsonl")
         atomic_files.copyfile(result.steps, steps)
+        if result.trial.unit_recipe is not None:
+            import json
+
+            atomic_files.text(
+                best.with_suffix(".recipe.json"), json.dumps(result.trial.unit_recipe, sort_keys=True) + "\n"
+            )
     finally:
         shutil.rmtree(out, ignore_errors=True)
     return Searched(
@@ -160,4 +201,8 @@ def search(project: Project, host: Host, file: Path, method: str, seconds: int) 
         result.trial.compares,
         time.monotonic() - started,
         result.skips,
+        result.stop_reason,
+        result.frontier,
+        result.telemetry,
+        scope.saved_action(best, exact=result.trial.exact, required_versions=required_versions, config=config_path),
     )
