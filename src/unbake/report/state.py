@@ -55,6 +55,7 @@ def assert_current(project: Project, current: Inventory) -> None:
         )
 
 
+@attempts.with_ledger
 def inventory(project: Project, *, receipts: dict[str, dict[str, Any]] | None = None) -> Inventory:
     """Read each version once, each retained source once, and receipts once."""
     pins = input_signatures(project)

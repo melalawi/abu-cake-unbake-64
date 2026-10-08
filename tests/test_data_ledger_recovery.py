@@ -8,12 +8,14 @@ import shutil
 import sys
 import types
 import zipfile
+from collections import Counter
 from dataclasses import replace
+from pathlib import Path
 from unittest.mock import patch
 
 from tests.test_source_data_build import RECORDS
 from tests.test_standalone_data_progress import StandaloneDataProgressTests, records
-from unbake import atomic, buildfiles, journal, land, process
+from unbake import atomic, buildfiles, cache, config, journal, land, process
 from unbake.config import Held
 from unbake.project import publication_push
 from unbake.report import data, progress, verify
@@ -326,3 +328,248 @@ class DataLedgerRecoveryTests(StandaloneDataProgressTests):
         batches = list(process.path_batches(names))
         self.assertEqual([name for batch in batches for name in batch], names)
         self.assertTrue(all(sum(len(name.encode()) + 9 for name in batch) <= 32768 for batch in batches))
+
+    def test_verified_cas_node_reuse_reads_once_and_preserves_independent_values_and_corruption_refusal(self):
+        project, proofs = self.capture_recipe()
+        history = attempts.ledger(project)
+        repeated = []
+        for index in range(6):
+            repeated.append(history.note(
+                "diagnostic", str(index), {"proof": proofs[0]}, dependencies=attempts.DependencySet((), {}, {})
+            ))
+        history._refresh()
+        expected = copy.deepcopy(history.events)
+        with patch.object(attempts, "SEGMENT_LIMIT", 256):
+            attempts.compact(project)
+        cache.forget(["ledger.node"])
+        reads = Counter()
+        original_read = Path.read_bytes
+
+        def read(path):
+            if path.is_relative_to(project.root / attempts.STORAGE) and path.name != ".gitignore":
+                reads[path] += 1
+            return original_read(path)
+
+        with patch.object(Path, "read_bytes", read):
+            reader = attempts.Ledger(project)
+            reader._refresh()
+        self.assertEqual(reader.events, expected)
+        self.assertTrue(reads)
+        self.assertEqual(set(reads.values()), {1})
+        first = reader.events[repeated[0]]["result"]["value"]["proof"]["payload"]
+        first["version"] = "mutated caller copy"
+        self.assertEqual(reader.events[repeated[1]], expected[repeated[1]])
+        # Same-size corruption in a previously memoized child must not survive
+        # a new operation, and a missing child must not be supplied from memory.
+        blob = next(iter(reads))
+        original = blob.read_bytes()
+        blob.write_bytes(b" " + original[1:])
+        with self.assertRaisesRegex(Held, "blob_corrupt"):
+            attempts.Ledger(project)._refresh()
+        blob.write_bytes(original)
+        blob.unlink()
+        with self.assertRaisesRegex(Held, "blob_missing"):
+            attempts.Ledger(project)._refresh()
+
+    def test_direct_canonical_generation_and_certificates_share_one_incremental_reader(self):
+        project, archive = self.legacy_linker_proofs()
+        data.record_input_projections(project, archive)
+        buildfiles.write_progress(project, publish_branch="main")
+        (project.root / "README.md").write_text(
+            "# Fixture\n\n## Progress\n\n| us (US fixture) |\n|---|\n\n## Build\n"
+        )
+        original = attempts.Ledger._refresh
+        full_reads = []
+
+        def refresh(history):
+            before = history.prefix_reads
+            original(history)
+            full_reads.extend([history] * (history.prefix_reads - before))
+
+        with patch.object(attempts.Ledger, "_refresh", refresh), patch.object(process, "run_native") as native:
+            progress.write(project=project, policy=None, source_only=True)
+        native.assert_not_called()
+        self.assertEqual(len(full_reads), 1)
+        serialized = json.loads((project.root / "versions/us/report.json").read_text())
+        self.assertEqual(serialized["measures"]["complete_data"], 33253)
+        # A nested scope reuses its owner; a second operation gets a fresh reader.
+        with attempts.command_ledger(project) as owner:
+            with attempts.command_ledger(project) as nested:
+                self.assertIs(owner, nested)
+            self.assertIs(attempts.ledger(project), owner)
+        self.assertIsNot(attempts.ledger(project), owner)
+
+    def test_shared_reader_rechecks_same_size_journal_edits_and_append_rollback(self):
+        project, _ = self.capture_recipe()
+        history = attempts.Ledger(project)
+        history._refresh()
+        path = project.root / attempts.PATH
+        raw = path.read_bytes()
+        path.write_bytes(raw.replace(b'"schema":3', b'"schema":1'))
+        self.assertEqual(path.stat().st_size, len(raw))
+        with self.assertRaisesRegex(Held, "schema2"):
+            history._refresh()
+        path.write_bytes(raw)
+        history._refresh()
+        expected = copy.deepcopy(history.events)
+        with self.assertRaisesRegex(RuntimeError, "interrupted"), journal.transaction(project):
+            history.note("diagnostic", "temporary", {}, dependencies=attempts.DependencySet((), {}, {}))
+            raise RuntimeError("interrupted")
+        history._refresh()
+        self.assertEqual(history.events, expected)
+
+    def test_standalone_verify_generation_and_validation_share_one_packed_history_read(self):
+        project, archive = self.legacy_linker_proofs()
+        data.record_input_projections(project, archive)
+        buildfiles.write_progress(project, publish_branch="main")
+        (project.root / "README.md").write_text(
+            "# Fixture\n\n## Progress\n\n| us (US fixture) |\n|---|\n\n## Build\n"
+        )
+        refresh = attempts.Ledger._refresh
+        full_reads = []
+
+        def read(history):
+            before = history.prefix_reads
+            refresh(history)
+            full_reads.extend([history] * (history.prefix_reads - before))
+
+        with (
+            patch.object(sys, "argv", ["report.verify", "--project", str(project.root)]),
+            patch.object(attempts.Ledger, "_refresh", read),
+            patch.object(process, "run_native") as native,
+        ):
+            self.assertEqual(verify.main(), 0)
+        native.assert_not_called()
+        self.assertEqual(len(full_reads), 1)
+        report = json.loads((project.root / "versions/us/report.json").read_text())
+        self.assertEqual(report["measures"]["complete_data"], 33253)
+
+    def test_code_only_admission_does_not_decode_or_capture_unrelated_packed_data(self):
+        project = records(self)
+        raw = bytearray(project.version("us").baserom.read_bytes())
+        code = bytes.fromhex("2402000103e0000800000000")
+        raw[0x40:0x4C] = code
+        project.version("us").baserom.write_bytes(raw)
+        import toml
+        values = toml.load(project.root / "config.toml")
+        values["version"]["us"]["baserom_sha1"] = hashlib.sha1(raw).hexdigest()
+        (project.root / "config.toml").write_text(toml.dumps(values))
+        self.project = project = config.load(project.root)
+        path = project.version("us").split
+        path.write_text(path.read_text().replace(
+            "  - name: main", "  - name: fixture_code\n    type: code\n    start: 0x40\n"
+            "    vram: 0x80001000\n    subsegments:\n      - [0x40, c, alpha]\n  - [0x4C]\n  - name: main"
+        ))
+        source = project.src / "alpha.c"
+        source.write_text("int alpha(void) { return 1; }\n")
+        native = project.build_link("us") / "units/alpha.bin"
+        native.parent.mkdir(parents=True, exist_ok=True)
+        native.write_bytes(code)
+        proofs = self.admit()["native_data"]
+        data.record_producers(project, proofs)
+        self.changed = {"src/alpha.c"}
+        history = (project.root / attempts.PATH).read_bytes()
+        with (
+            patch.object(attempts.Ledger, "_refresh", side_effect=AssertionError("unrelated history read")),
+            patch.object(data, "capture_producer", side_effect=AssertionError("unrelated DATA capture")),
+            patch.object(process, "run_native") as builds,
+        ):
+            accepted = self.admit()
+        builds.assert_not_called()
+        self.assertEqual(accepted["scopes"], [{"function": "alpha", "version": "us", "bytes": 12}])
+        self.assertEqual(accepted["native_data"], [])
+        self.assertEqual(accepted["work"]["native_bytes_read"], 12)
+        self.assertEqual((project.root / attempts.PATH).read_bytes(), history)
+        # The same boundary remains scope-free for generated-only metadata.
+        self.changed = {"versions/us/report.json", "README.md", "attempts.jsonl"}
+        with patch.object(attempts.Ledger, "_refresh", side_effect=AssertionError("unrelated history read")):
+            self.assertEqual(self.admit()["scopes"], [])
+        self.assertEqual(len(proofs), 2)
+
+    def test_explicit_owner_capture_selects_only_requested_unchanged_data_and_uses_same_gate(self):
+        project, _ = self.capture_recipe()
+        self.changed = set()
+        self.before = project.version("us").split.read_text()
+        source = project.src / (RECORDS[0]["symbol"] + ".c")
+        history = (project.root / attempts.PATH).read_bytes()
+        with (
+            patch.object(publication_push, "_git", side_effect=self.git),
+            patch.object(attempts.Ledger, "_refresh", side_effect=AssertionError("admission history sweep")),
+            patch.object(process, "run_native") as builds,
+        ):
+            accepted = publication_push.admission(project, self.host, "head", "base", producer_sources=(source,))
+        builds.assert_not_called()
+        self.assertEqual([row["data"] for row in accepted["scopes"]], [RECORDS[0]["symbol"]])
+        self.assertEqual(len(accepted["native_data"]), 1)
+        self.assertEqual(data.record_producers(project, accepted["native_data"]), [])
+        self.assertEqual((project.root / attempts.PATH).read_bytes(), history)
+        native = project.build_link("us") / "data" / (source.stem + ".bin")
+        native.write_bytes(native.read_bytes()[:-1])
+        with patch.object(publication_push, "_git", side_effect=self.git), self.assertRaisesRegex(Held, "differ"):
+            publication_push.admission(project, self.host, "head", "base", producer_sources=(source,))
+
+    def test_relevant_header_and_recipe_changes_select_data_without_history_sweep(self):
+        project, _ = self.capture_recipe()
+        self.before = project.version("us").split.read_text()
+        self.changed = {"include/sn64_type_records.h"}
+        with patch.object(attempts.Ledger, "_refresh", side_effect=AssertionError("history sweep")):
+            self.assertEqual(len(self.admit()["scopes"]), 2)
+        (project.include[-1] / "unrelated.h").write_text("extern int unrelated;\n")
+        self.changed = {"include/unrelated.h"}
+        with patch.object(attempts.Ledger, "_refresh", side_effect=AssertionError("history sweep")):
+            self.assertEqual(self.admit()["scopes"], [])
+        recipe = project.root / "units.mk"
+        before = recipe.read_text()
+        recipe.write_text(before + "build/%/src/alpha.key: UNIT_CODEGEN := -O1\n")
+        self.changed = {"units.mk"}
+        original_git = self.git
+        def git(p, *args):
+            return before if args == ("show", "base:units.mk") else original_git(p, *args)
+        with patch.object(publication_push, "_git", side_effect=git):
+            self.assertEqual(publication_push.admission(project, self.host, "head", "base")["scopes"], [])
+        recipe.write_text(before.replace("-DVERSION_US=1", "-DVERSION_US=2", 1))
+        with patch.object(publication_push, "_git", side_effect=git):
+            accepted = publication_push.admission(project, self.host, "head", "base")
+        self.assertEqual([row["data"] for row in accepted["scopes"]], [RECORDS[0]["symbol"]])
+
+        # The admission projection shares the archive projector's macro/alias
+        # grammar; a command-line name is relevant and ambiguous LD selects.
+        symbols = project.version("us").symbols
+        original_symbols = symbols.read_text()
+        self.changed = {symbols.relative_to(project.root).as_posix()}
+        old_git = self.git
+        def symbol_git(p, *args):
+            return original_symbols if args == ("show", "base:" + next(iter(self.changed))) else old_git(p, *args)
+        self.project = replace(project, cppflags=("-DSELECT_ADDR=CommandLineOnly",))
+        symbols.write_text(original_symbols + "UnrelatedName = 0x80001200;\n")
+        with patch.object(publication_push, "_git", side_effect=symbol_git):
+            self.assertEqual(publication_push.admission(self.project, self.host, "head", "base")["scopes"], [])
+        symbols.write_text(original_symbols + "// unbake linker alias: CommandLineOnly = 0x80001200;\n")
+        with patch.object(publication_push, "_git", side_effect=symbol_git):
+            self.assertEqual(len(publication_push.admission(self.project, self.host, "head", "base")["scopes"]), 2)
+        script = project.root / "versions/us/symbols.ld"
+        script.write_text("SECTIONS { .unexpected : { *(.unexpected) } }\n")
+        self.changed = {"versions/us/symbols.ld"}
+        with patch.object(publication_push, "_git", side_effect=symbol_git):
+            self.assertEqual(len(publication_push.admission(self.project, self.host, "head", "base")["scopes"]), 2)
+
+    def test_cas_retention_obeys_small_existing_memory_budget_and_refuses_symlink(self):
+        project, _ = self.capture_recipe()
+        history = attempts.Ledger(project)
+        history._refresh()
+        expected = copy.deepcopy(history.events)
+        cache.forget()
+        cache.configure(memory_bytes=1024)
+        loaded = attempts.Ledger(project)
+        loaded._refresh()
+        self.assertEqual(loaded.events, expected)
+        self.assertLessEqual(cache.resident_bytes(), 1024)
+        line = json.loads((project.root / attempts.PATH).read_bytes().splitlines()[0])
+        blob = cache.Cache(project.root / attempts.STORAGE).path("ledger", line["event"]["ref"])
+        content = blob.read_bytes()
+        target = self.root / "same-blob"
+        target.write_bytes(content)
+        blob.unlink()
+        blob.symlink_to(target)
+        with self.assertRaisesRegex(Held, "blob_missing"):
+            attempts.Ledger(project)._refresh()

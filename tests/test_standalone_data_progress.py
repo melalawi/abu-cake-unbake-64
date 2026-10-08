@@ -162,6 +162,23 @@ class StandaloneResourceProgressTests(ResourceBuildTests):
             self.assertEqual((project.root / attempts.PATH).read_bytes(), before)
         native.assert_not_called()
 
+    def test_unrelated_code_push_never_decodes_or_captures_unchanged_resource_history(self):
+        project = self.setup_producer()
+        accepted = self.admit()
+        data.record_producers(project, accepted["native_data"])
+        self.changed = {"src/alpha.c"}
+        source = project.src / "alpha.c"
+        source.write_text("int alpha(void) { return 1; }\n")
+        history = (project.root / attempts.PATH).read_bytes()
+        with (
+            patch.object(attempts.Ledger, "_refresh", side_effect=AssertionError("unrelated resource history")),
+            patch.object(data, "capture_producer", side_effect=AssertionError("unrelated resource capture")),
+            patch.object(process, "run_native") as native,
+        ):
+            self.assertEqual(self.admit()["scopes"], [])
+        native.assert_not_called()
+        self.assertEqual((project.root / attempts.PATH).read_bytes(), history)
+
     def test_actual_missing_stale_and_raw_resource_remain_unmeasured_with_no_extra_gate(self):
         project = self.setup_producer()
         stamp = self.source.stat().st_mtime_ns

@@ -23,6 +23,7 @@ from unbake.config import Held, Project
 from unbake.process import named as cause_named
 from unbake.process import temporary_environment
 from unbake.report import data, progress, state
+from unbake.work import attempts
 
 BUNDLE = "tools/report-verifier.zip"
 MANIFEST = "report-state.json"
@@ -199,6 +200,7 @@ def publish_branch(project: Project) -> str:
     return branches[0].replace("''", "'")
 
 
+@attempts.with_ledger
 def validate(project: Project) -> dict[str, Any]:
     from unbake import buildfiles
 
@@ -308,8 +310,13 @@ def main() -> int:
         # Reports are derived inventory, never publication/attempt authority. Rebuild
         # through the one canonical source-only generator, which validates receipts and
         # pins before writing. No ROM, build, native proof or owner sync is requested.
-        progress.write(project, None, source_only=True)
-        manifest = validate(project)
+        from unbake import cache
+
+        if not cache.configured():
+            cache.configure(memory_bytes=64 * 1024 * 1024)
+        with attempts.command_ledger(project):
+            progress.write(project, None, source_only=True)
+            manifest = validate(project)
         if args.artifacts is not None and sha is not None:
             args.artifacts.mkdir(parents=True, exist_ok=True)
             for version, values in manifest["versions"].items():

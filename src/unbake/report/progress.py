@@ -16,6 +16,7 @@ from unbake.layout import split
 from unbake.process import capture
 from unbake.process import named as cause_named
 from unbake.report import files, readme_layout
+from unbake.work import attempts
 
 # Bump when this step's output changes for the same inputs. Keys never digest the tool's code.
 SCHEMA = 7
@@ -496,6 +497,7 @@ def _sum_measures(units: list[dict[str, Any]]) -> dict[str, Any]:
     return result
 
 
+@attempts.with_ledger
 def measure(project: Project, policy: Host | None, version: str, *, current: Any = None) -> dict[str, Any]:
     """One current-source inventory; exact C, retained drafts, asm and declared data."""
     from unbake.layout import split
@@ -681,6 +683,7 @@ def owner_descriptions(project: Project, template: str) -> dict[str, str]:
     return descriptions
 
 
+@attempts.with_ledger
 def write(
     project: Project,
     policy: Host | None,

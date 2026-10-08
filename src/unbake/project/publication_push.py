@@ -21,8 +21,15 @@ def _git(project: Project, *args: str) -> str:
     return process.run_tool(argv, project.root, "publish", stdin=stdin).strip()
 
 
-def admission(project: Project, host: Host, head: str, base: str) -> dict[str, Any]:
-    """Changed native code/DATA extents and relevant source hygiene, without rebuilding."""
+@attempts.with_ledger
+def admission(
+    project: Project, host: Host, head: str, base: str, *, producer_sources: tuple[Path, ...] = ()
+) -> dict[str, Any]:
+    """Changed native extents and hygiene; explicit owner sources reuse this same admission.
+
+    producer_sources selects prepared existing DATA/resources for an owner-requested
+    capture without scanning unrelated history or building/replaying native work.
+    """
     started = time.perf_counter_ns()
     if _git(project, "status", "--porcelain"):
         raise Held(
@@ -34,34 +41,96 @@ def admission(project: Project, host: Host, head: str, base: str) -> dict[str, A
             )
         )
     changed = set(_git(project, "diff", "--name-only", "-z", base, head).split("\0")) - {""}
-    sources = tuple(
-        sorted(
-            project.root / name
-            for name in changed
-            if (project.root / name).parent == project.src and Path(name).suffix in (".c", ".s")
-        )
-    )
+    sources = tuple(sorted({
+        project.root / name for name in changed
+        if (project.root / name).parent == project.src and Path(name).suffix in (".c", ".s")
+    } | set(producer_sources)))
     from unbake.report import data
 
-    history = attempts.ledger(project)
+    # Admission follows authored changes, never an all-producer history sweep.
+    # Explicit owner recovery uses record_input_projections/record_producers.
     proofs = {}
+    previous_project = (
+        config.load(project.root, text=_git(project, "show", base + ":config.toml"))
+        if "config.toml" in changed else project
+    )
+    previous_recipes = _git(project, "show", base + ":units.mk") if "units.mk" in changed else None
+    changed_paths = {project.root / name for name in changed}
+    changed_headers = {path for path in changed_paths if path.suffix in {".h", ".inc"}}
+    graph = None
+    symbol_versions: dict[str, tuple[dict[str, int] | None, dict[str, int] | None]] = {}
 
-    def available(version: str, unit: buildfiles.Unit) -> bool:
-        subject = version + "/" + unit.kind + "/" + unit.name
-        prior = history.latest("native.data", subject)
-        if prior is not None and data.current_dependencies(project, prior, version) is None:
+    def relevant_inputs(version: str, unit: Any, source: Path) -> bool:
+        nonlocal graph
+        if "config.toml" in changed or previous_recipes is not None:
+            # Binding changes are selected by the layout comparison below;
+            # this projection needs only the unit's compiler/flag identity.
+            binding = {"unit": {"name": unit.name, "kind": unit.kind}}
+            current_config = data.producer_configuration(project, version, binding)
+            if version not in previous_project.versions:
+                return True
+            before_config = data.producer_configuration(previous_project, version, binding)
+            if previous_recipes is not None:
+                before_config["unit_recipe"] = [
+                    line for line in previous_recipes.splitlines()
+                    if "src/" + unit.name + "." in line or "data/" + unit.name + "." in line
+                ]
+            if data.canonical_configuration(current_config) != data.canonical_configuration(before_config):
+                return True
+        if "tools/compilers.sha256" in changed:
+            return True
+        script = f"versions/{version}/" + (
+            project.name + ".data.ld" if unit.kind == "data" else "resources/" + unit.name + ".ld"
+        )
+        if script in changed:
+            return True
+        symbol_paths = {
+            project.version(version).symbols.relative_to(project.root).as_posix(),
+            f"versions/{version}/symbols.ld",
+        } & changed
+        if not changed_headers and not symbol_paths:
             return False
-        native = project.build_link(version) / ("data" if unit.kind == "data" else "resources") / (unit.name + ".bin")
-        if not native.is_file():
-            return False
-        with project.version(version).baserom.open("rb") as stream:
-            stream.seek(unit.start)
-            original = stream.read(unit.size)
-        proof = data.capture_producer(project, version, unit, native.read_bytes(), original)
-        if proof is None:
-            return False
-        proofs[version, unit] = proof
-        return True
+        if unit.kind == "data":
+            from unbake.compilers import drivers
+            from unbake.project.headers import Graph, scan
+
+            if graph is None:
+                graph = Graph.capture(project)
+            closure = graph.closure((source,), drivers.flags(project, version, unit.name))
+            paths = {source, *closure.paths}
+            if any(include.unknown for path in paths for include in scan(graph.read(path).decode())):
+                return True
+            # Missing include probes are relevant when a commit removes/adds a header.
+            paths.update(project.root.joinpath(*pin.path.parts) for pin in closure.dependency_set.files)
+        else:
+            paths = {source, *buildfiles.resource_inputs(project)}
+            paths.update(path for path in changed_headers if path.is_relative_to(project.root / "resources"))
+        if paths & changed_headers:
+            return True
+        if symbol_paths:
+            # Only changed symbol definitions spelled by this producer's inputs
+            # select it; unrelated generated linker additions do not select DATA.
+            from unbake.compilers import drivers
+
+            references = data.linker_references(
+                source, [*drivers.flags(project, version, unit.name), *project.cppflags],
+                {path: path.read_text() for path in paths if path.is_file()},
+            )
+            if references is None:
+                return True
+            for name in symbol_paths:
+                path = project.root / name
+                if name not in symbol_versions:
+                    symbol_versions[name] = (
+                        data.linker_symbols(path, _git(project, "show", base + ":" + name)),
+                        data.linker_symbols(path, path.read_text()),
+                    )
+                before, after = symbol_versions[name]
+                if before is None or after is None:
+                    return True
+                if data.referenced_symbols(references, before) != data.referenced_symbols(references, after):
+                    return True
+        return False
 
     data_scopes = []
     resource_scopes = []
@@ -74,7 +143,7 @@ def admission(project: Project, host: Host, head: str, base: str) -> dict[str, A
         previous = buildfiles.data_bindings(project, version, text=prior_text) if prior_text is not None else current
         for unit, binding in current.items():
             source = project.src / (unit.name + ".c")
-            if source in sources or previous.get(unit) != binding or available(version, unit):
+            if source in sources or previous.get(unit) != binding or relevant_inputs(version, unit, source):
                 if not source.is_file():
                     raise Held(
                         cause_named(
@@ -96,10 +165,11 @@ def admission(project: Project, host: Host, head: str, base: str) -> dict[str, A
             source = project.root / source_name
             resource_headers = {p.relative_to(project.root).as_posix() for p in buildfiles.resource_inputs(project)}
             if (
-                source_name in changed
+                source in sources
+                or source_name in changed
                 or resource not in previous_resources
                 or changed & resource_headers
-                or available(version, resource)
+                or relevant_inputs(version, resource, source)
             ):
                 resource_scopes.append((version, resource))
                 selected_sources.add(source)
@@ -196,7 +266,7 @@ def admission(project: Project, host: Host, head: str, base: str) -> dict[str, A
                     stage="publish",
                 )
             )
-        proof = proofs.get((version, unit)) or data.capture_producer(project, version, unit, linked, original)
+        proof = data.capture_producer(project, version, unit, linked, original)
         if proof is not None:
             proofs[version, unit] = proof
         scopes.append({"data": unit.name, "version": version, "rom_start": unit.start, "bytes": unit.size})
@@ -228,7 +298,7 @@ def admission(project: Project, host: Host, head: str, base: str) -> dict[str, A
                     stage="publish",
                 )
             )
-        proof = proofs.get((version, resource)) or data.capture_producer(project, version, resource, linked, original)
+        proof = data.capture_producer(project, version, resource, linked, original)
         if proof is not None:
             proofs[version, resource] = proof
         scopes.append(
@@ -358,6 +428,7 @@ def rebase(project: Project, host: Host) -> None:
     ) from current
 
 
+@attempts.with_ledger
 def push(project: Project, host: Host, remote: str, *, attempts_limit: int = 5) -> dict[str, Any]:
     """Fetch, rebase when needed, reprove affected scopes, and push without force.
 

@@ -8,14 +8,17 @@ import math
 import os
 import re
 import shutil
+import stat
+import sys
 import uuid
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
+from functools import wraps
 from pathlib import Path
-from typing import Any, Literal, NoReturn
+from typing import Any, Literal, NoReturn, ParamSpec, TypeVar, cast
 
 from unbake import atomic, cache, strict_json
 from unbake.config import Held, Project
@@ -75,23 +78,86 @@ def _store(project: Project, node: Any) -> str:
     return identity
 
 
+@dataclass(frozen=True, slots=True)
+class _Map:
+    items: tuple[tuple[str, Any], ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _Parsed:
+    value: Any
+    size: int
+
+
+def _freeze(value: Any) -> tuple[Any, int]:
+    """Freeze validated JSON while accounting its retained bytes once, conservatively."""
+    if isinstance(value, dict):
+        items = []
+        size = 0
+        for key, child in value.items():
+            frozen, weight = _freeze(child)
+            pair = key, frozen
+            items.append(pair)
+            size += sys.getsizeof(pair) + sys.getsizeof(key) + weight
+        result = _Map(tuple(items))
+        return result, sys.getsizeof(result) + sys.getsizeof(result.items) + size
+    if isinstance(value, list):
+        children = [_freeze(child) for child in value]
+        frozen_list = tuple(child for child, _ in children)
+        return frozen_list, sys.getsizeof(frozen_list) + sum(weight for _, weight in children)
+    return value, sys.getsizeof(value)
+
+
+def _thaw(value: Any) -> Any:
+    if isinstance(value, _Map):
+        return {key: _thaw(child) for key, child in value.items}
+    if isinstance(value, tuple):
+        return [_thaw(child) for child in value]
+    return value
+
+
 def _load(project: Project, identity: str) -> Any:
     if not isinstance(identity, str) or re.fullmatch(r"[0-9a-f]{64}", identity) is None:
         raise ValueError("ledger.blob_identity")
-    path = cache.Cache(project.root / STORAGE).path("ledger", identity)
-    if path.is_symlink() or not path.is_file():
+    current = _current.get()
+    store = current.storage if current is not None and current.project.root == project.root else cache.Cache(
+        project.root / STORAGE
+    )
+    path = store.path("ledger", identity)
+    try:
+        info = path.lstat()
+    except FileNotFoundError as error:
+        raise ValueError("ledger.blob_missing") from error
+    if not stat.S_ISREG(info.st_mode):
         raise ValueError("ledger.blob_missing")
-    content = path.read_bytes()
-    if hashlib.sha256(content).hexdigest() != identity:
-        raise ValueError("ledger.blob_corrupt")
-    return strict_json.loads(content, path)
+    signature = info.st_dev, info.st_ino, info.st_mtime_ns, info.st_ctime_ns, info.st_size
+
+    def verified() -> _Parsed:
+        from unbake.inputs import signature as file_signature
+
+        content = path.read_bytes()
+        if hashlib.sha256(content).hexdigest() != identity:
+            raise ValueError("ledger.blob_corrupt")
+        if file_signature(path) != signature:
+            raise ValueError("ledger.blob_changed")
+        value, weight = _freeze(strict_json.loads(content, path))
+        result = _Parsed(value, weight)
+        return _Parsed(value, weight + sys.getsizeof(result) + sys.getsizeof(weight))
+
+    # Retain immutable parsed nodes in the existing bounded Cache memo. Every
+    # access checks full file identity; _unpack reconstructs caller-owned values.
+    if not cache.configured():
+        return verified().value
+    return cache.memo(
+        "ledger.node", (str(path), signature), verified, size=lambda parsed: parsed.size, copy_out=lambda parsed: parsed
+    ).value
 
 
 def _pack(project: Project, value: Any) -> dict[str, Any]:
     if len(encoded(value)) <= NODE_LIMIT:
         return {"value": value}
     if isinstance(value, dict):
-        node = {"map": _pack(project, [[key, value[key]] for key in sorted(value)])}
+        node: dict[str, Any] = {"map": _pack(project, [[key, value[key]] for key in sorted(value)])}
     elif isinstance(value, list):
         if len(value) > 16:
             middle = len(value) // 2
@@ -107,15 +173,18 @@ def _pack(project: Project, value: Any) -> dict[str, Any]:
 
 
 def _unpack(project: Project, node: Any, ancestors: frozenset[str] = frozenset()) -> Any:
-    if not isinstance(node, dict) or len(node) != 1:
+    if isinstance(node, _Map) and len(node.items) == 1:
+        kind, value = node.items[0]
+    elif isinstance(node, dict) and len(node) == 1:
+        kind, value = next(iter(node.items()))
+    else:
         raise ValueError("ledger.blob_node")
-    kind, value = next(iter(node.items()))
     if kind == "ref":
         if value in ancestors:
             raise ValueError("ledger.blob_cycle")
         return _unpack(project, _load(project, value), ancestors | {value})
     if kind == "value":
-        return value
+        return _thaw(value)
     if kind == "map":
         return dict(_unpack(project, value, ancestors))
     if kind in {"list", "concat", "text"}:
@@ -384,9 +453,11 @@ class Ledger:
     def __init__(self, project: Project) -> None:
         self.project = project
         self.path = project.root / PATH
+        self.storage = cache.Cache(project.root / STORAGE)
         self.events: dict[str, dict[str, Any]] = {}
         self.order: list[str] = []
         self.inode: tuple[int, int] | None = None
+        self.signature: tuple[int, int, int, int, int] | None = None
         self.offset = 0
         self.prefix_reads = 0
         self.incremental_updates = 0
@@ -396,6 +467,7 @@ class Ledger:
             self.events.clear()
             self.order.clear()
             self.inode = None
+            self.signature = None
             self.offset = 0
             if (self.project.root / "attempts.json").exists() or (self.project.build / "steps.json").exists():
                 raise Held(
@@ -416,7 +488,12 @@ class Ledger:
             )
         info = self.path.stat()
         inode = info.st_dev, info.st_ino
-        if inode != self.inode or info.st_size < self.offset:
+        signature = *inode, info.st_mtime_ns, info.st_ctime_ns, info.st_size
+        if (
+            inode != self.inode
+            or info.st_size < self.offset
+            or (info.st_size == self.offset and signature != self.signature)
+        ):
             self.events.clear()
             self.order.clear()
             self.offset = 0
@@ -447,7 +524,7 @@ class Ledger:
                     ),
                 )
             ) from error
-        self.inode, self.offset = inode, info.st_size
+        self.inode, self.offset, self.signature = inode, info.st_size, signature
 
     def _index(self, event: dict[str, Any]) -> None:
         validate_event(event)
@@ -514,6 +591,7 @@ class Ledger:
                 atomic.write(self.path, stored_history(self.project, (self.events[i] for i in self.order)))
             info = self.path.stat()
             self.inode = info.st_dev, info.st_ino
+            self.signature = info.st_dev, info.st_ino, info.st_mtime_ns, info.st_ctime_ns, info.st_size
             self.offset = info.st_size
         return event.event_id
 
@@ -1018,6 +1096,21 @@ def command_ledger(project: Project) -> Any:
 def ledger(project: Project) -> Ledger:
     current = _current.get()
     return current if current is not None and current.project.root == project.root else Ledger(project)
+
+
+_P = ParamSpec("_P")
+_T = TypeVar("_T")
+
+
+def with_ledger(function: Callable[_P, _T]) -> Callable[_P, _T]:
+    """Direct APIs share the same incremental reader already owned by CLI commands."""
+    @wraps(function)
+    def call(*args: _P.args, **kwargs: _P.kwargs) -> _T:
+        project = cast(Project, args[0] if args else kwargs["project"])
+        with command_ledger(project):
+            return function(*args, **kwargs)
+
+    return call
 
 
 FUZZY_PREFIX = "#ifdef NON_MATCHING\n"

@@ -86,6 +86,7 @@ def declared(project: Project, version: str) -> tuple[tuple[Interval, ...], int 
     return tuple(rows), rom_size
 
 
+@attempts.with_ledger
 def snapshots(project: Project) -> dict[str, dict[str, Any] | None]:
     history = attempts.ledger(project)
     history._refresh()
@@ -560,6 +561,7 @@ def capture_producer(
     }
 
 
+@attempts.with_ledger
 def record_producers(project: Project, proofs: list[dict[str, Any]]) -> list[str]:
     """Append one immutable event per changed accepted producer, retaining all earlier history."""
     history = attempts.ledger(project)
@@ -586,54 +588,25 @@ def record_producers(project: Project, proofs: list[dict[str, Any]]) -> list[str
     return written
 
 
-def linker_inputs(
-    project: Project, event: dict[str, Any], *, archive_root: Path | None = None
-) -> dict[str, Any] | None:
-    """Project only symbols spelled by the hash-bound producer and header closure.
-
-    An archive projection verifies the original bytes against the original pins.
-    It describes those inputs; it never changes a captured dependency or proof hash.
-    """
-    from unbake import buildfiles
-
-    dependencies = attempts.dependency_record(event["dependencies"])
-    binding = dependencies.values.get("producer_binding")
-    if binding is None:
-        return None
-    root = archive_root or project.root
-    configuration = dependencies.values.get("producer_configuration", {})
-    flags = [*configuration.get("flags", []), *configuration.get("cppflags", [])]
+def linker_references(
+    source: Path, flags: list[str], texts: dict[Path, str]
+) -> tuple[set[str], set[str], set[str]] | None:
+    """The existing conservative macro/reference projection, shared with admission."""
     if any("##" in flag for flag in flags):
         return None
     identifiers: set[str] = set(re.findall(r"\b[A-Za-z_]\w*\b", " ".join(flags)))
     prefixes: set[str] = set()
     suffixes: set[str] = set()
     macros: dict[str, list[tuple[set[str], str]]] = {}
-    pins = {pin.path.name: pin for pin in dependencies.files}
-    for pin in dependencies.files:
-        if pin.path.root != "project":
-            return None
-        path = root.joinpath(*pin.path.parts)
-        include_roots = [root / directory.relative_to(project.root) for directory in project.include]
-        if path.suffix not in {".c", ".h", ".s", ".inc"} and not any(
-            path.is_relative_to(directory) for directory in [root / "src", root / "resources", *include_roots]
-        ):
-            continue
-        if pin.state != "file" or not path.is_file() or path.is_symlink():
-            return None
-        content = path.read_bytes()
-        if hashlib.sha256(content).hexdigest() != pin.sha256:
-            if archive_root is not None:
-                refuse("archived producer input differs from its captured pin")
-            return None
-        text = content.decode().replace("\\\n", "")
+    for path, text in texts.items():
+        text = text.replace("\\\n", "")
         text = re.sub(r"//[^\n]*|/\*.*?\*/|\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*'", " ", text, flags=re.S)
         directive = re.compile(r"^\s*#\s*define\s+(\w+)(\([^)]*\))?([^\n]*)", re.M)
         for macro in directive.finditer(text):
             parameters = set(re.findall(r"\w+", macro[2] or ""))
             macros.setdefault(macro[1], []).append((parameters, macro[3]))
         body = directive.sub("", text)
-        if pin.path.parts == tuple(Path(binding["source"]).parts) or path.suffix in {".s", ".inc"}:
+        if path == source or path.suffix in {".s", ".inc"}:
             identifiers.update(re.findall(r"\b[A-Za-z_]\w*\b", body))
         else:
             # Provider declarations do not create linker references. Retain
@@ -661,6 +634,75 @@ def linker_inputs(
             tokens = set(re.findall(r"\b[A-Za-z_]\w*\b", body)) - parameters
             pending.extend(tokens - identifiers)
             identifiers.update(tokens)
+    return identifiers, prefixes, suffixes
+
+
+def linker_symbols(path: Path, text: str) -> dict[str, int] | None:
+    """The same strict symbol/alias and PROVIDE grammar for both projections."""
+    from unbake import buildfiles
+
+    if path.name == "symbols.ld":
+        pattern = r"PROVIDE\(([A-Za-z_]\w*)\s*=\s*(0x[0-9A-Fa-f]+|[0-9]+)\);"
+        if re.sub(pattern, "", text).strip():
+            return None
+        provided = re.findall(pattern, text)
+        if len({name for name, _ in provided}) != len(provided):
+            return None
+        return {name: int(address, 0) for name, address in provided}
+    _, rows = split.parse_symbols(path, text)
+    symbols = {name: address for name, (address, _, _) in rows.items()}
+    for name, address in buildfiles._LINKER_ALIAS.findall(text):
+        symbols.setdefault(name, int(address, 16))
+    return symbols
+
+
+def referenced_symbols(
+    references: tuple[set[str], set[str], set[str]], symbols: dict[str, int]
+) -> dict[str, int]:
+    identifiers, prefixes, suffixes = references
+    relevant = identifiers & symbols.keys()
+    relevant.update(name for name in symbols if name.startswith(tuple(prefixes)) or name.endswith(tuple(suffixes)))
+    return {name: symbols[name] for name in sorted(relevant)}
+
+
+def linker_inputs(
+    project: Project, event: dict[str, Any], *, archive_root: Path | None = None
+) -> dict[str, Any] | None:
+    """Project only symbols spelled by the hash-bound producer and header closure.
+
+    An archive projection verifies the original bytes against the original pins.
+    It describes those inputs; it never changes a captured dependency or proof hash.
+    """
+    dependencies = attempts.dependency_record(event["dependencies"])
+    binding = dependencies.values.get("producer_binding")
+    if binding is None:
+        return None
+    root = archive_root or project.root
+    configuration = dependencies.values.get("producer_configuration", {})
+    flags = [*configuration.get("flags", []), *configuration.get("cppflags", [])]
+    texts = {}
+    pins = {pin.path.name: pin for pin in dependencies.files}
+    for pin in dependencies.files:
+        if pin.path.root != "project":
+            return None
+        path = root.joinpath(*pin.path.parts)
+        include_roots = [root / directory.relative_to(project.root) for directory in project.include]
+        if path.suffix not in {".c", ".h", ".s", ".inc"} and not any(
+            path.is_relative_to(directory) for directory in [root / "src", root / "resources", *include_roots]
+        ):
+            continue
+        if pin.state != "file" or not path.is_file() or path.is_symlink():
+            return None
+        content = path.read_bytes()
+        if hashlib.sha256(content).hexdigest() != pin.sha256:
+            if archive_root is not None:
+                refuse("archived producer input differs from its captured pin")
+            return None
+        texts[path] = content.decode()
+    references = linker_references(root / binding["source"], flags, texts)
+    if references is None:
+        return None
+    identifiers, _, _ = references
     payload = event["result"]["value"]["native_data"]
     # Native definitions resolve their own names; PROVIDE rows for those
     # definitions are unused. Binding/address checks still own the extent.
@@ -680,30 +722,17 @@ def linker_inputs(
         text = path.read_text()
         if archive_root is not None and hashlib.sha256(path.read_bytes()).hexdigest() != linker_pin.sha256:
             refuse("archived linker input differs from its captured pin")
-        if name.endswith("/symbols.ld"):
-            pattern = r"PROVIDE\(([A-Za-z_]\w*)\s*=\s*(0x[0-9A-Fa-f]+|[0-9]+)\);"
-            if re.sub(pattern, "", text).strip():
-                return None
-            provided = re.findall(pattern, text)
-            if len({name_ for name_, _ in provided}) != len(provided):
-                return None
-            symbols = {name_: int(address, 0) for name_, address in provided}
-        else:
-            _, rows = split.symbols(path)
-            symbols = {name_: address for name_, (address, _, _) in rows.items()}
-            for name_, address in buildfiles._LINKER_ALIAS.findall(text):
-                symbols.setdefault(name_, int(address, 16))
-        relevant = identifiers & symbols.keys()
-        relevant.update(
-            name_ for name_ in symbols if name_.startswith(tuple(prefixes)) or name_.endswith(tuple(suffixes))
-        )
+        symbols = linker_symbols(path, text)
+        if symbols is None:
+            return None
         projected[name] = {
             "captured_sha256": linker_pin.sha256,
-            "symbols": {name_: symbols[name_] for name_ in sorted(relevant)},
+            "symbols": referenced_symbols(references, symbols),
         }
     return projected
 
 
+@attempts.with_ledger
 def record_input_projections(project: Project, archive_root: Path) -> list[str]:
     """Append hash-verified semantic readbacks of preserved producer inputs."""
     history = attempts.ledger(project)
@@ -809,6 +838,7 @@ def current_dependencies(project: Project, event: dict[str, Any], version: str) 
     return None
 
 
+@attempts.with_ledger
 def coverage(
     project: Project, version: str, sources: dict[str, tuple[str, set[str], bool]], record: dict[str, Any] | None
 ) -> Coverage:

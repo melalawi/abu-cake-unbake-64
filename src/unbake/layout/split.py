@@ -331,7 +331,11 @@ def symbols(path: Path) -> tuple[str, dict[str, tuple[int, int, re.Match[str]]]]
 
 
 def _symbols(path: Path) -> tuple[str, dict[str, tuple[int, int, re.Match[str]]]]:
-    text = read(path)
+    return parse_symbols(path, read(path))
+
+
+def parse_symbols(path: Path, text: str) -> tuple[str, dict[str, tuple[int, int, re.Match[str]]]]:
+    """Use the same strict symbol grammar for current and prior Git inputs."""
     result = {}
     for index, line in enumerate(text.splitlines(keepends=True)):
         if not line.strip() or line.lstrip().startswith("//"):
