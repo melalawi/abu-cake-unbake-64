@@ -163,3 +163,110 @@ class SourceDataBuildTests(ProjectCase):
         with self.assertRaises(Held) as held:
             buildfiles.units(self.project, "us")
         self.assertEqual(held.exception.key, "buildfiles.source")
+
+    def concurrent_data_push(self, *, bad_native=False, bad_source=False):
+        """Actual record rows reproduce the dictionaries owner's units.mk conflict."""
+        from unbake import process
+
+        packet = json.loads((FIXTURE / "generated_rebase.json").read_text())
+        meta = self.project.version("us")
+        merged = meta.split.read_text()
+        remote = merged.replace(f'data, "src/{RECORDS[1]["symbol"]}.c"', "data, remote_raw")
+        local = merged.replace(f'data, "src/{RECORDS[0]["symbol"]}.c"', "data, local_raw")
+        meta.split.write_text(local)
+        native = self.project.build_link("us") / "data" / (RECORDS[1]["symbol"] + ".bin")
+        if bad_native:
+            native.write_bytes(native.read_bytes()[:-1])
+        if bad_source:
+            source = self.project.src / (RECORDS[1]["symbol"] + ".c")
+            source.write_text(source.read_text() + "\nvolatile int forbidden = 1;\n")
+        sources = {p: p.read_bytes() for p in self.project.src.glob("*.c")}
+        calls = []
+        rebased = False
+        for name in packet["conflicts"]:
+            (self.project.root / name).write_text("<<<<<<< local\n=======\n>>>>>>> remote\n")
+
+        def external(argv, cwd, phase, **kwargs):
+            nonlocal rebased
+            if argv[0] == str(self.host.n64link):
+                self.assertEqual(argv[1:], ["--version"])
+                return buildfiles.N64LINK_RELEASE
+            self.assertEqual(argv[0], "git")
+            args = tuple(argv[1:])
+            calls.append(args)
+            if args == ("rev-parse", "HEAD"):
+                return "rebased" if rebased else "local"
+            if args == ("rev-parse", "FETCH_HEAD"):
+                return "remote"
+            if args[0] == "merge-base":
+                return "base"
+            if args == ("rebase", "FETCH_HEAD"):
+                meta.split.write_text(merged)
+                raise Held(process.named("publish.git", packet["reason"], owner="process", stage="publish"))
+            if args[:3] == ("diff", "--name-only", "--diff-filter=U"):
+                return "\0".join(packet["conflicts"])
+            if args == ("-c", "core.editor=true", "rebase", "--continue"):
+                self.assertEqual((self.project.root / "units.mk").read_text(), buildfiles.units_mk(self.project))
+                slices = self.project.root / "versions/us/slices.mk"
+                self.assertEqual(slices.read_text(), buildfiles.slices_mk(self.project, "us"))
+                for row in RECORDS:
+                    self.assertIn("build/us/data/" + row["symbol"] + ".bin", slices.read_text())
+                self.assertEqual(meta.split.read_text(), merged)
+                self.assertEqual({p: p.read_bytes() for p in sources}, sources)
+                rebased = True
+                return ""
+            if args == ("diff", "--name-only", "-z", "remote", "rebased"):
+                return meta.split.relative_to(self.project.root).as_posix()
+            if args[0] == "show":
+                return remote
+            return ""
+
+        with (
+            patch.object(process, "run_tool", side_effect=external),
+            patch("unbake.report.progress.write", side_effect=AssertionError("no report gate for build conflicts")),
+            patch("unbake.report.verify.validate", side_effect=AssertionError("no report gate for build conflicts")),
+        ):
+            if bad_native or bad_source:
+                with self.assertRaises(Held) as held:
+                    publication_push.push(self.project, self.host, "origin")
+                self.assertEqual(held.exception.key, "publish.push_rules" if bad_source else "publish.native_mismatch")
+                self.assertFalse(any(call[0] == "push" for call in calls))
+            else:
+                result = publication_push.push(self.project, self.host, "origin")
+                self.assertEqual([r["data"] for r in result["check"]["scopes"]], [RECORDS[1]["symbol"]])
+                self.assertEqual(result["check"]["work"]["native_bytes_read"], RECORDS[1]["bytes"])
+                self.assertEqual(
+                    [c for c in calls if c[0] == "push"], [("push", "--", "origin", "rebased:refs/heads/main")]
+                )
+        self.assertEqual(calls.count(("-c", "core.editor=true", "rebase", "--continue")), 1)
+        self.assertFalse(any(call[0] == "show" and call[1].startswith(":") for call in calls))
+
+    def test_actual_concurrent_data_generated_conflicts_regenerate_merged_rows_before_push(self):
+        self.concurrent_data_push()
+
+    def test_actual_concurrent_data_rebase_still_refuses_native_mismatch(self):
+        self.concurrent_data_push(bad_native=True)
+
+    def test_actual_concurrent_data_rebase_still_refuses_source_hygiene(self):
+        self.concurrent_data_push(bad_source=True)
+
+    def test_generated_build_conflicts_refuse_authored_paths_without_writes(self):
+        for authored in ("src/alpha.c", "versions/us/game.yaml", "config.toml", "versions/us/custom.ld"):
+            with (
+                self.subTest(authored=authored),
+                patch.object(publication_push, "_git", return_value="units.mk\0" + authored),
+                patch.object(buildfiles, "write", side_effect=AssertionError("authored conflict must refuse")),
+            ):
+                self.assertFalse(publication_push.resolve_conflicts(self.project, self.host))
+
+    def test_each_generated_native_build_projection_uses_current_canonical_generator(self):
+        for name in ("Makefile", "units.mk", "versions/us/slices.mk", "versions/us/symbols.ld"):
+            with (
+                self.subTest(name=name),
+                patch.object(publication_push, "_git", side_effect=[name, ""]),
+                patch.object(buildfiles, "write", return_value=[self.project.root / name]) as write,
+                patch("unbake.report.progress.write", side_effect=AssertionError("no report work")),
+                patch("unbake.report.verify.validate", side_effect=AssertionError("no report gate")),
+            ):
+                self.assertTrue(publication_push.resolve_conflicts(self.project, self.host))
+                self.assertEqual(write.call_args.args, (self.project, self.host))

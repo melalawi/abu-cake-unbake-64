@@ -164,7 +164,7 @@ def admission(project: Project, host: Host, head: str, base: str) -> dict[str, A
 
 
 def resolve_conflicts(project: Project, host: Host) -> bool:
-    """Union immutable events and rerender owned reports during the existing rebase.
+    """Regenerate build projections and merge owned reports during the existing rebase.
 
     Authored/source conflicts retain Git's refusal. README is eligible only if
     both branches agree outside the owning progress section.
@@ -173,11 +173,18 @@ def resolve_conflicts(project: Project, host: Host) -> bool:
     from unbake.report import progress, readme_layout, verify
 
     conflicts = tuple(p for p in _git(project, "diff", "--name-only", "--diff-filter=U", "-z").split("\0") if p)
+    build_generated = {
+        "Makefile",
+        "units.mk",
+        *("versions/" + v + "/slices.mk" for v in project.versions),
+        *("versions/" + v + "/symbols.ld" for v in project.versions),
+    }
     generated = {verify.BUNDLE, ".github/workflows/progress.yml", ".gitlab-ci.yml"}
     allowed = {
         attempts.PATH,
         verify.MANIFEST,
         "README.md",
+        *build_generated,
         *generated,
         *("versions/" + v + "/report.json" for v in project.versions),
     }
@@ -222,9 +229,11 @@ def resolve_conflicts(project: Project, host: Host) -> bool:
             if name.startswith("versions/") and name.endswith("/report.json"):
                 atomic.text(project.root / name, _git(project, "show", ":2:" + name))
         current = config.load(project.root)
-        written = buildfiles.write_progress(current, publish_branch=host.publish_branch)
-        written.extend(progress.write(current, host, source_only=True))
-        verify.validate(current)
+        written = buildfiles.write(current, host) if set(conflicts) & build_generated else []
+        if set(conflicts) - build_generated:
+            written.extend(buildfiles.write_progress(current, publish_branch=host.publish_branch))
+            written.extend(progress.write(current, host, source_only=True))
+            verify.validate(current)
         _git(project, "add", "--", *sorted({*conflicts, *(p.relative_to(project.root).as_posix() for p in written)}))
     return True
 
