@@ -1,7 +1,7 @@
 """Real closed headers converge on one owner before the public fold parses them."""
 
-from collections import Counter
 import hashlib
+from collections import Counter
 from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
@@ -10,8 +10,8 @@ from tests.project_fixture import ProjectCase
 from unbake import config
 from unbake.config import Held
 from unbake.fold import declarations
-from unbake.layout.header_context import Headers
 from unbake.layout import split
+from unbake.layout.header_context import Headers
 from unbake.layout.split import Edit
 from unbake.project.headers import include_headers
 
@@ -278,7 +278,6 @@ class ProviderReuseTests(ProjectCase):
 
     def test_public_comparison_compiles_one_staged_owner_per_holding_version(self):
         from unbake import runner
-        from unbake.layout import split
         from unbake.work import compare
 
         view, private, _ = self.typedef_contents()
