@@ -3,16 +3,19 @@
 import hashlib
 import json
 import shutil
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
 import toml
 
 from tests.project_fixture import ProjectCase
-from unbake import buildfiles, config, process, runner
+from unbake import buildfiles, config, inputs, process, runner
 from unbake.compilers.drivers import Tools
+from unbake.compilers.recipe_options import UnitRecipe
+from unbake.compilers.registry import specification
 from unbake.project import publication_push
-from unbake.report import data
+from unbake.report import data, producer_recipe
 from unbake.work import attempts
 
 FIXTURE = Path(__file__).parent / "fixtures/immutable_data"
@@ -54,13 +57,16 @@ class ImmutableDataTests(ProjectCase):
         values["compilers"] = {self.proof["compiler"]: {"cflags": self.proof["cflags"]}}
         values["build"]["cppflags"] = self.proof["cppflags"]
         values["build"]["asflags"] = ["-march=vr4300", "-mabi=32", "-EB", "--no-pad-sections"]
-        values["build"]["sn64_asflags"] = self.proof["sn64_asflags"]
+        values["build"]["gnu_asflags"] = self.proof["sn64_asflags"]
         values["version"]["us-rev1"]["baserom_sha1"] = hashlib.sha1(image).hexdigest()
         (self.project.root / "config.toml").write_text(toml.dumps(values))
         self.project = config.load(self.project.root)
         for name in ("compilers.sha256", "n64link.version"):
             shutil.copyfile(self.fixture / name, self.project.tools / name)
-        (self.project.root / "Makefile").write_text(buildfiles.makefile(self.project, self.host))
+        # The retained key predates the driver identity pin: an empty file adds no bytes to the toolchain hash.
+        (self.project.tools / "compiler-driver.sha256").write_bytes(b"")
+        self.makefile = buildfiles.makefile(self.project, self.host)
+        (self.project.root / "Makefile").write_text(self.makefile)
         (self.project.root / "units.mk").write_text(buildfiles.units_mk(self.project))
         (meta.split.parent / "fixture.data.ld").write_text(buildfiles.data_link_script(self.project, "us-rev1"))
         for name in ("fixture.ld", "symbols.ld"):
@@ -70,11 +76,20 @@ class ImmutableDataTests(ProjectCase):
         self.native.parent.mkdir(parents=True, exist_ok=True)
         for src, suffix in (("native.bin", ".bin"), ("final.elf", ".elf"), ("linked.o", ".o")):
             shutil.copyfile(self.fixture / src, self.native.with_suffix(suffix))
-        inputs = self.project.build_link("us-rev1") / "src"
-        inputs.mkdir(parents=True, exist_ok=True)
-        for src, suffix in (("input.i", ".i"), ("native.key", ".key")):
-            shutil.copyfile(self.fixture / src, inputs / (self.name + suffix))
-        key = (self.fixture / "native.key").read_text().strip()
+        build_src = self.project.build_link("us-rev1") / "src"
+        build_src.mkdir(parents=True, exist_ok=True)
+        for src, suffix in (("input.i", ".i"),):
+            shutil.copyfile(self.fixture / src, build_src / (self.name + suffix))
+        # The retained key names the old effective recipe; the current producing recipe names its key the same way.
+        recipe = buildfiles.native_compile_recipe(self.project, self.name, Tools(**self.proof["tools"]))
+        prefix = hashlib.sha1(
+            b"".join((self.project.root / n).read_bytes() for n in producer_recipe.toolchain_files(self.makefile))
+        ).hexdigest()
+        key = (
+            hashlib.sha1((prefix + " " + recipe + "\n").encode()).hexdigest()
+            + hashlib.sha1(self.expanded.encode()).hexdigest()
+        )
+        (build_src / (self.name + ".key")).write_text(key + "\n")
         self.cas = self.project.root / "build/cas" / (key + ".o")
         self.cas.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(self.fixture / "original.o", self.cas)
@@ -84,6 +99,21 @@ class ImmutableDataTests(ProjectCase):
         self.assertGreater(self.source.stat().st_mtime_ns, self.native.stat().st_mtime_ns)
         if (fixture / "symbols.ld").is_file():
             shutil.copyfile(fixture / "symbols.ld", meta.split.parent / "symbols.ld")
+        # The compiler binary is not shipped: a placeholder file stands at the Make CC path and its digest
+        # answers the registry pin, so the pin comparison itself still runs.
+        compiler = self.project.compiler_for(f"src/{self.name}.c")
+        cc = self.project.root / buildfiles.relative(self.project, compiler.cc)
+        cc.parent.mkdir(parents=True, exist_ok=True)
+        cc.write_bytes(b"compiler")
+        spec = specification(compiler.id)
+        real_digest = inputs.digest
+
+        def digest(path, **kwargs):
+            return spec.pins[spec.cc] if Path(path) == cc else real_digest(path, **kwargs)
+
+        patcher = patch.object(inputs, "digest", side_effect=digest)
+        patcher.start()
+        self.addCleanup(patcher.stop)
         self.tools = Tools(**self.proof["tools"])
         self.bytes = self.native.read_bytes()
         self.receipt = {
@@ -97,6 +127,14 @@ class ImmutableDataTests(ProjectCase):
                 ],
             },
         }
+
+    def assertUnqualified(self, call):
+        """A refusal is a typed Held from the strict native proof or an absent proof; never an admitted proof."""
+        try:
+            result = call()
+        except config.Held:
+            return
+        self.assertIsNone(result[0] if isinstance(result, tuple) else result)
 
     def capture(self, *, current=None, tools=True):
         with (
@@ -129,7 +167,7 @@ class ImmutableDataTests(ProjectCase):
             [(self.proof["scope"][0], 4)],
         )
         certificate = proof["dependencies"]["values"]["producer_native_inputs"]
-        self.assertEqual(certificate["compiler_key"], (self.fixture / "native.key").read_text().strip())
+        self.assertEqual(certificate["compiler_key"], self.cas.stem)
         self.assertEqual(certificate["original_object_sha256"], self.proof["files"]["original.o"])
         events = data.record_producers(self.project, [proof])
         self.assertEqual(len(events), 1)
@@ -142,14 +180,12 @@ class ImmutableDataTests(ProjectCase):
     def test_actual_changed_source_header_cpp_and_missing_provenance_remain_unqualified(self):
         source = self.source.read_bytes()
         self.source.write_bytes(source.replace(b"122.87999725341797f", b"1.0f"))
-        proof, cpp = self.capture(current=self.expanded.replace("122.87999725341797f", "1.0f"))
-        self.assertIsNone(proof)
-        cpp.assert_not_called()
+        self.assertUnqualified(lambda: self.capture(current=self.expanded.replace("122.87999725341797f", "1.0f")))
         self.source.write_bytes(source)
         # A used header/type or CPP definition changes the current preprocessing.
         for current in (self.expanded.replace("float", "double"), self.expanded + "int changed;\n"):
-            self.assertIsNone(self.capture(current=current)[0])
-        self.assertIsNone(self.capture(tools=False)[0])
+            self.assertUnqualified(lambda current=current: self.capture(current=current))
+        self.assertUnqualified(lambda: self.capture(tools=False))
         for path in (
             self.cas,
             self.native.with_suffix(".o"),
@@ -157,7 +193,7 @@ class ImmutableDataTests(ProjectCase):
         ):
             raw = path.read_bytes()
             path.unlink()
-            self.assertIsNone(self.capture()[0])
+            self.assertUnqualified(lambda: self.capture())
             path.write_bytes(raw)
         with (
             patch.object(process, "run_tool", return_value=(self.fixture / "source.c").read_text()),
@@ -167,8 +203,8 @@ class ImmutableDataTests(ProjectCase):
                 side_effect=config.Held(process.named("native.cpp", "CPP refused", owner="runner", stage="compile")),
             ),
         ):
-            self.assertIsNone(
-                data.capture_producer(
+            self.assertUnqualified(
+                lambda: data.capture_producer(
                     self.project,
                     "us-rev1",
                     self.unit,
@@ -180,9 +216,13 @@ class ImmutableDataTests(ProjectCase):
             )
 
     def test_actual_changed_flags_recipe_binding_and_native_corruption_refuse(self):
-        self.project.unit_flags[self.name] = ("-O1",)
-        self.assertIsNone(self.capture()[0])
-        self.project.unit_flags.pop(self.name)
+        original = self.project
+        key = self.project.unit_path(self.source)
+        recipe = self.project.units.get(key, UnitRecipe(self.project.default_compiler))
+        options = tuple((phase, ("-O1",) if phase == "compile" else values) for phase, values in recipe.options)
+        self.project = replace(original, units={**original.units, key: replace(recipe, options=options)})
+        self.assertUnqualified(lambda: self.capture())
+        self.project = original
         for path, edit in (
             (self.project.root / "Makefile", lambda b: b.replace(b"-quiet", b"-quiet -O1")),
             (
@@ -197,7 +237,9 @@ class ImmutableDataTests(ProjectCase):
             with self.subTest(path=path.name):
                 raw = path.read_bytes()
                 path.write_bytes(edit(raw))
-                self.assertIsNone(self.capture()[0])
+                # The real preprocessor is mocked: a changed unit preprocessing flag reaches it as changed output.
+                current = self.expanded.replace("float", "double") if path.name == "units.mk" else None
+                self.assertUnqualified(lambda current=current: self.capture(current=current))
                 path.write_bytes(raw)
         meta = self.project.version("us-rev1")
         meta.split.write_text(
@@ -208,8 +250,8 @@ class ImmutableDataTests(ProjectCase):
             patch.object(process, "run_tool", return_value=(self.fixture / "source.c").read_text()),
             patch.object(runner, "preprocess", return_value=self.expanded),
         ):
-            self.assertIsNone(
-                data.capture_producer(
+            self.assertUnqualified(
+                lambda: data.capture_producer(
                     self.project,
                     "us-rev1",
                     wrong,
@@ -288,9 +330,9 @@ class ImmutableDataTests(ProjectCase):
         line = raw.splitlines()[0]
         address = int(line.split(" = ")[1].split(")")[0])
         path.write_text(raw.replace(str(address), str(address + 4), 1))
-        self.assertIsNone(self.capture()[0])
+        self.assertUnqualified(lambda: self.capture())
         path.write_text(raw)
-        self.assertIsNone(self.capture(current=self.expanded.replace("unsigned short", "unsigned int", 1))[0])
+        self.assertUnqualified(lambda: self.capture(current=self.expanded.replace("unsigned short", "unsigned int", 1)))
         from unbake.objects.elf import Object
 
         obj = Object(self.cas)

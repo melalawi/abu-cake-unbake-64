@@ -533,8 +533,15 @@ def _immutable_producer_inputs(
     try:
         # Compare the selected producing expression after recursive expansion.
         # Variable spelling and unused metadata are not native inputs.
+        # The generated recipes name the tools through Makefile variables; the Makefile's own definitions
+        # are the reference's tool leaves, so a changed tool still differs on the Makefile side.
+        defined = producer_recipe.definitions(make)
+        reference = dict(leaves)
+        reference.update({name: defined[name] for name in ("LD", "OBJCOPY") if name in defined})
         for root in ("UNIT_KEY", "DATA_BIN"):
-            if producer_recipe.body(make, root, leaves) != producer_recipe.body(buildfiles.UNIT_RECIPES, root, leaves):
+            if producer_recipe.body(make, root, leaves) != producer_recipe.body(
+                buildfiles.UNIT_RECIPES, root, reference
+            ):
                 qualification_refusal("recipe", "used producing expression differs", {"root": root})
         if (
             project.root / "versions" / version / (project.name + ".data.ld")

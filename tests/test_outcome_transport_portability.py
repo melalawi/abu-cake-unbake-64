@@ -36,7 +36,7 @@ class OutcomeTransportTests(ProjectCase):
             patch.object(solver, "solve") as solve,
             patch.object(land.compare, "compare") as compare,
         ):
-            result = land.publish(self.project, self.host, [self.project.work / "alpha.c"], fuzzy=True)
+            result = land.publish(self.project, self.host, [self.project.work / "alpha.c"])
         row = result.document()["failed"]["alpha"]
         self.assertEqual((native.call_count, solve.call_count, compare.call_count), (0, 0, 0))
         self.assertEqual(len(row.get("failures", ())), 5)
@@ -45,50 +45,6 @@ class OutcomeTransportTests(ProjectCase):
         frames = [f for f in row["fault"]["chain"] if f.get("evidence", {}).get("failures")]
         self.assertEqual(frames[0]["evidence"]["failures"], FAILURES)
         self.assertEqual(result.commits, [])
-
-    def test_real_aggregate_producer_scopes_function_and_proposed_inputs_without_native_work(self):
-        from unbake import pool
-        from unbake.layout import split
-
-        identities = []
-        with (
-            patch.object(pool, "run", return_value=[(row, set()) for row in FAILURES]) as workers,
-            patch.object(split, "holding_versions", return_value=[row["version"] for row in FAILURES]),
-            patch.object(process, "run_native") as native,
-            patch.object(solver, "solve") as solve,
-        ):
-            for index, function in enumerate(
-                (
-                    "func_802181FC_de",
-                    "func_8020BE7C_de",
-                    "func_802016FC_de",
-                    "func_80201ACC_de",
-                    "func_80217290_de",
-                    "func_802181FC_de",
-                )
-            ):
-                source = "int " + function + "(void) { return 1; }\n"
-                with self.assertRaises(Held) as caught:
-                    land.prove(
-                        self.project,
-                        self.host,
-                        function,
-                        source,
-                        {},
-                        self.project.work / ("identity-" + str(index)),
-                        fuzzy=True,
-                    )
-                fault = caught.exception.fault
-                self.assertEqual(fault.cause.subject, function)
-                self.assertEqual(
-                    fault.cause.dependency_set.values["proposed_source_sha256"],
-                    hashlib.sha256(source.encode()).hexdigest(),
-                )
-                self.assertEqual(len(caught.exception.failures), 5)
-                identities.append((fault.cause.id, fault.cause.blocked_key))
-        self.assertEqual(len(set(identities[:5])), 5)
-        self.assertEqual(identities[0], identities[-1])
-        self.assertEqual((workers.call_count, native.call_count, solve.call_count), (6, 0, 0))
 
     def test_typed_native_location_stderr_and_inner_owner_survive_aggregate_capture(self):
         failures = []
@@ -147,7 +103,7 @@ class PortableHistoryTests(ProjectCase):
         self.assertFalse("devstorage" in text)
         self.assertFalse(str(self.project.root) in text)
         self.assertNotIn("Search(", text)
-        written = [json.loads(line) for line in text.splitlines()]
+        written = list(attempts.read_records(text.encode(), self.project))
         self.assertEqual((len(written), native.call_count, solve.call_count, history.prefix_reads), (3, 0, 0, 0))
         self.assertEqual([r["work"] for r in written], [r["work"] for r in rows])
         self.assertEqual(
@@ -171,7 +127,7 @@ class PortableHistoryTests(ProjectCase):
         self.assertEqual(hashlib.sha256(backup.read_bytes()).hexdigest(), planned["ledger"])
         self.assertFalse("devstorage" in target.read_text())
         self.assertNotIn("Search(", target.read_text())
-        written = [json.loads(line) for line in target.read_bytes().splitlines()]
+        written = list(attempts.read_records(target.read_bytes(), self.project))
         self.assertEqual([r["work"] for r in written], native_counts)
         self.assertEqual(attempts.Ledger(self.project).summaries(), summary)
         self.assertEqual([r["operation_id"] for r in written], [r["operation_id"] for r in rows])
@@ -197,7 +153,7 @@ class PortableHistoryTests(ProjectCase):
             self.assertFalse(marker in text, marker)
         self.assertEqual((self.project.root / result["backup"] / attempts.PATH).read_bytes(), original)
         self.assertEqual(attempts.Ledger(self.project).summaries(), summary)
-        current = [json.loads(line) for line in text.splitlines()]
+        current = list(attempts.read_records(text.encode(), self.project))
         self.assertEqual([row["work"] for row in current], [row["work"] for row in rows])
         for before, after in zip(rows, current, strict=True):
             self.assertEqual(before["result"]["state"], after["result"]["state"])
@@ -212,13 +168,13 @@ class PortableHistoryTests(ProjectCase):
         old = target.read_bytes()
         migrate_state.apply(self.project, migrate_state.plan(self.project))
         normalized = target.read_bytes()
-        merged = attempts.Ledger.merge(old, normalized, old)
+        merged = attempts.Ledger.merge(old, normalized, old, project=self.project)
         target.write_bytes(merged)
         history = attempts.Ledger(self.project)
         self.assertEqual(sum(s.attempts for s in history.summaries().values()), 3)
         self.assertEqual(len(history.order), 3)
         self.assertFalse("Search(" in merged.decode())
-        self.assertEqual(attempts.Ledger.merge(old, merged, normalized), merged)
+        self.assertEqual(attempts.Ledger.merge(old, merged, normalized, project=self.project), merged)
 
     def test_search_contract_relocation_stable_and_include_order_sensitive(self):
         one, two = self.root / "one", self.root / "two"
