@@ -26,6 +26,7 @@ if TYPE_CHECKING:
 
 _BRANCH_OPS = (1, 4, 5, 6, 7, 20, 21, 22, 23)
 _DATA_KINDS = ("data", "rodata", "rdata")
+_ERET = 0x42000018  # ends a function, so a prefix holding it is never a stub or a dead prelude
 
 
 @dataclass(frozen=True)
@@ -104,7 +105,7 @@ def _dead(
     if any(offset < size for offset in inside) or any(offset < size for offset in table):
         return None
     words = [item[0] for item in struct.iter_unpack(">I", image[unit.start : unit.start + size])]
-    if any(not instruction(word) or _transfers(word) for word in words):
+    if any(not instruction(word) or _transfers(word) or word == _ERET for word in words):
         return None
     before = [
         other for other in units if other.end == unit.start and other.address + other.end - other.start == unit.address
@@ -190,7 +191,7 @@ def _stub(
     if not index or index * 4 >= length:
         return None
     size = index * 4
-    if any(not instruction(word) or _transfers(word) for word in words[:index]):
+    if any(not instruction(word) or _transfers(word) or word == _ERET for word in words[:index]):
         return None
     if not _foreign(words[:index], words[index:]):
         return None
@@ -391,8 +392,10 @@ def data_spans(configured: VersionConfig, image: bytes) -> list[Span]:
     return spans
 
 
-def census(project: Project, versions: Sequence[str] | None = None) -> list[Prelude]:
-    """Every proven dead prelude or leading thunk in the given versions (default all), largest first."""
+def version_units(
+    project: Project, versions: Sequence[str] | None = None
+) -> dict[str, tuple[bytes, list[Unit], list[Span]]]:
+    """Per chosen version (default all): the ROM image, its function units with entry hints, and its data spans."""
     chosen = list(versions or project.versions)
     images = {v: _image(project, v) for v in project.versions}
     rows = {v: split.functions(project, v) for v in project.versions}
@@ -401,9 +404,8 @@ def census(project: Project, versions: Sequence[str] | None = None) -> list[Prel
         for function in rows[v]:
             for offset, _ in _own_hints(function):
                 sibling.setdefault(function.name, []).append((v, offset))
-    found: list[Prelude] = []
+    result = {}
     for version in chosen:
-        configured = project.version(version)
         image = images[version]
         units = []
         for f in rows[version]:
@@ -418,7 +420,14 @@ def census(project: Project, versions: Sequence[str] | None = None) -> list[Prel
                     hints.append((offset, "sibling-symbol"))
             hints.extend(_sibling_entries(image, f, images, rows))
             units.append(Unit(f.name, f.start, f.end, f.address, f.path, f.kind, tuple(hints)))
-        spans = data_spans(configured, image)
+        result[version] = (image, units, data_spans(project.version(version), image))
+    return result
+
+
+def census(project: Project, versions: Sequence[str] | None = None) -> list[Prelude]:
+    """Every proven dead prelude or leading thunk in the given versions (default all), largest first."""
+    found: list[Prelude] = []
+    for version, (image, units, spans) in version_units(project, versions).items():
         found.extend(detect(version, image, units, spans))
     return sorted(found, key=lambda item: (-item.function_size, item.version, item.name))
 

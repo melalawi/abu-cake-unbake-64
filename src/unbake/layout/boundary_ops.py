@@ -93,6 +93,22 @@ def prelude(project: Project, host: Host, names: list[str], versions: list[str],
     return _finish(project, host, dead_prelude.plan(project, found), apply, extra)
 
 
+def functions(project: Project, host: Host, names: list[str], versions: list[str], *, apply: bool) -> Outcome:
+    """Cut a unit that holds several functions where one ends and the next opens a frame or is called."""
+    from unbake.layout import function_split
+
+    found = function_split.select(function_split.census(project, versions or None), names, versions)
+    extra = [
+        *function_split.counts(found),
+        *(
+            f"{item.version} {item.parent}: cut at +0x{item.offset:X} (0x{item.new_address:08X}) "
+            f"after {item.ending}, entry {item.entry} ({item.unit_size} B unit)"
+            for item in found
+        ),
+    ]
+    return _finish(project, host, function_split.plan(project, found), apply, extra)
+
+
 def merge(project: Project, host: Host, names: list[str], versions: list[str], *, apply: bool) -> Outcome:
     """Join fragments that a split left behind back into the unit before them and drop their symbols."""
     from unbake.layout import fragment_merge

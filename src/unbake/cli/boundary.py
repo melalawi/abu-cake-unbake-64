@@ -22,6 +22,7 @@ Edit where functions and data start and end. Every form previews the change; add
   unbake boundary code-in-data FUNC --version V --start 0x3000 --end 0x3080 [--apply]
   unbake boundary import FILE [--apply]          # JSON list of boundary edits
   unbake boundary prelude [FUNC ...] [--version V ...] [--apply]   # split dead leading bytes off a function
+  unbake boundary split [FUNC ...] [--version V ...] [--apply]     # cut a unit that holds two functions
   unbake boundary merge [FUNC ...] [--version V ...] [--apply]     # join fragments back into their function
   unbake boundary same-symbol FILE [--apply]     # assert placements in several versions are one symbol
   unbake boundary name-data NAME --version V --address 0x80100000 [--rename-from OLD] [--apply]
@@ -49,6 +50,10 @@ def register(parser: argparse.ArgumentParser) -> None:
     lead.add_argument("subject", nargs="*", metavar="FUNC")
     lead.add_argument("--version", action="append", default=[], metavar="V")
     lead.add_argument("--apply", action="store_true")
+    cut = verbs.add_parser("split", help="Cut a unit that holds several functions where one ends and the next begins.")
+    cut.add_argument("subject", nargs="*", metavar="FUNC")
+    cut.add_argument("--version", action="append", default=[], metavar="V")
+    cut.add_argument("--apply", action="store_true")
     joined = verbs.add_parser("merge", help="Join fragments a split left behind back into their function.")
     joined.add_argument("subject", nargs="*", metavar="FUNC")
     joined.add_argument("--version", action="append", default=[], metavar="V")
@@ -75,7 +80,7 @@ def run(context: Context) -> Result:
         words = ["boundary", args.verb]
         if args.verb in ("import", "same-symbol"):
             words.append(str(args.file))
-        elif args.verb in ("prelude", "merge"):
+        elif args.verb in ("prelude", "split", "merge"):
             words.extend(args.subject)
             for version in args.version:
                 words.extend(("--version", version))
@@ -96,6 +101,8 @@ def run(context: Context) -> Result:
         outcome = boundary_ops.import_file(project, host, args.file, apply=args.apply)
     elif args.verb == "prelude":
         outcome = boundary_ops.prelude(project, host, args.subject, args.version, apply=args.apply)
+    elif args.verb == "split":
+        outcome = boundary_ops.functions(project, host, args.subject, args.version, apply=args.apply)
     elif args.verb == "merge":
         outcome = boundary_ops.merge(project, host, args.subject, args.version, apply=args.apply)
     elif args.verb == "same-symbol":
