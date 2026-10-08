@@ -93,6 +93,19 @@ def prelude(project: Project, host: Host, names: list[str], versions: list[str],
     return _finish(project, host, dead_prelude.plan(project, found), apply, extra)
 
 
+def merge(project: Project, host: Host, names: list[str], versions: list[str], *, apply: bool) -> Outcome:
+    """Join fragments that a split left behind back into the unit before them and drop their symbols."""
+    from unbake.layout import fragment_merge
+
+    found = fragment_merge.select(fragment_merge.census(project, versions or None), names, versions)
+    extra = [
+        f"{item.version} {item.parent}: {item.size} B + "
+        + ", ".join(f"{piece.name} ({piece.size} B {piece.kind})" for piece in item.fragments)
+        for item in found
+    ]
+    return _finish(project, host, fragment_merge.plan(project, found), apply, extra)
+
+
 def same_symbol(project: Project, host: Host, path: Path, *, apply: bool) -> Outcome:
     from unbake.layout import symbol_join
 

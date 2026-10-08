@@ -11,7 +11,7 @@ from __future__ import annotations
 import struct
 from bisect import bisect_right
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from unbake.config import Held
@@ -22,6 +22,7 @@ from unbake.process import named as cause_named
 
 if TYPE_CHECKING:
     from unbake.config import Project
+    from unbake.config import Version as VersionConfig
 
 _BRANCH_OPS = (1, 4, 5, 6, 7, 20, 21, 22, 23)
 _DATA_KINDS = ("data", "rodata", "rdata")
@@ -232,15 +233,18 @@ def _thunk(version: str, image: bytes, unit: Unit, inside: set[int], found: dict
     return Prelude(version, unit.name, unit.path, unit.start, unit.address, 8, length, ("thunk",), "thunk")
 
 
-def detect(
-    version: str,
-    image: bytes,
-    units: Sequence[Unit],
-    data: Sequence[Span],
-    *,
-    code_kinds: Sequence[str] = ("asm", "hasm"),
-) -> list[Prelude]:
-    """Every unit of `code_kinds` with a provably dead prelude, largest first."""
+@dataclass
+class References:
+    """Where each unit (by position in address order) is reached from: outside, inside, tables and neighbours."""
+
+    external: dict[int, dict[int, set[str]]] = field(default_factory=dict)
+    internal: dict[int, set[int]] = field(default_factory=dict)
+    tables: dict[int, set[int]] = field(default_factory=dict)
+    flows: dict[int, set[int]] = field(default_factory=dict)  # target unit -> units whose branch or `j` lands in it
+
+
+def references(image: bytes, units: Sequence[Unit], data: Sequence[Span]) -> tuple[list[Unit], References]:
+    """Units in address order and every call, jump, branch, address pair and pointer that lands in one."""
     ordered = sorted(units, key=lambda unit: unit.address)
     addresses = [unit.address for unit in ordered]
 
@@ -250,9 +254,8 @@ def detect(
             return None
         return index
 
-    external: dict[int, dict[int, set[str]]] = {}
-    internal: dict[int, set[int]] = {}
-    tables: dict[int, set[int]] = {}
+    found = References()
+    external, internal, tables = found.external, found.internal, found.tables
 
     def note(source: int | None, value: int, kind: str) -> None:
         index = owner(value)
@@ -263,6 +266,8 @@ def detect(
             internal.setdefault(index, set()).add(offset)
         else:
             external.setdefault(index, {}).setdefault(offset, set()).add(kind)
+            if source is not None and kind == "j":
+                found.flows.setdefault(index, set()).add(source)
 
     for position, unit in enumerate(ordered):
         for offset, kind in unit.hints:
@@ -278,6 +283,10 @@ def detect(
                 target = pc + 4 + _signed(word) * 4
                 if unit.address <= target < unit.address + len(body):
                     internal.setdefault(position, set()).add(target - unit.address)
+                else:
+                    hit = owner(target)
+                    if hit is not None:
+                        found.flows.setdefault(hit, set()).add(position)
         if words:
             for reference in collect(unit.name, body, None, None)[0]:
                 if reference.type == "address":
@@ -296,6 +305,20 @@ def detect(
                 tables.setdefault(hit, set()).add(offset)
             else:
                 external.setdefault(hit, {}).setdefault(offset, set()).add("pointer")
+    return ordered, found
+
+
+def detect(
+    version: str,
+    image: bytes,
+    units: Sequence[Unit],
+    data: Sequence[Span],
+    *,
+    code_kinds: Sequence[str] = ("asm", "hasm"),
+) -> list[Prelude]:
+    """Every unit of `code_kinds` with a provably dead prelude, largest first."""
+    ordered, found_refs = references(image, units, data)
+    external, internal, tables = found_refs.external, found_refs.internal, found_refs.tables
     result = []
     for position, unit in enumerate(ordered):
         if unit.kind not in code_kinds:
@@ -355,6 +378,19 @@ def _sibling_entries(
     return result
 
 
+def data_spans(configured: VersionConfig, image: bytes) -> list[Span]:
+    """The data rows of one version's layout, as ROM ranges with their load addresses."""
+    _, _, segments = split.layout(configured.split)
+    spans = []
+    for segment in segments:
+        if "vram" not in segment.fields:
+            continue
+        for row in segment.rows:
+            if row.kind in _DATA_KINDS:
+                spans.append(Span(row.start, min(split.end(row), len(image)), split.address(row, configured.split)))
+    return spans
+
+
 def census(project: Project, versions: Sequence[str] | None = None) -> list[Prelude]:
     """Every proven dead prelude or leading thunk in the given versions (default all), largest first."""
     chosen = list(versions or project.versions)
@@ -382,14 +418,7 @@ def census(project: Project, versions: Sequence[str] | None = None) -> list[Prel
                     hints.append((offset, "sibling-symbol"))
             hints.extend(_sibling_entries(image, f, images, rows))
             units.append(Unit(f.name, f.start, f.end, f.address, f.path, f.kind, tuple(hints)))
-        _, _, segments = split.layout(configured.split)
-        spans = []
-        for segment in segments:
-            if "vram" not in segment.fields:
-                continue
-            for row in segment.rows:
-                if row.kind in _DATA_KINDS:
-                    spans.append(Span(row.start, min(split.end(row), len(image)), split.address(row, configured.split)))
+        spans = data_spans(configured, image)
         found.extend(detect(version, image, units, spans))
     return sorted(found, key=lambda item: (-item.function_size, item.version, item.name))
 

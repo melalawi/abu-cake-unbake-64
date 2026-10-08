@@ -147,5 +147,68 @@ class PlanTests(unittest.TestCase):
         self.assertIn(("beta_stub", start, "data"), [(r.path, r.start, r.kind) for r in segments[0].rows])
 
 
+class ApplyTests(unittest.TestCase):
+    """The whole path of `boundary prelude --apply` on a small layout map and symbol table, minus the make proof."""
+
+    def setUp(self) -> None:
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.fixture = ProjectFixture(Path(self.directory.name), ("one",))
+        self.project = cast(Project, self.fixture)
+        self.config = self.fixture.version("one")
+
+    def write(self, beta: list[int], *, call: int) -> None:
+        # alpha calls `call`, beta is the unit under test, gamma returns, pool is data.
+        alpha = [jal(call), NOP, *RETURN[:1], NOP]
+        rom = bytes(16) + struct.pack(f">{4 + len(beta) + 2}I", *alpha, *beta, *RETURN[:1], NOP)
+        self.config.baserom.write_bytes(rom.ljust(0x60, b"\0"))
+        end = 0x20 + len(beta) * 4
+        self.fixture.layout(
+            "one", [(0x10, "asm", "alpha"), (0x20, "asm", "beta"), (end, "asm", "gamma"), (end + 8, "data", "pool")]
+        )
+
+    def apply(self) -> list[split.Edit]:
+        edits = dead_prelude.plan(self.project, dead_prelude.census(self.project))
+        for edit in edits:
+            self.assertEqual(Path(edit.path).read_text(), edit.before)
+            Path(edit.path).write_text(edit.after)
+        return edits
+
+    def rows(self) -> list[tuple[str, int, str]]:
+        _, _, segments = split.layout(self.config.split)
+        return [(r.path, r.start, r.kind) for r in segments[0].rows]
+
+    def test_dead_prefix_applies_to_data_row_and_moved_symbol_then_rerun_is_a_no_op(self) -> None:
+        self.write([*DEAD_PRELUDE, *BODY], call=0x80001010 + 12)
+        self.apply()
+        paths = {path: (start, kind) for path, start, kind in self.rows()}
+        self.assertEqual((paths["beta_prelude"], paths["beta"]), ((0x20, "data"), (0x2C, "asm")))
+        symbols = self.config.symbols.read_text()
+        self.assertIn("beta = 0x8000101C;", symbols)
+        self.assertNotIn("beta_prelude", symbols)
+        self.assertEqual(dead_prelude.census(self.project), [])
+        self.assertEqual(dead_prelude.plan(self.project, dead_prelude.census(self.project)), [])
+
+    def test_pre_frame_stub_applies_and_keeps_the_stub_symbol(self) -> None:
+        self.write([*DEAD_PRELUDE, *BODY], call=0x80001010)
+        self.apply()
+        paths = {path: (start, kind) for path, start, kind in self.rows()}
+        self.assertEqual((paths["beta_stub"], paths["beta"]), ((0x20, "data"), (0x2C, "asm")))
+        symbols = self.config.symbols.read_text()
+        self.assertIn("beta = 0x8000101C;", symbols)
+        self.assertIn("beta_stub = 0x80001010; // type:func", symbols)
+        self.assertEqual(dead_prelude.plan(self.project, dead_prelude.census(self.project)), [])
+
+    def test_leading_jump_thunk_applies(self) -> None:
+        self.write([*THUNK, *BODY], call=0x80001010)
+        self.apply()
+        paths = {path: (start, kind) for path, start, kind in self.rows()}
+        self.assertEqual((paths["beta_thunk"], paths["beta"]), ((0x20, "data"), (0x28, "asm")))
+        symbols = self.config.symbols.read_text()
+        self.assertIn("beta = 0x80001018;", symbols)
+        self.assertIn("beta_thunk = 0x80001010; // type:func", symbols)
+        self.assertEqual(dead_prelude.census(self.project), [])
+
+
 if __name__ == "__main__":
     unittest.main()
