@@ -259,6 +259,54 @@ def _volatile(source: str, code: str) -> list[GuardFinding]:
     return [_finding("volatile-storage", source, token) for token in volatile_tokens(code)]
 
 
+def _mentions(text: str, name: str) -> bool:
+    return re.search(rf"\b{re.escape(name)}\b", text) is not None
+
+
+def volatile_aliases(context: str) -> set[str]:
+    """Typedef and macro names that stand for a volatile qualifier in preprocessed or header text."""
+    code = _code(context)
+    aliases: set[str] = set()
+    while True:
+        found = set(aliases)
+        for m in re.finditer(r"\btypedef\b([^;{}]*?)\b([A-Za-z_]\w*)\s*;", code):
+            if _mentions(m[1], "volatile") or any(_mentions(m[1], a) for a in aliases):
+                found.add(m[2])
+        for m in re.finditer(r"^[ \t]*#\s*define\s+([A-Za-z_]\w*)\b[^\n]*", code, re.M):
+            if _mentions(m[0], "volatile") or any(_mentions(m[0], a) for a in aliases):
+                found.add(m[1])
+        if found == aliases:
+            return aliases
+        aliases = found
+
+
+def expanded_volatile(source: str, preprocessed: str, function: str) -> list[GuardFinding]:
+    """Volatile that reaches the function through a typedef or macro defined outside the source text."""
+    code = _code(source)
+    lines = source.splitlines()
+    own = {finding.line for finding in _volatile(source, code)}
+    findings = []
+    for alias in sorted(volatile_aliases(preprocessed) | volatile_aliases(source)):
+        for m in re.finditer(rf"\b{re.escape(alias)}\b", code):
+            line = source.count("\n", 0, m.start()) + 1
+            if line not in own and not re.match(r"\s*(?:typedef\b|#\s*define\b)", lines[line - 1]):
+                text = f"{lines[line - 1].strip()}; {alias} is a volatile typedef or macro"
+                findings.append(GuardFinding("volatile-storage", line, text, None))
+    expanded = _code(preprocessed)
+    body = re.search(rf"\b{re.escape(function)}\s*\([^;{{}}]*\)\s*\{{", expanded)
+    if body and preprocessed and not findings and not own:
+        syntax = _Syntax(expanded[body.start() :])
+        opening = next((i for i, w in enumerate(syntax.words) if w == "{"), None)
+        end = syntax.pairs.get(opening, len(syntax.words) - 1) if opening is not None else 0
+        text = expanded[body.start() : body.start() + syntax.tokens[end].end()]
+        if volatile_tokens(text):
+            line = source.count("\n", 0, max(source.find(function), 0)) + 1
+            findings.append(
+                GuardFinding("volatile-storage", line, f"{function} expands to volatile after preprocessing", None)
+            )
+    return findings
+
+
 def _direct_offsets(source: str, code: str) -> list[GuardFinding]:
     syntax = _Syntax(code)
     findings = []
@@ -547,8 +595,11 @@ def plain(finding: GuardFinding) -> str:
     return f"line {finding.line}: {SENTENCE[finding.rule]} ({finding.text})"
 
 
-def run(source: str | Path) -> list[GuardFinding]:
-    """Inspect source text or a file, retaining marked findings as accepted evidence."""
+def run(source: str | Path, preprocessed: str | None = None, function: str = "") -> list[GuardFinding]:
+    """Inspect source text or a file, retaining marked findings as accepted evidence.
+
+    With the preprocessed text and the function name, volatile reaching the function through a typedef or
+    macro from a header is a finding too."""
     if isinstance(source, Path):
         try:
             source = source.read_text()
@@ -568,6 +619,7 @@ def run(source: str | Path) -> list[GuardFinding]:
     reasons = fakematches(source)
     code = _code(source)
     findings = [finding for rule in RULES for finding in rule.check(source, code)]
+    findings.extend(expanded_volatile(source, preprocessed or "", function))
     reason = "; ".join(reasons) if reasons else None
     return [
         GuardFinding(

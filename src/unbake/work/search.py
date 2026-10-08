@@ -37,9 +37,21 @@ class Searched:
     next_command: str = ""
     hints: tuple[dict[str, Any], ...] = ()
 
+    def blockers(self) -> list[str]:
+        """Plain source-rule sentences that keep the best text from landing."""
+        from unbake.decomp import checks
+
+        try:
+            return [checks.plain(finding) for finding in checks.unmarked(self.best_file)]
+        except Held:
+            return []
+
     def document(self) -> dict[str, Any]:
+        blockers = self.blockers()
         return {
             "function": self.function,
+            "landable": not blockers,
+            "landable_blockers": blockers,
             "best_file": str(self.best_file),
             "best_percent": round(self.best_percent, 6) if self.best_percent is not None else None,
             "exact": self.exact,
@@ -68,6 +80,7 @@ class Searched:
             else "measurement unavailable"
         )
         return [
+            *(f"NOT LANDABLE: {line}" for line in self.blockers()),
             f"{self.function}: {state}: {self.best_file}",
             f"{self.function}: tried {self.mutations} variants"
             + ("; no mutation proposed" if self.mutations == 0 else ""),

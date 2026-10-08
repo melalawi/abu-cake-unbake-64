@@ -37,6 +37,14 @@ class Compared:
     option_episode: dict[str, Any] | None = None
     next_action: str = ""
 
+    def blockers(self) -> list[str]:
+        """Source-rule sentences that keep this text from landing, volatile first."""
+        return sorted(self.rule_lines, key=lambda line: "volatile storage" not in line)
+
+    @property
+    def landable(self) -> bool:
+        return not self.preconditions
+
     @property
     def required_exact(self) -> bool:
         return acceptance(self.compares, self.required_versions, self.preconditions)
@@ -77,6 +85,8 @@ class Compared:
             },
             "best_percent": round(self.best_percent, 6) if self.best_percent is not None else None,
             "exact": self.exact,
+            "landable": self.landable,
+            "landable_blockers": self.blockers(),
             "preconditions": list(self.preconditions),
             "seconds": round(self.seconds, 3),
             "compiler": self.compiler,
@@ -94,7 +104,8 @@ class Compared:
     def lines(self) -> list[str]:
         from unbake.work.hints import technique_lines
 
-        output = [line for result in self.compares.values() for line in result.lines]
+        output = [f"NOT LANDABLE: {line}" for line in self.blockers()]
+        output.extend(line for result in self.compares.values() for line in result.lines)
         from unbake.work.compare_facts import lines
 
         output.extend(line for version, facts in self.facts.items() for line in lines(version, facts))
@@ -209,7 +220,13 @@ def measure(
         file.resolve() == (project.src / f"{function}.c").resolve()
         and attempts.ledger(project).fuzzy(function) is not None
     )
-    broken = [finding for finding in checks.run(content.decode()) if finding.fakematch is None]
+    expanded = None
+    if selected:
+        try:
+            expanded = runner.preprocess(project, host, file, selected[0], unit=function)
+        except Held:
+            expanded = None  # the compile below reports the same failure with its cause
+    broken = [finding for finding in checks.run(content.decode(), expanded, function) if finding.fakematch is None]
     preconditions = [checks.message(finding) for finding in broken]
     rule_lines = [checks.plain(finding) for finding in broken]
     results: dict[str, Measurement] = {}

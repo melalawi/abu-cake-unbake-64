@@ -3,12 +3,18 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import asdict, dataclass
 from importlib.resources import files
 from typing import Any
 
 from unbake.layout.subsystems import Snapshot
 from unbake.search import BUILTINS
+
+
+def landable_fix(fix: str) -> bool:
+    """Landed C never has volatile, so no fix text that mentions it is offered."""
+    return re.search(r"\bvolatile\b", fix, re.I) is None
 
 
 def proven_techniques(compared_facts: dict[str, Any], plateau_probes: int = 0) -> tuple[dict[str, Any], ...]:
@@ -20,6 +26,8 @@ def proven_techniques(compared_facts: dict[str, Any], plateau_probes: int = 0) -
             continue
         observed = {**facts["symptoms"], "plateau_probes": plateau_probes}
         for hint in catalog["hints"]:
+            if not landable_fix(hint["fix"]):
+                continue
             conditions = hint["match"]
             if not conditions:
                 continue
@@ -51,7 +59,9 @@ def proven_techniques(compared_facts: dict[str, Any], plateau_probes: int = 0) -
 
 
 def technique_lines(hints: tuple[dict[str, Any], ...]) -> list[str]:
-    return [f"this helped before: {row['fix']} ({row['id']}; {row['version']})" for row in hints]
+    return [
+        f"this helped before: {row['fix']} ({row['id']}; {row['version']})" for row in hints if landable_fix(row["fix"])
+    ]
 
 
 @dataclass(frozen=True)
