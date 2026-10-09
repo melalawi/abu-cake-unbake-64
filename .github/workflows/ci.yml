@@ -15,7 +15,7 @@ jobs:
         with:
           python-version: '3.11'
       - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends make git binutils-mips-linux-gnu
-      - run: pip install git+https://github.com/melalawi/abu-cache-64
+      - run: pip install git+https://github.com/melalawi/abu-cache-64@v0.1.0
       - run: pip install -e '.[dev]'
       - run: ruff check src tests
       - run: pytest -q -n auto
