@@ -41,7 +41,7 @@ def _m2c_key(job) -> str:
 def _m2c_job(job):
     cfg, name, asm, target, ctx, _, tool = job  # the context travels as a path, never as bytes per job
     asm_path = ctx.parent / f"{digest((name, asm))}.s"
-    asm_path.write_bytes(asm)
+    store.write(asm_path, asm)  # named by its content: a leftover or a concurrent writer holds the same bytes
     result = process.run("types.m2c", [str(tool), "-t", target, "--valid-syntax", "--context", str(ctx),
                                        "--function", name, str(asm_path)], cfg.project.root,
                          tmp=process.scratch(cfg.project.root))
@@ -75,7 +75,7 @@ def _scan(snapshot: Snapshot) -> bytes:
            "global": {n: r for n, r in original["global"].items() if r["evidence"] in ("authored", "landed")}}
     for name, (_, _, text) in headers.catalog(snapshot, names_from).items():
         if re.match(r"(?:typedef|struct|union|enum)\b", text):
-            doc["struct"][name] = {"declaration": text, "evidence": "authored"}
+            doc["struct"].setdefault(name.rpartition(" ")[2], {"declaration": text, "evidence": "authored"})
         elif re.search(rf"\b{re.escape(name)}\s*\(", text):
             signature = re.sub(r"^extern\s+|\s*;$", "", text)
             doc["function"].setdefault(name, {"signature": signature, "evidence": "authored"})
@@ -151,8 +151,9 @@ def _landed(snapshot, unit, view):
             owner = marker[1]
         owners.append(owner)
         lines.append("\n" if marker else line)
+    from unbake.headers import normal  # headers reads the type map, so it is imported here; one C reading for both
     try:
-        tree = CParser().parse("".join(lines), filename=unit.path)
+        tree = CParser().parse(normal("".join(lines)), filename=unit.path)
     except ParseError as error:
         at = re.search(r":(\d+):\d+:", str(error))
         line = int(at[1]) if at and 0 < int(at[1]) <= len(lines) else 0

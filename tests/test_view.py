@@ -191,6 +191,18 @@ def test_overlay_paths_mapped_back(lane, source_overlaid):
     assert (overlay / "include/active.h").read_bytes() == b"sentinel"
 
 
+def test_an_overlaid_file_finds_the_files_it_names_relative_to_itself(lane):
+    (lane.root / "include/sub").mkdir()
+    (lane.root / "include/base.h").write_bytes(b'#include "sub/deep.h"\ntypedef int base;\n')
+    (lane.root / "include/sub/deep.h").write_bytes(b"typedef int deep;\n")
+    snapshot = _overlay(lane.snapshot, {"include/sub/new.h": b'#include "../base.h"\n'})
+    overlay = lane.root / "build/views" / snapshot.digest[:16]
+    _get(lane, snapshot)
+    assert (overlay / "include/base.h").read_bytes() == (lane.root / "include/base.h").read_bytes()
+    assert (overlay / "include/sub/deep.h").read_bytes() == b"typedef int deep;\n"  # and what that file names
+    assert not (overlay / "include/z.h").exists()  # nothing else is copied
+
+
 def test_inactive_include_not_a_dependency(lane):
     source = b'#if 0\n#include "inactive.h"\n#endif\nint value;\n'
     (lane.root / lane.unit.path).write_bytes(source)

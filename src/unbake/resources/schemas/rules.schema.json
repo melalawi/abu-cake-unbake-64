@@ -33,6 +33,10 @@
       "type": "string",
       "minLength": 1
      },
+     "exclude": {
+      "type": "string",
+      "minLength": 1
+     },
      "check": {
       "enum": [
        "volatile",

@@ -191,11 +191,8 @@ def _decode(row: Json, literal: int, terms: list[tuple[str, int, int]], word1: s
 def rewrite(text: str) -> tuple[str, int]:
     """Replace decodable pairs, preserving all other source text."""
     encodings = {}
-    variant = "f3dex2" if re.search(r"^\s*#\s*define\s+F3DEX_GBI_2\b", text, re.M) else None
-    if variant is None and re.search(r"^\s*#\s*define\s+F3DEX_GBI\b", text, re.M):
-        variant = "f3dex"
-    if variant is None and re.search(r"^\s*#\s*define\s+F3D_GBI\b", text, re.M):
-        variant = "f3d"
+    variant = next((name for name, macro in (("f3dex2", "F3DEX_GBI_2"), ("f3dex", "F3DEX_GBI"), ("f3d", "F3D_GBI"))
+                    if re.search(rf"^\s*#\s*define\s+{macro}\b", text, re.M)), None)
     for row in config.load_resource("gbi.toml")["command"]:
         variants = row.get("variants", [{"opcode": row["opcode"], "microcode": row.get("microcode")}])
         for encoding in variants:

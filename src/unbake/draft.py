@@ -13,7 +13,6 @@ from unbake.contracts import Config, Finding, Json, Member, Refusal, Snapshot, d
 
 _OPS = {"eq": lambda a, b: a == b, "lt": lambda a, b: a < b, "gte": lambda a, b: a >= b}
 
-
 def _holds(row: Json, symptoms: Json) -> bool:
     if not row["match"]:
         return False
@@ -21,7 +20,6 @@ def _holds(row: Json, symptoms: Json) -> bool:
         key in symptoms and all(_OPS[op](symptoms[key], expected) for op, expected in cond.items())
         for key, cond in row["match"].items()
     )
-
 
 def hints(snapshot: Snapshot, subsystem: str, symptoms: Json) -> tuple[list[Json], list[Json]]:
     rows = list(configuration.load_resource("hints.jsonl")["rows"])
@@ -42,7 +40,6 @@ def hints(snapshot: Snapshot, subsystem: str, symptoms: Json) -> tuple[list[Json
     cap = configuration.load_resource("flow.toml")["packet"]["hints"]
     return matched, others[:cap]
 
-
 def _function_text(snapshot: Snapshot, member: str, version: str) -> tuple[str, int]:
     config = snapshot.config
     unit = layout.unit_of(snapshot, member)
@@ -56,14 +53,15 @@ def _function_text(snapshot: Snapshot, member: str, version: str) -> tuple[str, 
     def produce() -> bytes:
         result = process.run("m2c", argv, cwd=config.project.root, tmp=process.scratch(config.project.root))
         if result.exit != 0 or not result.stdout.strip():
-            tail = "; ".join(result.stderr.decode(errors="replace").strip().splitlines()[-3:])
-            raise Refusal(Finding("draft.m2c", tail or f"m2c exited {result.exit} with no output", unit=member,
+            failure = re.findall(r"/\*\s*(Decompilation failure[\s\S]*?)\*/", result.stdout.decode(errors="replace"))
+            tail = result.stderr.decode(errors="replace").strip().splitlines()[-3:]
+            reason = "; ".join([" ".join(f.split()) for f in failure] or tail)  # m2c prints its failure on stdout
+            raise Refusal(Finding("draft.m2c", reason or f"m2c exited {result.exit} with no output", unit=member,
                                   versions=(version,)))
         return result.stdout
     # the context file is named by its content, so the argv, the assembly and the tool are everything m2c reads
     key = digest((argv, Path(argv[-1]).read_bytes(), os.stat(argv[0]).st_mtime_ns))
     return gbi.rewrite(store.cached(config, "m2c-draft", key, produce).decode(errors="replace"))
-
 
 def _data_text(snapshot: Snapshot, entry: Member, version: str) -> str:
     placements = sorted(
@@ -103,8 +101,8 @@ def _data_text(snapshot: Snapshot, entry: Member, version: str) -> str:
     kind = "unsigned int" if words else "unsigned char"
     lines = [f"    {', '.join(values[i:i + 8])}," for i in range(0, len(values), 8)]
     head = [referenced[name] for name in sorted(referenced)]
-    return "\n".join([*head, f"{qualifier}{kind} {entry.name}[] = {{", *lines, "};", ""])
-
+    symbol = reverse.get(placements[0].vram) or f"D_{placements[0].vram:08X}"  # a C name, not the member path
+    return "\n".join([*head, f"{qualifier}{kind} {symbol}[] = {{", *lines, "};", ""])
 
 def create(snapshot: Snapshot, member: str, out: Path) -> Json:
     """Write the first draft of `member` to `out` and return its report."""
@@ -140,10 +138,9 @@ def create(snapshot: Snapshot, member: str, out: Path) -> Json:
             "declarations": len(known),
         }
 
-
 def run(config: Config, params: Json) -> Json:
     """CLI entry: draft params['item'] into .unbake/work."""
     with effort.stage("draft.run"):
         snapshot = layout.capture(config)
         item = params["item"]
-        return create(snapshot, item, config.project.root / ".unbake" / "work" / f"{item}.c")
+        return create(snapshot, item, config.project.root / ".unbake" / "work" / f"{store.stem(item)}.c")

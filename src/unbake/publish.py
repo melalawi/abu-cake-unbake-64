@@ -1,5 +1,6 @@
 """Admission, submission landing and withdrawal."""
 import json
+from collections.abc import Sequence
 from dataclasses import replace
 from hashlib import sha256
 from pathlib import Path
@@ -60,7 +61,7 @@ def _new_findings(snapshot, path, findings, sdk):
 def _plan(operation, snapshot, writes, affected, debt, message):
     body = (operation, snapshot.digest, writes, affected, (), debt, message)
     return Plan(*body, digest(body))
-def _proofs(snapshot, affected):
+def _proofs(snapshot: Snapshot, affected: Sequence[str]) -> tuple[tuple[Proof, ...], tuple[Finding, ...]]:
     with store.work(snapshot.config) as work:
         jobs, units = [], []
         for path in affected:
@@ -73,6 +74,13 @@ def _proofs(snapshot, affected):
         proofs = tuple(p for batch in batches for p in batch)
         gaps = tuple(f for own, unit in units for f in compare.gaps(own, unit, proofs))
         return proofs, gaps
+def _regressions(snapshot: Snapshot, gaps: tuple[Finding, ...], own: Sequence[str]) -> tuple[Finding, ...]:
+    """Another member's gap blocks only in a version where HEAD proves it exact."""
+    heads = {g.unit: layout.unit_of(snapshot, g.unit) for g in gaps if g.unit not in own}
+    paths = sorted({u.path for u in heads.values() if u is not None})
+    exact = {(p.member, p.version) for p in _proofs(snapshot, paths)[0] if p.exact} if paths else set()
+    return tuple(g for g in gaps if g.unit in own or heads[g.unit] is None
+                 or any((g.unit, v) in exact for v in g.versions))
 def _consumers(snapshot, header, group=None):
     include = f'#include "{header.removeprefix("include/")}"'
     return tuple(path for path, unit in snapshot.layout.units.items()
@@ -83,8 +91,6 @@ def admit(snapshot: Snapshot, request: Json) -> tuple[UnitSpec, Snapshot, tuple[
         with effort.stage("publish.admit.1"):
             file = Path(request["file"])
             file = file if file.is_absolute() else snapshot.config.project.root / file
-            if not file.is_file():
-                raise Refusal(Finding("land.request", "The requested file does not exist.", path=str(file)))
             unit, snap = compare.bind(snapshot, file, request["function"])
             for member in unit.members:
                 owner = layout.unit_of(snapshot, member)
@@ -99,6 +105,7 @@ def admit(snapshot: Snapshot, request: Json) -> tuple[UnitSpec, Snapshot, tuple[
             recipe = recipes.resolve(snap.config, unit, request["overrides"])
             unit = replace(unit, toolchain=recipe.toolchain,
                            options={k: v for k, v in request["overrides"].items() if k != "toolchain"})
+            snap, unit = ownership.derive(snap, unit)  # the data its source emits is proved with its code
             holders = compare.holders(snap, unit)
             views = view.all_versions(snap, unit, recipe, holders)
         with effort.stage("publish.admit.5"):
@@ -149,52 +156,53 @@ def plans(snapshot: Snapshot, unit: UnitSpec, proposed: Snapshot) -> list[Plan]:
         result, last = [], ()
         options = [(owner, {})] if again else layout.unit_options(snapshot, unit.members[0], folded[unit.path])
         for option, writes in options:
-            writes = dict(writes)
-            writes[option.path] = (_append(snapshot.read(option.path), folded[unit.path])
-                                  if option.path in snapshot.layout.units and not again else folded[unit.path])
-            writes.update((p, b) for p, b in folded.items() if p != unit.path)
-            overlay = layout.overlay(snapshot, writes)
-            configured = replace(option, toolchain=unit.toolchain, options=unit.options)
-            units = dict(overlay.layout.units)
-            units[option.path] = configured
-            member = unit.members[0]
-            fuzzy = dict(overlay.layout.fuzzy)
-            if member in snapshot.layout.fuzzy:
-                writes[snapshot.layout.fuzzy[member]["path"]] = None
-                fuzzy = {k: v for k, v in fuzzy.items() if k != member}
-            writes["layout.toml"] = layout.dump_map(replace(overlay.layout, units=units, fuzzy=fuzzy))
-            overlay = layout.overlay(snapshot, writes)
-            landed = types.landed(overlay, configured, view.get(overlay, configured, first, recipe))
-            if landed != snapshot.peek("types.toml"):
-                writes["types.toml"] = landed
-            _generated(snapshot, writes)
-            overlay = layout.overlay(snapshot, writes)
-            group = proposed.layout.groups[unit.group]
-            header = f"include/{group.segment}/{group.name}.h"
-            affected = {option.path}
-            if header in writes and writes[header] != snapshot.peek(header):
-                affected.update(_consumers(overlay, header, unit.group))
-            before, after = [], []
-            for path, data in writes.items():
-                if Path(path).suffix not in (".c", ".h"):
+            try:
+                writes = dict(writes)
+                writes[option.path] = (_append(snapshot.read(option.path), folded[unit.path])
+                                      if option.path in snapshot.layout.units and not again else folded[unit.path])
+                writes.update((p, b) for p, b in folded.items() if p != unit.path)
+                overlay = layout.overlay(snapshot, writes)
+                configured = replace(option, toolchain=unit.toolchain, options=unit.options)
+                units = dict(overlay.layout.units)
+                units[option.path] = configured
+                member = unit.members[0]
+                if member in snapshot.layout.fuzzy:
+                    writes[snapshot.layout.fuzzy[member]["path"]] = None
+                fuzzy = {k: v for k, v in overlay.layout.fuzzy.items() if k != member}
+                writes["layout.toml"] = layout.dump_map(replace(overlay.layout, units=units, fuzzy=fuzzy))
+                overlay = layout.overlay(snapshot, writes)
+                landed = types.landed(overlay, configured, view.get(overlay, configured, first, recipe))
+                if landed != snapshot.peek("types.toml"):
+                    writes["types.toml"] = landed
+                _generated(snapshot, writes)
+                overlay = layout.overlay(snapshot, writes)
+                group = proposed.layout.groups[unit.group]
+                header = f"include/{group.segment}/{group.name}.h"
+                affected = {option.path}
+                if header in writes and writes[header] != snapshot.peek(header):
+                    affected.update(_consumers(overlay, header, unit.group))
+                before, after = [], []
+                for path, data in writes.items():
+                    if Path(path).suffix not in (".c", ".h"):
+                        continue
+                    owner = overlay.layout.units.get(path)
+                    sdk = overlay.layout.groups[owner.group].sdk if owner else group.sdk
+                    old = snapshot.peek(path)
+                    if old is not None:
+                        before.extend(policy.evaluate(snapshot, path, old.decode(), None, sdk))
+                    if data is not None:
+                        after.extend(policy.evaluate(overlay, path, data.decode(), None, sdk))
+                blocking, debt = policy.scope(before, after, writes)
+                if blocking:
+                    last = blocking
                     continue
-                owner = overlay.layout.units.get(path)
-                sdk = overlay.layout.groups[owner.group].sdk if owner else group.sdk
-                old = snapshot.peek(path)
-                if old is not None:
-                    before.extend(policy.evaluate(snapshot, path, old.decode(), None, sdk))
-                if data is not None:
-                    after.extend(policy.evaluate(overlay, path, data.decode(), None, sdk))
-            blocking, debt = policy.scope(before, after, writes)
-            if blocking:
-                last = blocking
-                continue
-            result.append(_plan("publish", snapshot, writes, tuple(sorted(affected)), debt,
-                                f"publish {unit.members[0]} ({unit.path})"))
+                result.append(_plan("publish", snapshot, writes, tuple(sorted(affected)), debt,
+                                    f"publish {unit.members[0]} ({unit.path})"))
+            except Refusal as error:  # one option failing outright leaves the others to try
+                last = error.findings
         if not result:
-            if last:
-                raise Refusal(*last)
-            raise Refusal(Finding("land.request", "No publication layout option is available.", path=unit.path))
+            raise Refusal(*last or (Finding("land.request", "No publication layout option is available.",
+                                            path=unit.path),))
         return result
 def _learned(snapshot, unit, member, note, plan):
     attempts = [a for a in crack.history(snapshot.config, member) if a.outcome != "exact"]
@@ -224,13 +232,16 @@ def land(config: Config, submission: Submission) -> Receipt:
         inbox = config.project.root / submission.source
         if submission.operation == "publish":
             kinds = configuration.load_resource("units.toml")["kind"]
-            if unit is not None and kinds[unit.kind]["decompiled"] and snapshot.read(unit.path) == inbox.read_bytes():
+            if unit is not None and kinds[unit.kind]["decompiled"] and (  # an owned data member is landed
+                    snapshot.layout.members[member].kind != "function"
+                    or snapshot.read(unit.path) == inbox.read_bytes()):
                 raise Refusal(Finding("land.duplicate", f"{member} is already landed in {unit.path}", unit=member))
             request = {"file": str(inbox), "function": submission.function or member,
                        "overrides": submission.overrides, "note": submission.note}
             unit, proposed, _ = admit(snapshot, request)
             for plan in plans(snapshot, unit, proposed):
                 proofs, gaps = _proofs(layout.overlay(snapshot, plan.writes), plan.affected)
+                gaps = _regressions(snapshot, gaps, unit.members)
                 if not gaps:
                     if submission.note:
                         plan = _learned(snapshot, unit, member, submission.note, plan)
@@ -257,7 +268,7 @@ def land(config: Config, submission: Submission) -> Receipt:
             old = min(snapshot.layout.fuzzy[member]["scores"].values()) if member in snapshot.layout.fuzzy else 0.0
             if score - old < configuration.load_resource("flow.toml")["fuzzy"]["min_gain"]:
                 raise Refusal(Finding("fuzzy.no_gain", "The fuzzy candidate has insufficient gain.", unit=member))
-            path = f"src/fuzzy/{member}.c"
+            path = f"src/fuzzy/{store.stem(member).removesuffix('.c')}.c"
             fuzzy = dict(snapshot.layout.fuzzy)
             fuzzy[member] = {"path": path, "scores": {p.version: p.score for p in proofs}}
             writes = {path: inbox.read_bytes(), "layout.toml": layout.dump_map(replace(snapshot.layout, fuzzy=fuzzy))}

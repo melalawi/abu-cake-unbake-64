@@ -26,16 +26,19 @@ def _next(matched: list[Json], prior: list[Attempt], row: Json) -> str:
     if row["idioms"]:
         return row["idioms"][0]
     return next(r["help"] for r in configuration.load_resource("flow.toml")["ladder"] if r["id"] == "creative")
+def _attempts(member: str) -> str:
+    return f"attempts/{store.stem(member)}"
+
 def state(snapshot: Snapshot, member: str) -> str:
     if member in snapshot.layout.fuzzy:
         return "fuzzy"
     root = snapshot.config.project.root / ".unbake"
-    return "creative" if (root / f"packets/{member}.json").exists() else (
-        "tool" if (root / f"attempts/{member}.jsonl").exists() else "open")
+    return "creative" if (root / f"packets/{store.stem(member)}.json").exists() else (
+        "tool" if (root / f"{_attempts(member)}.jsonl").exists() else "open")
 
 def history(config: Config, member: str) -> list[Attempt]:
     with effort.stage("crack.history"):
-        return [Attempt(**{**row, "hints": tuple(row["hints"])}) for row in store.rows(config, f"attempts/{member}")]
+        return [Attempt(**{**row, "hints": tuple(row["hints"])}) for row in store.rows(config, _attempts(member))]
 
 def feedback(snapshot: Snapshot, member: str, step: str, proofs: Sequence[Proof], note: str) -> tuple[Attempt, Json]:
     with effort.stage("crack.feedback"):
@@ -60,7 +63,7 @@ def feedback(snapshot: Snapshot, member: str, step: str, proofs: Sequence[Proof]
         attempt = Attempt(member, step, mine[0].source_sha256 if mine else "", mine[0].recipe if mine else "",
                           score, best_before, outcome, facts, tuple(h["id"] for h in matched), row["id"],
                           note, effort.invocation(), datetime.now(UTC).isoformat())
-        store.append(snapshot.config, f"attempts/{member}", json.loads(json.dumps(asdict(attempt), sort_keys=True)))
+        store.append(snapshot.config, _attempts(member), json.loads(json.dumps(asdict(attempt), sort_keys=True)))
         return attempt, {"member": member, "subsystem": row["id"], "step": step, "score_before": best_before,
                          "score_after": score, "outcome": outcome, "hints": matched,
                          "next": _next(matched, prior, row), "label": "CRACKED" if outcome == "exact" else ""}
@@ -71,7 +74,7 @@ def packet(snapshot: Snapshot, member: str) -> Path:
     with effort.stage("crack.packet"):
         config = snapshot.config
         root = config.project.root
-        source = f".unbake/work/{member}.c"
+        source = f".unbake/work/{store.stem(member)}.c"
         path = root / source
         if not path.exists():
             raise Refusal(Finding("land.request", f"{member} has no candidate",
@@ -90,8 +93,9 @@ def packet(snapshot: Snapshot, member: str) -> Path:
             target[version] = {"asm": versions.asm_path(config, version, member).relative_to(root).as_posix(),
                                "size": place.size, "vram": place.vram}
         diff = ""
-        if item.kind == "function" and proofs:
-            proof = min(proofs, key=lambda p: p.score)
+        measured = [p for p in proofs if p.built_sha256]  # a candidate that did not link has no built bytes
+        if item.kind == "function" and measured:
+            proof = min(measured, key=lambda p: p.score)
             place = next(p for p in item.placements if p.version == proof.version and p.section == ".text")
             built = store.cached(config, "bytes", proof.built_sha256, _missing)
             diff = symptoms.diff(built[:place.size], versions.rom_bytes(snapshot.versions[proof.version],
@@ -130,7 +134,7 @@ def packet(snapshot: Snapshot, member: str) -> Path:
                              "plateau_probes": prior[-1].symptoms.get("plateau_probes", 0) if prior else 0},
                 "next": _next(matched, prior, row),
                 "commands": {verb: f"unbake {verb} {source} --function {member}" for verb in ("compare", "submit")}}
-        path = root / f".unbake/packets/{member}.json"
+        path = root / f".unbake/packets/{store.stem(member)}.json"
         configuration.validate("packet", body, str(path))
         store.write(path, json.dumps(body, sort_keys=True).encode())
         return path
@@ -171,8 +175,11 @@ def run(config: Config, params: Json) -> Json:
         kinds = configuration.load_resource("units.toml")["kind"]
         existing = layout.unit_of(snapshot, member)
         if existing and kinds[existing.kind]["decompiled"]:
-            raise Refusal(Finding("land.request", f"{member} is already matched"))
-        cand = config.project.root / f".unbake/work/{member}.c"
+            missing = f"; its source is withheld in {', '.join(existing.withheld)}" if existing.withheld else ""
+            raise Refusal(Finding("land.request", f"{member} already has source in {existing.path}{missing}",
+                                  versions=tuple(existing.withheld), path=existing.path,
+                                  action=f"unbake compare {existing.path} --function {member}"))
+        cand = config.project.root / f".unbake/work/{store.stem(member)}.c"
         steps = []
         best_overrides = {"add": [], "omit": []}
         with effort.stage("crack.draft"):

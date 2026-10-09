@@ -464,3 +464,19 @@ def test_claim_rows_changes_nothing_where_the_rows_are_the_claims_and_refuses_a_
         layout.claim_rows(snapshot, (Claim("u", "a", ".rodata", 0x1000, 0x1010, ("c",)),))
     with pytest.raises(Refusal):
         layout.claim_rows(snapshot, (Claim("u", "a", ".rodata", 0x2000, 0x2010, ("z",)),))
+
+
+def test_unit_options_data_member_gets_its_own_unit(scene):
+    snapshot = scene((("func_80000400", "asm", RETURN), ("tbl", "rodata", (1, 2))))
+    unit, writes = layout.unit_options(snapshot, "tbl", b"const int tbl[] = {1, 2};\n")[0]
+    assert unit.path == "src/tbl.c" and unit.members == ("tbl",) and unit.group == "grp"
+    assert writes[unit.path] == b"const int tbl[] = {1, 2};\n"
+    for version in snapshot.versions.values():
+        assert b", .rodata, tbl]" in writes[version.split] and b", rodata, tbl]" in snapshot.read(version.split)
+
+
+def test_unit_options_data_member_refuses_compiled_state(scene):
+    snapshot = scene((("func_80000400", "asm", RETURN), ("tbl", "c", RETURN)))
+    with pytest.raises(Refusal) as caught:
+        layout.unit_options(snapshot, "tbl", b"x")
+    assert caught.value.findings[0].key == "layout.member"

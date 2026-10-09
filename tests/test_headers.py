@@ -60,7 +60,7 @@ def no_types(monkeypatch):
 
 def test_catalog_names(tmp_path):
     result = headers.catalog(snap(tmp_path, {"include/g.h": HEADER}), "a")
-    assert {"s32", "gCount", "known", "Pair"} <= set(result)
+    assert {"s32", "gCount", "known", "struct Pair"} <= set(result) and "Pair" not in result
     assert result["gCount"][:2] == ("include/g.h", 4)
 
 
@@ -105,6 +105,40 @@ def test_fold_moves_new_prototype_and_removes_known(tmp_path, no_types):
     assert "fresh" not in writes["src/a.c"].decode()
     assert "known(int a);" not in writes["src/a.c"].decode()
     assert '#include "g.h"' in writes["src/a.c"].decode()
+
+
+def test_fold_moves_a_typedef_whose_name_is_also_a_struct_tag(tmp_path, no_types):
+    header = "struct Obj { int a; };\n"
+    source = "typedef struct { int b; } Obj;\nint f(Obj *o) { return o->b; }\n"
+    s = snap(tmp_path, {"include/g.h": header, "src/a.c": source})
+    text = '# 1 "src/a.c"\n' + source
+    writes, findings = headers.fold(s, unit(), view(text))
+    assert "typedef struct { int b; } Obj;" in writes["include/main/grp.h"].decode()  # moved, not dropped as known
+    assert "include/g.h" not in writes and not findings
+
+
+@pytest.mark.parametrize("candidate, conflicts", [
+    ("extern s32 gCount;", False), ("extern int gCount;", False), ("extern s32 gCount[];", True),
+    ("extern float gCount;", True),
+])
+def test_fold_refuses_a_declaration_of_a_known_name_with_another_type(tmp_path, no_types, candidate, conflicts):
+    s = snap(tmp_path, {"include/g.h": HEADER, "src/a.c": candidate + "\n"})
+    text = '# 1 "include/g.h"\ntypedef int s32;\n# 1 "src/a.c"\n' + candidate + "\n"
+    _, findings = headers.fold(s, unit(), view(text))
+    assert [f.key for f in findings] == (["headers.conflict"] if conflicts else [])
+    if conflicts:
+        assert "gCount" in findings[0].reason and "include/g.h:4" in findings[0].reason
+
+
+def test_fold_includes_in_the_group_header_what_its_moved_declarations_name(tmp_path, no_types):
+    source = "typedef struct { s32 a; } Rec;\nint f(Rec *r) { return r->a; }\n"
+    s = snap(tmp_path, {"include/g.h": HEADER, "src/a.c": source})
+    writes, findings = headers.fold(s, unit(), view('# 1 "include/g.h"\ntypedef int s32;\n# 1 "src/a.c"\n' + source))
+    header = writes["include/main/grp.h"].decode()
+    assert not findings
+    assert "typedef struct { s32 a; } Rec;" in header
+    assert header.index('#include "g.h"') < header.index("typedef struct")
+    assert '#include "main/grp.h"' in writes["src/a.c"].decode()
 
 
 @pytest.mark.parametrize("evidence", ["authored", "landed"])
@@ -157,3 +191,26 @@ def test_context_refusal_is_draft_context(tmp_path, monkeypatch):
     with pytest.raises(Refusal) as error:
         headers.context(snap(tmp_path, {"include/g.h": HEADER}), "a")
     assert error.value.findings[0].key == "draft.context"
+
+
+@pytest.mark.parametrize("definition, conflicts", [
+    ("int f(void) { return 0; }", False), ("s32 f(void) { return 0; }", False),
+    ("void f(void) { }", True), ("int *f(void) { return 0; }", True),
+])
+def test_fold_refuses_a_definition_whose_header_prototype_returns_another_type(
+        tmp_path, no_types, monkeypatch, definition, conflicts):
+    monkeypatch.setattr(headers, "catalog", lambda snap, version: {"f": ("include/g.h", 7, "extern int f(void);")})
+    s = snap(tmp_path, {"include/g.h": HEADER, "src/a.c": definition + "\n"})
+    text = '# 1 "include/g.h"\ntypedef int s32;\n# 1 "src/a.c"\n' + definition + "\n"
+    _, findings = headers.fold(s, unit(), view(text))
+    assert [f.key for f in findings] == (["headers.conflict"] if conflicts else [])
+    if conflicts:
+        assert "include/g.h:7" in findings[0].reason and "declares 'int'" in findings[0].reason
+
+
+def test_context_keeps_only_type_map_lines_the_headers_can_read():
+    text = "typedef int s32;\nstruct Query { s32 a; };\n"
+    extra = "void a(s32);\nvoid b(void *, Query *);\nextern u8 resources/rsp/x.s[8];\nvoid c(struct Query *);"
+    kept, dropped = headers._parseable(text, extra)
+    assert kept == "void a(s32);\nvoid c(struct Query *);\n"
+    assert dropped == ["void b(void *, Query *);", "extern u8 resources/rsp/x.s[8];"]

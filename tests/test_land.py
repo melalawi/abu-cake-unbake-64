@@ -249,6 +249,18 @@ def test_drain_refusal_recorded_and_continues(lane):
     assert lane[4].call_args_list[0].args == (cfg, "refusal", refused)
 
 
+def test_drain_moves_a_crashed_entry_to_refused_naming_the_exception(lane):
+    cfg = lane[0]
+    first, second = [_submit(lane, source) for source in (b"one", b"two")]
+    _order(cfg, [first, second])
+    lane[6].side_effect = [KeyError("boom"), Receipt("publish", "b" * 40, "plan", (), 0, "test")]
+    result = land.drain(cfg)
+    finding, = result["refused"][0]["findings"]
+    assert finding["key"] == "internal.error" and "KeyError" in finding["reason"] and "boom" in finding["reason"]
+    assert all(p.is_file() for p in _paths(cfg, first, "refused"))
+    assert result["landed"][0]["id"] == second.id and not result["running"]
+
+
 def test_drain_running_returns_immediately(lane):
     cfg = lane[0]
     entry = _submit(lane)

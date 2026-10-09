@@ -108,7 +108,9 @@ REAL_SCOPE = _policy.scope
 
 @pytest.fixture(autouse=True)
 def _no_ownership(monkeypatch):  # the units here have no source to compile: they own what they list
-    monkeypatch.setattr(ownership, "derive", lambda snapshot, unit: (snapshot, unit))
+    derive = Mock(side_effect=lambda snapshot, unit: (snapshot, unit))
+    monkeypatch.setattr(ownership, "derive", derive)
+    return derive
 
 
 def _request(lane, **changes):
@@ -123,7 +125,8 @@ def _gap(reason="changed bytes"):
 def test_admission_order(lane):
     tracker = Mock()
     for name, mock in (("bind", publish.compare.bind), ("policy", publish.policy.evaluate),
-                       ("recipe", publish.recipes.resolve), ("views", publish.view.all_versions),
+                       ("recipe", publish.recipes.resolve), ("derive", publish.ownership.derive),
+                       ("views", publish.view.all_versions),
                        ("objects", publish.native.objects), ("undefined", publish.versions.undefined),
                        ("resolve", publish.versions.resolve), ("measure", publish.native.measure),
                        ("gaps", publish.compare.gaps)):
@@ -132,7 +135,7 @@ def test_admission_order(lane):
     publish.recipes.resolve.return_value = Recipe("alternative", (), (), (), "alternative")
     unit, snap, proofs = publish.admit(lane["snapshot"], _request(lane, overrides=overrides))
     assert [c[0] for c in tracker.mock_calls] == [
-        "bind", "policy", "recipe", "views", "policy", "objects", "objects",
+        "bind", "policy", "recipe", "derive", "views", "policy", "objects", "objects",
         "undefined", "resolve", "undefined", "resolve", "measure", "measure", "gaps"]
     assert unit.toolchain == "alternative"
     assert unit.options == {"add": ["-O1"], "omit": []}
@@ -147,14 +150,21 @@ def test_admission_order(lane):
     assert stages == ["publish.admit", *[f"publish.admit.{n}" for n in (1, 3, 4, 5, 6, 7, 8)]]
 
 
-@pytest.mark.parametrize("step", ["missing", "owner", "policy3", "policy5", "unresolved", "gaps"])
+def test_admission_proves_the_unit_with_the_data_its_source_emits(lane, _no_ownership):
+    owned = replace(lane["unit"], members=(*lane["unit"].members, "rodata/f/80000000"))
+    derived = replace(lane["proposed"], digest="derived")
+    _no_ownership.side_effect = lambda snapshot, unit: (derived, owned)
+    unit, snap, _ = publish.admit(lane["snapshot"], _request(lane))
+    assert unit is owned and snap is derived
+    assert all(c.args[0] is derived and c.args[1] is owned for c in publish.native.measure.call_args_list)
+
+
+@pytest.mark.parametrize("step", ["owner", "policy3", "policy5", "unresolved", "gaps"])
 def test_admission_refuses_at_gate(lane, step):
     snapshot = lane["snapshot"]
     request = _request(lane)
     finding = _gap()
-    if step == "missing":
-        request["file"] = "absent.c"
-    elif step == "owner":
+    if step == "owner":
         owner = replace(lane["unit"], path="src/other.c")
         snapshot = replace(snapshot, layout=replace(snapshot.layout, units={owner.path: owner},
                            members={"f": replace(snapshot.layout.members["f"], state="c")}))
@@ -168,8 +178,8 @@ def test_admission_refuses_at_gate(lane, step):
         publish.compare.gaps.return_value = (finding,)
     with pytest.raises(Refusal) as exc:
         publish.admit(snapshot, request)
-    assert exc.value.findings[0].key == ("land.request" if step in ("missing", "owner") else finding.key)
-    if step in ("missing", "owner", "policy3", "policy5"):
+    assert exc.value.findings[0].key == ("land.request" if step == "owner" else finding.key)
+    if step in ("owner", "policy3", "policy5"):
         publish.native.objects.assert_not_called()
     if step != "gaps":
         publish.native.measure.assert_not_called()
@@ -278,6 +288,21 @@ def test_plan_tries_next_layout_option(lane):
     assert lane["dumps"][plan.writes["layout.toml"]].units[second.path] == second
 
 
+def test_plan_falls_through_an_option_that_refuses_outright(lane):
+    second = replace(lane["unit"], path="src/second.c")
+    publish.layout.unit_options.return_value = [(lane["unit"], {}), (second, {})]
+    publish.types.landed.side_effect = [Refusal(Finding("headers.parse", "no parse")), b"types"]
+    plan, = publish.plans(lane["snapshot"], lane["unit"], lane["proposed"])
+    assert plan.affected == (second.path,)
+
+
+def test_plan_refuses_with_the_last_refusal_when_every_option_refuses(lane):
+    publish.types.landed.side_effect = Refusal(Finding("headers.parse", "no parse"))
+    with pytest.raises(Refusal) as exc:
+        publish.plans(lane["snapshot"], lane["unit"], lane["proposed"])
+    assert exc.value.findings[0].key == "headers.parse"
+
+
 def test_land_publish_commits_once(lane):
     receipt = publish.land(lane["config"], lane["submission"])
     plan = publish.journal.apply.call_args.args[1]
@@ -307,6 +332,17 @@ def test_land_duplicate_refuses(lane, same, decompiled):
         assert publish.land(lane["config"], lane["submission"]).operation == "publish"
 
 
+def test_land_refuses_a_data_member_a_decompiled_unit_already_owns(lane):
+    snapshot, unit = lane["snapshot"], lane["unit"]
+    unit = replace(unit, kind="c")
+    members = {**snapshot.layout.members, "f": replace(snapshot.layout.members["f"], kind="rodata")}
+    snapshot = replace(snapshot, layout=replace(snapshot.layout, units={unit.path: unit}, members=members))
+    publish.layout.capture.return_value = snapshot
+    lane["source"].write_bytes(b"another source")
+    with pytest.raises(Refusal) as exc:
+        publish.land(lane["config"], lane["submission"])
+    assert exc.value.findings[0].key == "land.duplicate"
+    publish.journal.apply.assert_not_called()
 def test_land_not_exact_after_head_moved(lane, monkeypatch):
     snapshot = lane["snapshot"]
     plan = publish._plan("publish", snapshot, {"src/f.c": b"candidate"}, ("src/f.c",), (), "publish f")
@@ -333,6 +369,28 @@ def test_land_first_exact_plan_wins(lane, monkeypatch):
     assert receipt.plan == plans[1].digest
     assert publish._proofs.call_count == 2
     publish.journal.apply.assert_called_once_with(lane["config"], plans[1], snapshot.commit)
+
+
+@pytest.mark.parametrize("exact_at_head, lands", [(False, True), (True, False)])
+def test_land_a_consumers_gap_blocks_only_when_head_proves_it_exact(lane, monkeypatch, exact_at_head, lands):
+    snapshot = lane["snapshot"]
+    plan = publish._plan("publish", snapshot, {"src/f.c": b"0"}, ("src/f.c", "src/g.c"), (), "0")
+    consumer = Finding("land.not_exact", "g differs", unit="g", versions=("a",), missing=("bytes",))
+    monkeypatch.setattr(publish, "admit", Mock(return_value=(lane["unit"], lane["proposed"], lane["proofs"])))
+    monkeypatch.setattr(publish, "plans", Mock(return_value=[plan]))
+    unit_of = publish.layout.unit_of.side_effect
+    g = replace(lane["unit"], path="src/g.c", members=("g",))
+    pick = Mock(side_effect=lambda snap, name: g if name == "g" else unit_of(snap, name))
+    monkeypatch.setattr(publish.layout, "unit_of", pick)
+    head = (fixture.proof("src/g.c", "g", "a", exact_at_head, () if exact_at_head else ("bytes",)),)
+    monkeypatch.setattr(publish, "_proofs", Mock(side_effect=[(lane["proofs"], (consumer,)), (head, ())]))
+    if lands:
+        assert publish.land(lane["config"], lane["submission"]).plan == plan.digest
+    else:
+        with pytest.raises(Refusal) as exc:
+            publish.land(lane["config"], lane["submission"])
+        assert exc.value.findings == (consumer,)
+    assert publish._proofs.call_args_list[1].args[1] == ["src/g.c"]
 
 
 def _fuzzy_proofs(lane, scores, symptoms=None, missing=("bytes",)):

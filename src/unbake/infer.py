@@ -334,11 +334,10 @@ def _tree(snapshot: Snapshot) -> str:
     root = snapshot.config.project.root
     return digest([(str(p), p.read_bytes())
                    for place in ("src", "include") for p in sorted((root / place).rglob("*")) if p.is_file()])
-def _key(snapshot: Snapshot) -> str:
-    return digest((snapshot.digest, _CODE, _tree(snapshot)))
 def plan(snapshot: Snapshot) -> Plan:
     with effort.stage("infer.plan"):
-        return pickle.loads(store.cached(snapshot.config, "infer", _key(snapshot),
+        key = digest((snapshot.digest, _CODE, _tree(snapshot)))
+        return pickle.loads(store.cached(snapshot.config, "infer", key,
                                          lambda: pickle.dumps(_plan(snapshot))))
 def _plan(snapshot: Snapshot) -> Plan:
     base, inferred = snapshot.digest, groups(snapshot)
@@ -347,7 +346,8 @@ def _plan(snapshot: Snapshot) -> Plan:
         g, subsystem=labels[g.name], sdk=bool(g.members) and all(
             n in identified for n in g.members if snapshot.layout.members[n].kind == "function")) for g in inferred}
     memberships = {n: g.name for g in updated.values() for n in g.members}
-    assigned, found, claimed = ownership.assign(snapshot, dict(snapshot.layout.units))  # a unit owns the data it emits
+    # a unit owns the data it emits
+    assigned, claimed, found = ownership.claims(snapshot, units=dict(snapshot.layout.units))
     cut_writes: dict[str, bytes | None] = {}
     for _ in range(_PASSES):  # its rows are generated from its claims: write them now, and plan on the rows they give,
         rows = layout.claim_rows(snapshot, claimed)  # so one commit holds both
@@ -356,7 +356,7 @@ def _plan(snapshot: Snapshot) -> Plan:
         cut_writes.update(rows)
         snapshot = layout.overlay(snapshot, {**rows, "layout.toml": layout.dump_map(
             replace(snapshot.layout, units=assigned))})
-        assigned, found, claimed = ownership.assign(snapshot, dict(snapshot.layout.units))
+        assigned, claimed, found = ownership.claims(snapshot, units=dict(snapshot.layout.units))
     else:
         raise Refusal(Finding("layout.nonconvergent", "the rows generated from the claims moved the claims again",
                               missing=tuple(sorted(cut_writes)), action="report the units of the files named"))

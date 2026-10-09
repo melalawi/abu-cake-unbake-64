@@ -101,6 +101,8 @@ def test_fakematch_waives_only_waivable(snapshot, waiver, waived, previous_line)
     ("do { if (a) { b(); } } while (c);", []),
     ("if (a) {\n  b();\n}\nwhile (ready);", [4]),
     ("do { b(); } while (c);\nwhile (ready);", [2]),
+    ("do {\n x++;\n}\nwhile (x < 3);", []),
+    ("while (x < 3);", [1]),
     ("for (;;);", [1]),
 ])
 def test_empty_loop_ignores_do_while_tails(snapshot, code, lines):

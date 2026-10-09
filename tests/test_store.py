@@ -143,3 +143,9 @@ def test_flock_charges_only_blocked_time(tmp_path, monkeypatch):
     waits = {r.path[-1]: r.wait_seconds for r in effort.closed() if r.kind == "stage"}
     assert waits["blocked"] > 0 and waits["free"] == 0
     assert calls[1] == store.fcntl.LOCK_EX
+
+
+def test_stem_flattens_slashes_and_digests_long_names():
+    assert store.stem("src/a.c") == "src.a.c"
+    long = "x/" + "y" * 200
+    assert len(store.stem(long)) <= 100 and store.stem(long) != store.stem(long + "z")

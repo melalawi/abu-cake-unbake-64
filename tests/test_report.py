@@ -185,6 +185,13 @@ def test_items_candidates_and_holder_fallback(snapshot_factory):
     assert rows[1]["best"] == 0.0
 
 
+def test_items_send_a_withheld_member_to_its_existing_source(snapshot_factory):
+    unit = replace(_unit("partial"), withheld=("b",))
+    rows = report.items(snapshot_factory([_member("partial")], units=[unit]), {})
+    assert [(r["member"], r["command"]) for r in rows] == [
+        ("partial", f"unbake compare {unit.path} --function partial")]
+
+
 @pytest.mark.parametrize("modulus", [1, 2, 3, 7, 31])
 def test_items_shards_disjoint_and_complete(snapshot_factory, modulus):
     snapshot = snapshot_factory([_member(f"m{i}") for i in range(40)])

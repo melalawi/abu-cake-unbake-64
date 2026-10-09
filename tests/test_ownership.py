@@ -272,7 +272,6 @@ def test_claims_give_bytes_to_one_unit_only_and_aggregate_the_debt(monkeypatch):
         "1 unit holders are withheld: not in the ROM",
         "1 unit holders are withheld: row owned by another unit"]
     assert not found["findings"][0].blocking and found["items"] == 3
-    assert ownership.assign(snapshot, units) == (out, findings, claims)
 
 
 def test_exact_withholds_the_holders_whose_bytes_do_not_reproduce_the_rom(monkeypatch):
@@ -318,6 +317,12 @@ def test_derive_gives_a_candidate_the_rows_its_source_emits(monkeypatch):
     assert shown is snapshot and got.members == ("f", "rodata/f/00000104") and got.withheld == ()
     monkeypatch.setattr(ownership.config, "load_resource", lambda name: {"kind": {"c": {"phases": ["assemble"]}}})
     assert ownership.derive(snapshot, unit("f")) == (snapshot, unit("f"))  # not compiled: as it is
+
+
+def test_derive_returns_a_data_unit_as_it_is(monkeypatch):
+    snapshot = SimpleNamespace(layout=SimpleNamespace(members={"row": member("row")}, units={}))
+    monkeypatch.setattr(ownership.config, "load_resource", lambda name: {"kind": {"c": {"phases": ["compile"]}}})
+    assert ownership.derive(snapshot, unit("row")) == (snapshot, unit("row"))
 
 
 def test_derive_generates_the_rows_in_a_private_copy_and_takes_other_units_rows_as_taken(monkeypatch):

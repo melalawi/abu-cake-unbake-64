@@ -178,7 +178,8 @@ def asm_unit(snapshot: Snapshot, member: str, version: str) -> UnitSpec:
         path = version_data.asm_path(config, version, member).relative_to(config.project.root).as_posix()
         return UnitSpec(path, _kinds()[1], item.group, (member,), config.project.toolchain, {"add": [], "omit": []})
 def _edit(text: bytes, name: str, *, state: str | None = None, start: int | None = None,
-          rename: str | None = None, additions: tuple[tuple[int, str], ...] = (), drop: bool = False) -> bytes:
+          rename: str | None = None, additions: tuple[tuple[int, str], ...] = (), drop: bool = False,
+          types: frozenset[str] | None = None) -> bytes:
     lines = text.decode().splitlines(keepends=True)
     for index, line in enumerate(lines):
         match = _LINE.match(line.rstrip("\r\n"))
@@ -186,7 +187,8 @@ def _edit(text: bytes, name: str, *, state: str | None = None, start: int | None
             continue
         ending = line[len(line.rstrip("\r\n")):]
         parts = list(match.groups())
-        if state is not None and parts[3] not in configuration.load_resource("units.toml")["section"]["text"]["types"]:
+        editable = types if types is not None else configuration.load_resource("units.toml")["section"]["text"]["types"]
+        if state is not None and parts[3] not in editable:
             continue
         if state is not None:
             parts[3] = state
@@ -285,7 +287,9 @@ def _options(snapshot: Snapshot, member: str, source: bytes) -> list[tuple[UnitS
         if member not in snapshot.layout.members:
             raise Refusal(Finding("layout.member", reason="member is absent from layout", unit=member))
         item = snapshot.layout.members[member]
-        compiled, assembly, _ = _kinds()
+        compiled, assembly, datum = _kinds()
+        if item.kind != "function":
+            return [_data_option(snapshot, member, source, datum)]
         split_writes = {}
         holder_rows = {}
         for holder in item.holders():
@@ -318,6 +322,43 @@ def _options(snapshot: Snapshot, member: str, source: bytes) -> list[tuple[UnitS
             result.append((unit, {**split_writes, unit.path: content,
                                   "layout.toml": dump_map(replace(snapshot.layout, units=units))}))
         return result
+def _data_option(snapshot: Snapshot, member: str, source: bytes, kind: str) -> tuple[UnitSpec, dict[str, bytes | None]]:
+    """A data member published from C: each holder's split row turns from extracted type to compiled section."""
+    item, writes = snapshot.layout.members[member], dict[str, bytes | None]()
+    sections = configuration.load_resource("units.toml")["section"]
+    raw = frozenset(t for row in sections.values() for t in row["types"] if not t.startswith("."))
+    for holder in item.holders():
+        version = snapshot.versions[holder]
+        state = next((s for n, s, _ in version_data.rows(version, snapshot.read) if n == member), item.state)
+        if state not in raw:
+            raise Refusal(Finding("layout.member", reason=f"{member} is {state} in {holder}, not extracted data",
+                                  unit=member, versions=(holder,)))
+        section = next(name for name, row in sections.items() if state in row["types"])
+        writes[version.split] = _edit(writes.get(version.split, snapshot.read(version.split)), member,
+                                      state=f".{section}", types=raw)
+    stem = member.removesuffix(".c").removeprefix("src/").replace("/", ".")
+    unit = UnitSpec(f"src/{stem}.c", kind, item.group or _data_group(snapshot, member), (member,),
+                    snapshot.config.project.toolchain, {"add": [], "omit": []})
+    units = {**snapshot.layout.units, unit.path: unit}
+    return unit, {**writes, unit.path: source, "layout.toml": dump_map(replace(snapshot.layout, units=units))}
+def _data_group(snapshot: Snapshot, member: str) -> str:
+    """The module a data item joins: the function its name says owns it, else a function whose code names it."""
+    members = snapshot.layout.members
+    owner = member.split("/")[1] if member.count("/") == 2 else ""
+    if owner in members and members[owner].group:
+        return members[owner].group
+    for placement in members[member].placements:
+        record = snapshot.versions[placement.version]
+        names = [n for n, vram in record.symbols.items() if vram == placement.vram]
+        if not names:
+            continue
+        pattern = re.compile(rf"\b(?:{'|'.join(map(re.escape, names))})\b")
+        for path in sorted((snapshot.config.project.root / "asm" / placement.version).rglob("*.s")):
+            user = members.get(path.stem)
+            if user is not None and user.group and pattern.search(path.read_text(errors="replace")):
+                return user.group
+    raise Refusal(Finding("layout.member", reason=f"no function names {member}, so it has no module to join",
+                          unit=member, action="land a function that uses it first"))
 def _decoded(snapshot: Snapshot, version: Version, rows: list) -> tuple[dict[str, tuple[int, ...]], frozenset[int]]:
     def decode() -> tuple[dict[str, tuple[int, ...]], frozenset[int]]:
         addresses = {p.vram for _, _, p in rows if p.section == ".text"}

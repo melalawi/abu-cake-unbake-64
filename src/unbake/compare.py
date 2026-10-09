@@ -47,7 +47,6 @@ def _export(snapshot: Snapshot, unit: UnitSpec, version: str, recipe: Any, work:
     document = {"recipe": asdict(recipe), "proofs": [asdict(p) for p in proofs if p.version == version]}
     (target / "result.json").write_text(json.dumps(document, indent=2, sort_keys=True), encoding="utf-8")
 
-
 def measure(snapshot: Snapshot, unit: UnitSpec, overrides: Json, out: Path | None) -> tuple[Proof, ...]:
     with effort.stage("compare.measure"):
         config = snapshot.config
@@ -69,7 +68,6 @@ def measure(snapshot: Snapshot, unit: UnitSpec, overrides: Json, out: Path | Non
                     _export(snapshot, unit, v, recipe, work / v, proofs, staging / v)
                 os.replace(staging, out)
         return proofs
-
 
 def gaps(snapshot: Snapshot, unit: UnitSpec, proofs: Sequence[Proof]) -> tuple[Finding, ...]:
     found = {(p.member, p.version): p for p in proofs}
@@ -93,7 +91,6 @@ def gaps(snapshot: Snapshot, unit: UnitSpec, proofs: Sequence[Proof]) -> tuple[F
                                     unit=name, versions=tuple(bad), missing=tuple(lost), symptoms=facts))
     return tuple(findings)
 
-
 def bind(snapshot: Snapshot, file: Path, function: str | None) -> tuple[UnitSpec, Snapshot]:
     root = snapshot.config.project.root.resolve()
     try:
@@ -102,6 +99,9 @@ def bind(snapshot: Snapshot, file: Path, function: str | None) -> tuple[UnitSpec
         rel = None
     if rel is not None and rel in snapshot.layout.units:
         return snapshot.layout.units[rel], snapshot
+    if not file.is_file():
+        raise Refusal(Finding("land.request", reason=f"the file {file} does not exist", path=str(file),
+                              action="pass an existing source file"))
     member = function or file.stem
     if member not in snapshot.layout.members:
         raise Refusal(Finding("land.request", reason=f"{member} is not a member of the layout",
@@ -116,7 +116,6 @@ def bind(snapshot: Snapshot, file: Path, function: str | None) -> tuple[UnitSpec
                               action="pass --function NAME"))
     unit, writes = options[-1]
     return unit, layout.overlay(snapshot, writes)
-
 
 def run(config: Config, params: Json) -> Json:
     with effort.stage("compare.run"):

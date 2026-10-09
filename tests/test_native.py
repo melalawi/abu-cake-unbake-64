@@ -183,7 +183,7 @@ def test_proof_cache_hit_skips_link(case):
     assert effort.counters()["proof"] == (1, 1)
 
 
-@pytest.mark.parametrize("change", ["object", "source", "recipe", "symbols", "pins", "trim"])
+@pytest.mark.parametrize("change", ["object", "source", "recipe", "symbols", "pins", "trim", "names", "slice"])
 def test_proof_cache_inputs_invalidate(case, monkeypatch, change):
     linker = _outputs(case)
     _measure(case)
@@ -198,6 +198,14 @@ def test_proof_cache_inputs_invalidate(case, monkeypatch, change):
         native.build.symbols_ld.return_value = b"changed symbols"
     elif change == "pins":
         native.adapters.host_tools.return_value = {"mips_ld": "changed pin"}
+    elif change == "names":  # the same bytes under another member name are another proof
+        member = replace(snapshot.layout.members["f"], name="g")
+        unit = replace(unit, members=("g",))
+        snapshot = replace(snapshot, layout=replace(snapshot.layout, members={"g": member}))
+    elif change == "slice":
+        short = Placement("a", ".text", 0x1000, 0x1004, 0x80000400)
+        member = replace(snapshot.layout.members["f"], placements=(short,))
+        snapshot = replace(snapshot, layout=replace(snapshot.layout, members={"f": member}))
     else:
         member = replace(snapshot.layout.members["f"], state="hasm")
         snapshot = replace(snapshot, layout=replace(snapshot.layout, members={"f": member}))

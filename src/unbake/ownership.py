@@ -300,17 +300,14 @@ def claims(snapshot: Snapshot, version: str | None = None, units: Mapping[str, U
         findings = _findings(debt, "fix the source of each listed unit")
         span.add(items=len(todo), findings=findings)
         return out, tuple(found), findings
-def assign(snapshot: Snapshot, units: dict[str, UnitSpec]
-           ) -> tuple[dict[str, UnitSpec], list[Finding], tuple[Claim, ...]]:
-    """claims() for the given units, the claims after the findings."""
-    out, found, findings = claims(snapshot, units=units)
-    return out, findings, found
 def derive(snapshot: Snapshot, unit: UnitSpec) -> tuple[Snapshot, UnitSpec]:
     """The snapshot and the unit with the data rows its present source emits, per holder, where the ROM holds them
     exactly: what a candidate must reproduce besides its code. The rows its claims become exist only in a private
     copy of the layout, and the returned snapshot is that copy. A unit that is not compiled is returned as it is."""
     if "compile" not in config.load_resource("units.toml")["kind"][unit.kind]["phases"]:
         return snapshot, unit
+    if all(snapshot.layout.members[n].kind != "function" for n in unit.members):
+        return snapshot, unit  # a data unit's members already are all the data its source emits
     from unbake import layout  # the rows come from the layout, which in turn reads ownership
     members = snapshot.layout.members
     taken: dict[str, list[tuple[int, int, str]]] = defaultdict(list)

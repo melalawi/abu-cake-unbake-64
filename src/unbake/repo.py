@@ -180,7 +180,8 @@ def files(snapshot: Snapshot) -> dict[str, bytes]:
                   ".github/workflows/ci.yml": _render("ci.yml.in", checkout=pins["checkout"], uploads=uploads),
                   ".gitlab-ci.yml": _render("gitlab-ci.yml.in", image=rules["gitlab"]["image"],
                                             packages=" ".join(rules["gitlab"]["packages"]))}
-        wanted[_MANIFEST] = _manifest(wanted)  # the starter files below are the author's after they exist
+        # the manifest lists every generated file; the starter files below are the author's once they exist
+        wanted[_MANIFEST] = "".join(f"{p}\n" for p in sorted({*wanted, _MANIFEST})).encode()
         for path, value in _extras(rules, project.title, project.versions).items():
             if snapshot.peek(path) is None:
                 wanted[path] = value
@@ -222,9 +223,6 @@ def _paths(project) -> dict[str, str]:
 def _changed(snapshot: Snapshot, wanted: Mapping[str, bytes]) -> dict[str, bytes]:
     return {path: value for path, value in wanted.items() if snapshot.peek(path) != value}
 _MANIFEST = "generated.txt"
-def _manifest(paths) -> bytes:
-    """Every file setup generates, one sorted path per line, committed with them."""
-    return "".join(f"{p}\n" for p in sorted({*paths, _MANIFEST})).encode()
 def _stale(snapshot: Snapshot, wanted: Mapping[str, bytes]) -> dict[str, None]:
     """Files the previous manifest lists that this setup no longer generates, and nothing else."""
     try:

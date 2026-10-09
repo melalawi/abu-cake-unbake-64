@@ -191,7 +191,7 @@ def test_scan_keeps_landed_functions_and_authored_globals_only(lane):
 def test_scan_records_the_headers_declarations_as_authored(lane):
     snapshot, runner, *_ = lane
     HEADER_DECLARATIONS.update({
-        "Pair": ("include/h.h", 3, "struct Pair { int a; int b; };"),
+        "struct Pair": ("include/h.h", 3, "struct Pair { int a; int b; };"),
         "Word": ("include/h.h", 4, "typedef int Word;"),
         "gCount": ("include/h.h", 5, "extern int gCount;"),
         "handler": ("include/h.h", 6, "extern void (*handler)(int a);"),
@@ -229,6 +229,14 @@ def test_signature_runs_m2c_only_for_missing_names_and_caches(lane):
     runner.assert_not_called()  # the content cache answered
     assert [kind for kind, _ in cache_calls] == ["types.m2c", "types.m2c"]
     assert cache_calls[0] == cache_calls[1]
+
+
+def test_signature_survives_the_asm_file_a_dead_run_left(lane, monkeypatch):
+    snapshot, runner, *_ = lane
+    monkeypatch.setattr(types.pool, "map", lambda config, name, fn, jobs, key=None: [fn(j) for j in jobs])  # no cache
+    first = types.signature(snapshot, ["alpha"])
+    assert types.signature(snapshot, ["alpha"]) == first == {"alpha": "int alpha(int *arg0)"}
+    assert runner.call_count == 2
 
 
 @pytest.mark.parametrize("exit_code,stdout,stderr", [
@@ -298,6 +306,15 @@ def test_landed_parse_refusal_names_the_view_line_and_its_file(lane):
         types.landed(snapshot, unit, SourceView(unit.path, "a", "key", text, (), ()))
     finding = refused.value.findings[0]
     assert finding.key == "headers.parse" and "include/bad.h" in finding.reason and "extern foo;" in finding.reason
+
+def test_landed_reads_the_c_the_way_the_fold_does(lane):
+    snapshot, *_ = lane
+    snapshot = _with_doc(snapshot, _document())
+    unit = UnitSpec("src/alpha.c", "c", "group", ("alpha",), "test-tc", {})
+    text = 'typedef struct __attribute__((packed)) { char a; int b; } P;\nvoid alpha(P *p) { }\n'
+    view = SourceView(unit.path, "a", "key", text, (), ())
+    doc = tomllib.loads(types.landed(snapshot, unit, view).decode())
+    assert doc["function"]["alpha"]["evidence"] == "landed"
 
 
 def test_load_missing_refuses(lane):

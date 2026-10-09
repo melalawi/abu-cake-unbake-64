@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -152,6 +153,19 @@ def test_function_draft_m2c_failure_refuses(tmp_path: Path, toolchains: Any, mon
     assert error.value.findings[0].key == "draft.m2c"
 
 
+def test_function_draft_m2c_failure_names_what_m2c_printed(
+        tmp_path: Path, toolchains: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    snapshot = _snapshot(tmp_path)
+    asm = tmp_path / "project/asm/a/func_80000400.s"
+    asm.parent.mkdir(parents=True)
+    asm.write_text("glabel func_80000400\n")
+    printed = b"/*\nDecompilation failure in function f:\n\nLast instruction is missing a delay slot:\nj .L1\n*/\n"
+    _mock_m2c(monkeypatch, printed, exit=1, stderr=b"")
+    with pytest.raises(Refusal) as error:
+        draft.create(snapshot, "func_80000400", tmp_path / "o.c")
+    assert "missing a delay slot: j .L1" in error.value.findings[0].reason
+
+
 def test_unknown_member_refuses_land_request(tmp_path: Path, toolchains: Any) -> None:
     with pytest.raises(Refusal) as error:
         draft.create(_base(tmp_path), "nope", tmp_path / "o.c")
@@ -187,6 +201,19 @@ def test_data_draft_bytes_when_unaligned(tmp_path: Path, toolchains: Any) -> Non
     text = out.read_text()
     assert "unsigned char d[] = {" in text
     assert "0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,\n    0x08, 0x09," in text
+
+
+def test_data_draft_names_the_object_by_its_symbol_not_its_member_path(tmp_path: Path, toolchains: Any) -> None:
+    snapshot = _data_snapshot(tmp_path, _words(1))
+    member = replace(snapshot.layout.members["d"], name="rodata/f/80000600")
+    snapshot = replace(snapshot, layout=replace(snapshot.layout, members={**snapshot.layout.members,
+                                                                         "rodata/f/80000600": member}))
+    out = tmp_path / "named.c"
+    draft.create(snapshot, "rodata/f/80000600", out)
+    assert "unsigned int d[] = {" in out.read_text()  # the symbol at its address
+    record = replace(snapshot.versions["a"], symbols={"func_80000400": 0x80000400})
+    draft.create(replace(snapshot, versions={"a": record}), "rodata/f/80000600", out)
+    assert "unsigned int D_80000600[] = {" in out.read_text()  # no symbol there: a C name from the address
 
 
 def test_bss_only_refuses_draft_data(tmp_path: Path, toolchains: Any) -> None:

@@ -111,8 +111,10 @@ def drain(config: Config) -> Json:
                         body = {"id": entry.id, "member": entry.member}
                         try:
                             receipt = _land(config, entry)
-                        except Refusal as error:
-                            body["findings"] = [asdict(f) for f in error.findings]
+                        except Exception as error:  # a crash must not leave the entry to fail again unseen
+                            findings = error.findings if isinstance(error, Refusal) else (
+                                Finding("internal.error", f"{type(error).__name__}: {error}", unit=entry.member),)
+                            body["findings"] = [asdict(f) for f in findings]
                             refused.append(body)
                             store.log(config, "refusal", body)
                             _move(config, entry.id, "refused")

@@ -91,6 +91,11 @@ def test_bind_new_text_for_a_landed_member_replaces_its_unit_file(cfg: Config, t
     monkeypatch.setattr(compare.layout, "unit_options", lambda *a: pytest.fail("a landed member needs no new unit"))
     assert compare.bind(s, file, None) == (u, over)
     assert writes == [{"src/a.c": b"int f;"}]
+def test_bind_missing_file_refused_by_name(cfg: Config, tmp_path: Path) -> None:
+    s = snap(cfg, {"f": member("f")})
+    with pytest.raises(Refusal) as error:
+        compare.bind(s, tmp_path / "absent.c", "f")
+    assert error.value.findings[0].key == "land.request" and "absent.c" in error.value.findings[0].reason
 
 
 def test_bind_unknown_member_refused(cfg: Config) -> None:

@@ -16,7 +16,6 @@ from unbake.contracts import Finding, Recipe, Refusal, Snapshot, SourceView, Uni
 
 _CODE = digest(Path(__file__).read_bytes())  # a view is only as true as the dependency rules that pinned it
 
-
 def _sha(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
 def _pin(snapshot: Snapshot, path: str) -> str:
@@ -45,8 +44,7 @@ def _included(path: Path) -> tuple[bytes, ...]:
     return effort.memo(("includes", str(path), stat.st_mtime_ns, stat.st_size),
                        lambda: tuple(_INCLUDE.findall(path.read_bytes())))
 def _link_relative(overlay: Path, root: Path, path: str, content: bytes) -> None:
-    """A quoted include is found beside the file that names it: link each such file of the real tree into the
-    overlay when the overlay holds only the including file."""
+    """A quoted include is found beside the file naming it: link such files of the real tree into the overlay."""
     for name in _INCLUDE.findall(content):
         relative = os.path.normpath(Path(path).parent / name.decode())
         real, target = root / relative, overlay / relative

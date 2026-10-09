@@ -55,7 +55,7 @@ def _declared(text: str) -> list[tuple[str, int, str]]:
     """(name, line, statement) for every declaration one header makes."""
     rows = []
     for start, end, declaration in _statements(text):
-        names = re.findall(r'\b(?:struct|union|enum)\s+(\w+)\s*\{', declaration)
+        names = [f'{kind} {tag}' for kind, tag in re.findall(r'\b(struct|union|enum)\s+(\w+)\s*\{', declaration)]
         if re.search(r'\b(?:extern|typedef)\b', declaration):
             for part in _parts(declaration.rstrip(';')):
                 match = re.search(r'\(\s*\*\s*(\w+)\s*\)|\b(\w+)\s*(?:\[[^]]*\]\s*)*(?:\([^{};]*\))?\s*$', part)
@@ -70,16 +70,13 @@ def _declared(text: str) -> list[tuple[str, int, str]]:
 
 _DECLARATOR = re.compile(r'\(\s*\*\s*(\w+)\s*\)|\b(\w+)\s*(?:\[[^]]*\]\s*)*(?:\([^{};]*\))?\s*$')
 
+# the names a source gives a value or storage: a declaration line without extern, whatever it sits in
 _DEFINITION = re.compile(
     r'^[ \t]*(?!extern\b|typedef\b|return\b)(?:[\w]+[ \t*]+)+(\w+)[ \t]*(?:\[[^\]]*\][ \t]*)*[=;]', re.M)
 _EXTERN = re.compile(r'^[ \t]*extern\b[^;{}]*;', re.M)
 _SYNONYMS = {'f32': 'float', 'f64': 'double', 's8': 'signed char', 'u8': 'unsigned char', 's16': 'short',
              'u16': 'unsigned short', 's32': 'int', 'u32': 'unsigned int', 's64': 'long long',
              'u64': 'unsigned long long', 'const': '', 'volatile': '', 'extern': ''}
-
-def _defined(text: str) -> list[str]:
-    """The names a source gives a value or storage: a declaration line without extern, whatever it sits in."""
-    return _DEFINITION.findall(_blank(text))
 
 def _externs(text: str) -> list[tuple[str, int, str]]:
     """(name, line, statement) for every extern statement a source starts a line with: function bodies are not read."""
@@ -90,7 +87,8 @@ def _externs(text: str) -> list[tuple[str, int, str]]:
 def _file_job(item) -> dict:
     text, source = item
     code = text.decode(errors='replace')
-    return {'declared': (_externs if source else _declared)(code), 'defined': _defined(code) if source else []}
+    defined = _DEFINITION.findall(_blank(code)) if source else []
+    return {'declared': (_externs if source else _declared)(code), 'defined': defined}
 def _file_key(item) -> str:
     return digest((*item, _CODE))  # the file bytes, how it is read and the code that reads it
 
@@ -160,20 +158,40 @@ def context(snapshot: Snapshot, version: str) -> Path:
                             {'add': [], 'omit': []})
             recipe = recipes.resolve(snapshot.config, unit, unit.options)
             result = _view.get(proposed, unit, version, recipe)
-            output = output.with_name(f'{version}-{digest((result.key, extra))[:16]}.i')  # named by what it holds
+            output = output.with_name(f'{version}-{digest((result.key, extra, _CODE))[:16]}.i')  # named by its content
             if not output.exists():
-                store.write(output, (result.text.rstrip('\n') + '\n' + extra).encode())
+                text = result.text.rstrip('\n') + '\n'
+                kept, dropped = _parseable(text, extra)
+                store.write(output, (text + kept).encode())
+                store.write(output.with_suffix('.dropped'), '\n'.join(dropped).encode())  # lines C cannot read
         except (Refusal, OSError) as error:
             raise Refusal(Finding('draft.context', reason=str(error), path=path)) from error
         return output
+def _parseable(text: str, extra: str) -> tuple[str, list[str]]:
+    """The type map lines a C parser reads after the headers' typedefs, and the ones it cannot."""
+    try:
+        ast = CParser().parse(normal(text))
+    except ParseError as error:
+        raise Refusal(Finding('draft.context', reason=f'the project headers do not parse: {error}')) from error
+    names = {n.name for n in ast.ext if isinstance(n, c_ast.Typedef)}
+    parser, lines, dropped = CParser(), [], []
+    for line in extra.splitlines():  # each line on its own, after stubs of just the typedef names it uses
+        words = dict.fromkeys(w for w in re.findall(r'\b[A-Za-z_]\w*\b', line) if w in names)
+        try:
+            parser.parse(normal(''.join(f'typedef int {w};\n' for w in words) + line + '\n'))
+            lines.append(line)
+        except ParseError:
+            dropped.append(line)
+    return '\n'.join(lines) + ('\n' if lines else ''), dropped
 
-def _normal(text):
+def normal(text: str) -> str:
     while match := re.search(r'\b__attribute__\s*\(', text):
         end, depth = match.end(), 1
         while end < len(text) and depth:
             depth += (text[end] == '(') - (text[end] == ')')
             end += 1
         text = text[:match.start()] + re.sub(r'[^\n]', ' ', text[match.start():end]) + text[end:]
+    text = re.sub(r'^(# \d+ "[^"\n]*")(?: \d+)+[ \t]*$', r'\1', text, flags=re.M)  # the flags a marker may end with
     text = re.sub(r'\b(?:__extension__|__restrict)\b', '', text)
     return re.sub(r'\b(?:__inline__|__inline)\b', 'inline', text)
 
@@ -182,7 +200,11 @@ def _path(snapshot, coord):
     path = path.removeprefix(snapshot.config.project.root.as_posix().rstrip('/') + '/')
     return re.sub(r'^(?:.*?/)?build/views/[0-9a-fA-F]{16}/', '', path).removeprefix('./')
 
+_TAGGED = (c_ast.Struct, c_ast.Union, c_ast.Enum)
 def _name(node):
+    """The name a node declares; a struct, union or enum tag is spelled with its keyword, as C keeps tags apart."""
+    if isinstance(node, c_ast.Decl) and not node.name and isinstance(node.type, _TAGGED):
+        return f'{type(node.type).__name__.lower()} {node.type.name}' if node.type.name else None
     if isinstance(node, (c_ast.Decl, c_ast.Typedef)):
         return node.name or getattr(node.type, 'name', None)
     return None
@@ -219,11 +241,35 @@ def _candidate(node):
         'extern' in node.storage or isinstance(node.type, c_ast.FuncDecl) or
         (node.name is None and isinstance(node.type, (c_ast.Struct, c_ast.Union, c_ast.Enum))
          and (getattr(node.type, 'decls', None) is not None or getattr(node.type, 'values', None) is not None)))
+def _clash(path: str, line: int, name: str, statement: str, entry: tuple[str, int, str]) -> list[Finding]:
+    """A finding when a candidate types a name unlike its header: a function by return type, others by folded type."""
+    def spelled(text: str) -> str:
+        kind = re.sub(r'\b\w+\b', lambda w: _SYNONYMS.get(w[0], w[0]), _type_of(text, name))
+        return ' '.join(re.sub(r'\[[^\]]*\]', '[]', kind.partition('@(')[0] if '@(' in kind else kind).split())
+    mine, theirs = spelled(statement), spelled(entry[2])
+    if not mine or not theirs or mine == theirs:
+        return []
+    return [Finding('headers.conflict', path=path, line=line, action='declare it the way the project does',
+                    reason=f"{name}: candidate declares '{mine}', {entry[0]}:{entry[1]} declares '{theirs}'")]
+def _included(text: str, paths: Collection[str]) -> str:
+    """The text with an include of each path it lacks, after its last include."""
+    wanted = sorted(p for p in paths if not re.search(r'^\s*#\s*include\s*[<"]' + re.escape(p) + r'[>"]', text, re.M))
+    if not wanted:
+        return text
+    matches = (list(re.finditer(r'^\s*#\s*include[^\n]*(?:\n|$)', text, re.M))
+               or list(re.finditer(r'^\s*#\s*define[^\n]*\n', text, re.M)))
+    position = matches[-1].end() if matches else 0
+    prefix = '\n' if position and text[position - 1] != '\n' else ''
+    return text[:position] + prefix + ''.join(f'#include "{p}"\n' for p in wanted) + text[position:]
+def _needs(declaration: str, known: dict[str, tuple[str, int, str]]) -> set[str]:
+    """The headers that declare the types a declaration names: what a header that takes it in must include."""
+    return {known[n][0].removeprefix('include/') for n in re.findall(r'\b(?:struct|union|enum) \w+|\w+', declaration)
+            if n in known}
 
 def fold(snapshot: Snapshot, unit: UnitSpec, view: SourceView) -> tuple[dict[str, bytes | None], tuple[Finding, ...]]:
     with effort.stage('headers.fold'):
         try:
-            ast = CParser().parse(_normal(view.text), filename=unit.path)
+            ast = CParser().parse(normal(view.text), filename=unit.path)
         except ParseError as error:
             match = re.search(r':(\d+)(?::\d+)?:', str(error))
             raise Refusal(Finding('headers.parse', reason=str(error), path=unit.path,
@@ -263,20 +309,25 @@ def fold(snapshot: Snapshot, unit: UnitSpec, view: SourceView) -> tuple[dict[str
                         findings.append(Finding('headers.conflict', path=unit.path, line=node.coord.line,
                             reason=f"{name}: local '{left}' vs {location} '{right}'"))
                 elif name in known:
+                    findings += _clash(unit.path, node.coord.line, name, generator.visit(node) + ';', known[name])
                     includes.add(known[name][0].removeprefix('include/'))
                     remove = True
                 else:
                     entry = functions.get(name)
-                    text = ' '.join(_normal(generator.visit(node)).split())
+                    text = ' '.join(normal(generator.visit(node)).split())
                     if (entry and entry['evidence'] in ('authored', 'landed') and
                             isinstance(node.type, c_ast.FuncDecl) and
-                            ' '.join(_normal(entry['signature']).split()) != text):
+                            ' '.join(normal(entry['signature']).split()) != text):
                         findings.append(Finding('headers.conflict', path=unit.path,
                             reason=f"{name}: candidate declares {text}, the type map has {entry['signature']}"))
                     else:
                         moved.append((span, node))
                         remove = True
             grouped.setdefault(span, []).append((node, remove))
+        for node in ast.ext:  # a definition the compiler would see beside a prototype of another return type
+            if isinstance(node, c_ast.FuncDef) and _path(snapshot, node.coord) == unit.path and node.decl.name in known:
+                findings += _clash(unit.path, node.coord.line, node.decl.name, generator.visit(node.decl),
+                                   known[node.decl.name])
         owner = None
         writes = {}
         if moved:
@@ -293,8 +344,10 @@ def fold(snapshot: Snapshot, unit: UnitSpec, view: SourceView) -> tuple[dict[str
                 declarations.append(source[slice(*span)] if len(entries) == 1 else generator.visit(node) + ';')
             insertion = header.rfind('#endif')
             insertion = insertion if insertion >= 0 else len(header)
-            writes[owner] = (header[:insertion].rstrip() + '\n\n' + '\n'.join(declarations) +
-                             '\n\n' + header[insertion:]).encode()
+            header = (header[:insertion].rstrip() + '\n\n' + '\n'.join(declarations) + '\n\n' + header[insertion:])
+            needs = [_needs(generator.visit(node), known) for _, node in moved]
+            needed = set().union(*needs) - {owner.removeprefix('include/')}
+            writes[owner] = _included(header, needed).encode()
         for (start, end), entries in sorted(grouped.items(), reverse=True):
             if any(remove for _, remove in entries):
                 replacement = '\n'.join(generator.visit(n) + ';' for n, remove in entries if not remove)

@@ -357,6 +357,18 @@ def test_run_refuses_invalid_request(lane, monkeypatch, reason):
     crack.draft.create.assert_not_called()
 
 
+def test_run_on_a_withheld_unit_names_the_versions_and_the_compare_command(lane, monkeypatch):
+    snapshot, _ = lane
+    monkeypatch.setattr(crack.layout, "capture", Mock(return_value=snapshot))
+    unit = UnitSpec("src/landed.c", "c", "main", (MEMBER,), "gcc-test", {}, ("b",))
+    monkeypatch.setattr(crack.layout, "unit_of", Mock(return_value=unit))
+    with pytest.raises(Refusal) as caught:
+        crack.run(snapshot.config, {"item": MEMBER, "seconds": 1})
+    finding = caught.value.findings[0]
+    assert finding.versions == ("b",) and "withheld in b" in finding.reason
+    assert finding.action == f"unbake compare src/landed.c --function {MEMBER}"
+
+
 def test_result_validates(lane, monkeypatch):
     snapshot, _ = lane
     _candidate(snapshot)
@@ -367,3 +379,30 @@ def test_result_validates(lane, monkeypatch):
     crack.land.drain.assert_not_called()
     crack.draft.create.assert_not_called()
     configuration.validate("result.crack", result, "crack.json")
+
+
+def test_a_data_member_with_slashes_keeps_its_attempts_in_one_stream(monkeypatch):
+    rows = Mock(return_value=[])
+    monkeypatch.setattr(crack.store, "rows", rows)
+    assert crack.history(Mock(), "rodata/func_f/800C0000") == []
+    rows.assert_called_once()
+    assert rows.call_args.args[1] == "attempts/rodata.func_f.800C0000"
+    assert crack.store._STREAM.match(rows.call_args.args[1])
+
+
+def test_a_member_name_too_long_for_a_file_keeps_a_short_unique_stem():
+    long, other = "rodata/x/" + "_unclaimed_CE0F0" * 30, "rodata/x/" + "_unclaimed_CE0F4" * 30
+    first = crack.store.stem(long)
+    assert len(first) <= 120 and first != crack.store.stem(other) and first == crack.store.stem(long)
+    assert crack.store._STREAM.match(f"attempts/{first}")
+
+
+def test_packet_of_a_candidate_that_did_not_link_has_no_diff(lane, monkeypatch):
+    snapshot, _ = lane
+    _candidate(snapshot)
+    unlinked = replace(_proof(0.0), built_sha256="")
+    _measurement(snapshot, monkeypatch, proofs=(unlinked,))
+    crack.store.cached.side_effect = AssertionError("an unlinked candidate has no built bytes to read")
+    import json
+    assert json.loads(crack.packet(snapshot, MEMBER).read_text())["diff"] == ""
+    crack.symptoms.diff.assert_not_called()

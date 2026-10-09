@@ -9,7 +9,7 @@ import struct
 from collections import defaultdict
 
 from unbake import config as configuration
-from unbake import crack, effort, land, layout, pool
+from unbake import crack, effort, land, layout, pool, store
 from unbake.contracts import Config, Finding, Json, Refusal, Snapshot
 
 
@@ -92,7 +92,7 @@ def items(snapshot: Snapshot, params: Json) -> list[Json]:
             if not 0 <= index < modulus:
                 raise Refusal(Finding("report.request", "shard must be I/K with 0 <= I < K"))
         rows = []
-        for name, member, _unit, matched, sid in _inventory(snapshot):
+        for name, member, unit, matched, sid in _inventory(snapshot):
             sections = (".text",) if member.kind == "function" else (".data", ".rodata")
             if matched or not any(p.section in sections for p in member.placements):
                 continue
@@ -105,7 +105,8 @@ def items(snapshot: Snapshot, params: Json) -> list[Json]:
                 version = member.holders()[0]
             placement = next(p for p in member.placements if p.version == version)
             rows.append({"member": name, "kind": member.kind, "subsystem": sid, "rank": subsystems[sid]["rank"],
-                         "state": crack.state(snapshot, name), "size": placement.size, "address": placement.vram})
+                         "state": crack.state(snapshot, name), "size": placement.size, "address": placement.vram,
+                         "source": unit.path if unit is not None and unit.withheld else ""})
         rows.sort(key=lambda r: (r["rank"], ("open", "tool", "fuzzy", "creative").index(r["state"]),
                                  r["size"], r["address"], r["member"]))
         seconds = configuration.load_resource("flow.toml")["work"]["permuter_seconds"]
@@ -113,10 +114,12 @@ def items(snapshot: Snapshot, params: Json) -> list[Json]:
             name = row["member"]
             row["best"] = (min(snapshot.layout.fuzzy[name]["scores"].values()) if row["state"] == "fuzzy"
                            else max((a.score for a in crack.history(snapshot.config, name)), default=0.0))
-            row["command"] = (f"unbake crack {name} --seconds {seconds}" if row["state"] in ("open", "tool")
-                              else f"unbake compare .unbake/work/{name}.c --function {name}")
+            source = row.pop("source")  # a withheld member has source: compare it, never crack it
+            row["command"] = (f"unbake compare {source} --function {name}" if source
+                              else f"unbake crack {name} --seconds {seconds}" if row["state"] in ("open", "tool")
+                              else f"unbake compare .unbake/work/{store.stem(name)}.c --function {name}")
             if row["state"] == "creative":
-                row["packet"] = f".unbake/packets/{name}.json"
+                row["packet"] = f".unbake/packets/{store.stem(name)}.json"
         return rows[:count]
 
 def _sum_measures(units: list[Json]) -> Json:
