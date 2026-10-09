@@ -192,9 +192,8 @@ def run(config: Config, params: Json) -> Json:
         if not exact:
             with effort.stage("crack.options"):
                 base = recipes.resolve(config, unit, {})
-                for proposal in recipes.proposals(config, base):
-                    overrides = _delta(base, proposal)
-                    measured = compare.measure(bound, unit, overrides, None)
+                deltas = [_delta(base, proposal) for proposal in recipes.proposals(config, base)]
+                for overrides, measured in zip(deltas, compare.measure_many(bound, unit, deltas), strict=True):
                     attempt, _ = feedback(bound, member, "options", measured, "")
                     steps.append({"step": attempt.step, "score": attempt.score, "outcome": attempt.outcome})
                     if attempt.score > best or attempt.outcome == "exact":

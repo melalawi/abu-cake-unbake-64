@@ -104,8 +104,8 @@ def items(snapshot: Snapshot, params: Json) -> list[Json]:
             rows.append({"member": name, "kind": member.kind, "subsystem": sid, "rank": subsystems[sid]["rank"],
                          "state": crack.state(snapshot, name), "size": placement.size, "address": placement.vram,
                          "source": unit.path if unit is not None and unit.withheld else ""})
-        rows.sort(key=lambda r: (r["rank"], ("open", "tool", "fuzzy", "creative").index(r["state"]),
-                                 r["size"], r["address"], r["member"]))
+        rows.sort(key=lambda r: (r["size"] < 16, r["rank"], ("open", "tool", "fuzzy", "creative").index(r["state"]),
+                                 -r["size"], r["address"], r["member"]))  # biggest first, fragments last
         seconds = configuration.load_resource("flow.toml")["work"]["permuter_seconds"]
         for row in rows[:count]:
             name = row["member"]

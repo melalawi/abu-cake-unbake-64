@@ -312,10 +312,6 @@ def _agreed(snapshot: Snapshot, b: str, counts: Counter) -> dict[str, tuple[str,
     symbols = snapshot.versions[b].symbols
     return {x: (y, symbols[y], n) for (x, y), n in counts.items()
             if len(targets[x]) == 1 and x not in symbols and y in symbols}
-def correspond(snapshot: Snapshot, a: str, b: str) -> dict[str, tuple[str, int, int]]:
-    """Names in a that b lacks, each with the b name, its address and the references that agree."""
-    with effort.stage("infer.correspond"):
-        return _agreed(snapshot, b, _votes_job((snapshot, a, b, list(pairs(snapshot, [(a, b)])[a, b].items()))))
 def correspondences(snapshot: Snapshot) -> tuple[tuple[str, str, str, str], ...]:
     """(x, a, y, b): the name x that version a's code uses and the name y that version b gives the same thing,
     where every pairing of the two functions agrees."""

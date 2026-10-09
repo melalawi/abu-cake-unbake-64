@@ -80,6 +80,8 @@ def _measurement(snapshot, monkeypatch, proofs=None):
     unit = UnitSpec(f".unbake/work/{MEMBER}.c", "c", "main", (MEMBER,), "gcc-test", {})
     monkeypatch.setattr(crack.compare, "bind", Mock(return_value=(unit, snapshot)))
     monkeypatch.setattr(crack.compare, "measure", Mock(return_value=proofs or (_proof(0.5), _proof(0.4, "b"))))
+    monkeypatch.setattr(crack.compare, "measure_many", lambda snap, unit, variants:
+                        (crack.compare.measure(snap, unit, v, None) for v in variants))  # one at a time, as consumed
     monkeypatch.setattr(crack.recipes, "resolve", Mock(return_value=RECIPE))
     monkeypatch.setattr(crack.versions, "asm_path", lambda cfg, version, member:
                         cfg.project.root / f"asm/{version}/{member}.s")
@@ -434,3 +436,12 @@ def test_packet_reads_assembly_only_from_a_version_holding_the_member(lane, monk
     path = crack.packet(snapshot, MEMBER)
     assert list(json.loads(path.read_text())["target"]) == ["b"]
     assert "callee" in crack.types.declarations.call_args.args[1]
+
+
+def test_options_are_measured_in_one_call(lane, monkeypatch):
+    snapshot, _ = lane
+    _runner(snapshot, monkeypatch, [0.4, 1], b"int func_80000400(void) { return 1; }\n")
+    spy = Mock(wraps=crack.compare.measure_many)
+    monkeypatch.setattr(crack.compare, "measure_many", spy)
+    crack.run(snapshot.config, {"item": MEMBER, "seconds": 3})
+    assert spy.call_count == 1 and len(spy.call_args.args[2]) == 2  # every proposal travels in the one call

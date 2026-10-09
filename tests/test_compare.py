@@ -289,3 +289,15 @@ def test_gaps_require_only_the_claim_rows_holders(cfg: Config) -> None:
     assert compare.gaps(snapshot, unit("f", row.name), proofs)[0].versions == ("b",)
     proofs.append(fixture.proof(UNIT, row.name, "b", True))
     assert compare.gaps(snapshot, unit("f", row.name), proofs) == ()
+
+
+def test_measure_many_runs_all_variants_in_one_pool_map(cfg: Config, monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: list[Path] = []
+    calls: list[int] = []
+    mock_measure(monkeypatch, seen)
+    inner = compare.pool.map
+    monkeypatch.setattr(compare.pool, "map", lambda *a: calls.append(len(a[3])) or inner(*a))
+    s = snap(cfg, {"f": member("f")})
+    proofs = compare.measure_many(s, unit("f"), [{"add": [], "omit": []}, {"add": ["-O1"], "omit": []}])
+    assert calls == [4] and [[p.version for p in each] for each in proofs] == [["a", "b"], ["a", "b"]]
+    assert len({p.parent / p.name for p in seen}) == 4  # each variant has its own job directory

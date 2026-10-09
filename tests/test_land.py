@@ -525,3 +525,24 @@ def test_check_reprove_reports_withheld_holders_apart_from_debt_and_skips_them_i
     assert [r["version"] for r in result["reprove"]["withheld"]] == ["b"]
     assert [r["version"] for r in result["reprove"]["debt"]] == ["a"]
     assert [(u.path, v) for u, v in both.call_args.args[1]] == [(held.path, "a")]
+
+
+def test_drain_measures_again_when_another_lane_moved_head(lane):
+    cfg = lane[0]
+    entry = _submit(lane)
+    moved = Refusal(Finding("journal.changed", "HEAD moved"))
+    lane[6].side_effect = [moved, moved, Receipt("publish", "b" * 40, "plan", (), 0, "test")]
+    result = land.drain(cfg)
+    assert [r["id"] for r in result["landed"]] == [entry.id] and result["refused"] == []
+    assert lane[6].call_count == land._ATTEMPTS == 3
+
+
+def test_drain_refuses_after_the_attempts_run_out_and_never_retries_other_refusals(lane):
+    cfg = lane[0]
+    first, second = [_submit(lane, source) for source in (b"one", b"two")]
+    _order(cfg, [first, second])
+    moved = Refusal(Finding("journal.changed", "HEAD moved"))
+    lane[6].side_effect = [moved] * land._ATTEMPTS + [Refusal(Finding("land.request", "bad"))]
+    result = land.drain(cfg)
+    assert [r["findings"][0]["key"] for r in result["refused"]] == ["journal.changed", "land.request"]
+    assert lane[6].call_count == land._ATTEMPTS + 1

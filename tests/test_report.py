@@ -170,8 +170,8 @@ def test_items_order_rank_state_size(snapshot_factory, monkeypatch):
     history = Mock(return_value=[fixture.attempt(score=.2), fixture.attempt(score=.8)])
     monkeypatch.setattr(report.crack, "history", history)
     rows = report.items(snapshot, {})
-    assert [r["member"] for r in rows] == ["sdk_creative", "a_tie", "z_tie", "late", "large",
-                                           "tool", "fuzzy", "creative"]
+    assert [r["member"] for r in rows] == ["sdk_creative", "large", "a_tie", "z_tie", "late",
+                                           "tool", "fuzzy", "creative"]  # biggest first, sub-16-byte fragments last
     seconds = configuration.load_resource("flow.toml")["work"]["permuter_seconds"]
     for row in rows:
         name = row["member"]
@@ -192,9 +192,9 @@ def test_items_candidates_and_holder_fallback(snapshot_factory):
                _member("bss", kind="data", section=".bss", state="data"),
                _member("no_text", section=".rodata")]
     rows = report.items(snapshot_factory(members), {})
-    assert [r["member"] for r in rows] == ["data", "only_b"]
-    assert rows[1]["address"] == 88
-    assert rows[1]["best"] == 0.0
+    assert [r["member"] for r in rows] == ["only_b", "data"]
+    assert rows[0]["address"] == 88
+    assert rows[0]["best"] == 0.0
 
 
 def test_items_send_a_withheld_member_to_its_existing_source(snapshot_factory):

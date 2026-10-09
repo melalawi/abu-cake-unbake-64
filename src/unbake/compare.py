@@ -48,24 +48,31 @@ def _export(snapshot: Snapshot, unit: UnitSpec, version: str, recipe: Any, work:
     (target / "result.json").write_text(json.dumps(document, indent=2, sort_keys=True), encoding="utf-8")
 
 def measure(snapshot: Snapshot, unit: UnitSpec, overrides: Json, out: Path | None) -> tuple[Proof, ...]:
+    return measure_many(snapshot, unit, [overrides], out)[0]
+
+def measure_many(snapshot: Snapshot, unit: UnitSpec, variants: Sequence[Json],
+                 out: Path | None = None) -> list[tuple[Proof, ...]]:
+    """One proof tuple per override variant, all variants and versions in one pool map; `out` exports variant 0."""
     with effort.stage("compare.measure"):
         config = snapshot.config
         if out is not None and out.exists():
             raise Refusal(Finding("compare.out", reason=f"{out} already exists", unit=unit.path,
                                   action="pass a new --out directory"))
-        recipe = recipes.resolve(config, unit, overrides)
+        recipes_ = [recipes.resolve(config, unit, o) for o in variants]
         snapshot, unit = ownership.derive(snapshot, unit)  # the data its source emits is part of what must match
         held = holders(snapshot, unit)
         with store.work(config) as work:
             results = pool.map(config, "compare.measure", native.prove_args,
-                               [(snapshot, unit, v, recipe, work / v) for v in held])
-            proofs = tuple(p for batch in results for p in batch)
+                               [(snapshot, unit, v, r, work / (v if i == 0 else f"{i}-{v}"))
+                                for i, r in enumerate(recipes_) for v in held])
+            proofs = [tuple(p for batch in results[i * len(held):(i + 1) * len(held)] for p in batch)
+                      for i in range(len(variants))]
             if out is not None:
                 staging = out.parent / (".tmp-" + out.name)
                 if staging.exists():
                     shutil.rmtree(staging)
                 for v in held:
-                    _export(snapshot, unit, v, recipe, work / v, proofs, staging / v)
+                    _export(snapshot, unit, v, recipes_[0], work / v, proofs[0], staging / v)
                 os.replace(staging, out)
         return proofs
 
@@ -93,11 +100,9 @@ def gaps(snapshot: Snapshot, unit: UnitSpec, proofs: Sequence[Proof]) -> tuple[F
 
 def bind(snapshot: Snapshot, file: Path, function: str | None) -> tuple[UnitSpec, Snapshot]:
     root = snapshot.config.project.root.resolve()
-    try:
-        rel = file.resolve().relative_to(root).as_posix()
-    except ValueError:
-        rel = None
-    if rel is not None and rel in snapshot.layout.units:
+    path = file.resolve()
+    rel = path.relative_to(root).as_posix() if path.is_relative_to(root) else None
+    if rel in snapshot.layout.units:
         return snapshot.layout.units[rel], snapshot
     if not file.is_file():
         raise Refusal(Finding("land.request", reason=f"the file {file} does not exist", path=str(file),
@@ -128,11 +133,8 @@ def run(config: Config, params: Json) -> Json:
         bound, unit = ownership.derive(bound, unit)
         proofs = measure(bound, unit, overrides, out)
         found = gaps(bound, unit, proofs)
-        if params["function"]:
-            member = params["function"]
-        elif len(unit.members) == 1:
-            member = unit.members[0]
-        else:
+        member = params["function"] or (unit.members[0] if len(unit.members) == 1 else None)
+        if member is None:
             raise Refusal(Finding("land.request", reason="the file holds several members; pass --function",
                                   unit=unit.path, action="pass --function NAME"))
         note = params["note"] or ""

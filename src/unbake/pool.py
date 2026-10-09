@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from unbake import effort, store
-from unbake.contracts import Config, Finding, Json, Refusal, Snapshot
+from unbake.contracts import Config, Finding, Json, Refusal, Snapshot, digest
 
 _AHEAD = 3  # chunks queued per worker, so a worker that finishes one starts the next without waiting for the parent
 _executor: ProcessPoolExecutor | None = None
@@ -76,13 +76,12 @@ def _job(function: Callable[[Any], Any], item: Any, floor: float) -> tuple[bool,
         except Exception as exc:
             value, ok = exc, False
     after = resource.getrusage(resource.RUSAGE_SELF)
-    cache = dict(records[-1].cache)
     return ok, value, {
         "pid": os.getpid(),
         "worker_cpu": after.ru_utime + after.ru_stime - before.ru_utime - before.ru_stime,
         "native_cpu": sum(r.native_cpu_seconds for r in records if r.kind == "native"),
         "rss": after.ru_maxrss * 1024,
-        "cache": cache,
+        "cache": dict(records[-1].cache),
         "records": [asdict(r) for r in records if r.wall_seconds >= floor or r.findings or r.wait_seconds],
         "start_ns": start_ns,
         "end_ns": time.monotonic_ns(),
@@ -131,13 +130,20 @@ class _Run:
         self.outcomes: list[tuple[bool, Any, Json] | None] = [None] * len(items)
         self.keys = [key(item) for item in items] if key else []
         self.todo = list(range(len(items)))
+        self.whole = digest(self.keys) if key and None not in self.keys else None
         if key:  # the parent resolves hits itself: a warm item never travels to a worker
-            for index, found in enumerate(None if k is None else store.get(config, name, k) for k in self.keys):
+            blob = self.whole and store.get(config, name + ".all", self.whole)  # a fully warm group is one entry
+            warm = pickle.loads(blob) if blob else [k and store.get(config, name, k) for k in self.keys]
+            for index, found in enumerate(warm):
                 effort.count(name, found is not None)
                 if found is not None:
                     self.outcomes[index] = (True, pickle.loads(found), {})
             self.todo = [i for i, outcome in enumerate(self.outcomes) if outcome is None]
         self.submitted, self.done = 0, len(items) - len(self.todo)
+    def seal(self, config: Config) -> None:
+        if self.whole and self.todo and all(o and o[0] for o in self.outcomes):
+            blobs = [pickle.dumps(o[1], protocol=5) for o in self.outcomes]
+            store.put(config, self.name + ".all", self.whole, pickle.dumps(blobs))
     def settle(self, config: Config, picked: Sequence[int], outcomes: Sequence[tuple[bool, Any, Json]]) -> None:
         for index, outcome in zip(picked, outcomes, strict=True):
             self.outcomes[index] = outcome
@@ -200,6 +206,7 @@ def gather(config: Config, groups: Sequence[tuple]) -> list[list[Any]]:
                     dispatch_seconds=(time.monotonic_ns() - start_ns) / 1e9 - waited,
                 )
         for run in runs:
+            run.seal(config)
             for index, outcome in enumerate(run.outcomes):
                 if outcome is not None and not outcome[0]:
                     _raise_failure(config, run.name, index, outcome[1])

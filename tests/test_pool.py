@@ -246,3 +246,21 @@ def test_forkserver_socket_directory_refuses_without_runtime_dir(tmp_path, monke
     with pytest.raises(Refusal) as refusal:
         pool._short_socket_dir()
     assert "XDG_RUNTIME_DIR" in refusal.value.findings[0].reason
+
+
+def test_a_warm_keyed_group_costs_one_store_read(tmp_path, monkeypatch):
+    config, reads = _config(tmp_path), []
+    real = pool.store.get
+    monkeypatch.setattr(pool.store, "get", lambda cfg, kind, key: reads.append(kind) or real(cfg, kind, key))
+    items = [1, 2, 3, 4]
+    with effort.command("check", []):
+        assert pool.map(config, "units", _square, items, key=str) == [1, 4, 9, 16]
+    assert reads.count("units") == 4  # the cold run asks for every item
+    reads.clear()
+    with effort.command("check", []):
+        assert pool.map(config, "units", _square, items, key=str) == [1, 4, 9, 16]
+        assert effort.counters()["units"] == (4, 0)  # all four still count as hits
+    assert reads == ["units.all"]
+    reads.clear()
+    assert pool.map(config, "units", _square, [1, 2, 3, 5], key=str) == [1, 4, 9, 25]  # one new item: per-item reads
+    assert reads.count("units") == 4

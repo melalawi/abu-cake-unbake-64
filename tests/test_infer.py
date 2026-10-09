@@ -258,21 +258,6 @@ def corresponding(tmp: Path, pairs: list[tuple[str, str]], known_b: tuple[str, .
 
 
 @pytest.mark.usefixtures("toolchains")
-@pytest.mark.parametrize(
-    ("pairs", "known_b", "expected"),
-    [
-        ([("foo_a", "foo_b")], (), {"foo_a": ("foo_b", 0x80001100, 1)}),
-        ([("foo_a", "foo_b"), ("foo_a", "foo_b")], (), {"foo_a": ("foo_b", 0x80001100, 2)}),
-        ([("foo_a", "foo_b"), ("foo_a", "bar_b")], (), {}),
-        ([("foo_a", "foo_b")], ("foo_a",), {}),
-    ],
-)
-def test_correspond_votes(tmp_path: Path, pairs: list, known_b: tuple, expected: dict) -> None:
-    snapshot = corresponding(tmp_path, pairs, known_b)
-    assert infer.correspond(snapshot, "a", "b") == expected
-
-
-@pytest.mark.usefixtures("toolchains")
 def test_correspondences_name_the_two_symbols_of_one_thing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(pool, "map", lambda cfg, name, fn, items, key=None: [fn(i) for i in items])
     snapshot = corresponding(tmp_path, [("foo_a", "foo_b")])

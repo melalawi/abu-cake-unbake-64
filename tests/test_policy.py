@@ -270,3 +270,13 @@ def test_census_units_headers_deduplication_and_sdk(snapshot, monkeypatch, names
     assert evaluate.call_args_list[-1].args[3] is None  # a header has no single view
     assert all(call.args[0] is snapshot and call.args[4] is True for call in evaluate.call_args_list)
     assert all(call.args[2] == f"text of {call.args[1]}" for call in evaluate.call_args_list)
+
+
+def test_directive_rules_never_let_whitespace_cross_a_line():
+    import re
+    import tomllib
+    from pathlib import Path
+    rules = tomllib.loads((Path(policy.__file__).parent / "resources/data/rules.toml").read_text())["rule"]
+    directive = [r["regex"] for r in rules if r.get("regex", "").startswith("^")]
+    assert directive and not any(r"^\s" in regex for regex in directive)  # a blank-line run is not rescanned per line
+    assert re.search(directive[0], "\n\n\n  #  include \"../x.h\"\n", re.M)

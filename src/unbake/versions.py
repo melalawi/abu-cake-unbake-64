@@ -136,11 +136,13 @@ def read(config: Config, reader: Callable[[str], bytes], only: Collection[str] |
         root, table = config.project.root, config.project.version_files
         named = symbols.load(reader, table)
         wanted = [v for v in table if only is None or v in only]
-        files = {v: fact_files(config, v) for v in wanted}
-        paths = [*(p for v in wanted for p in (*files[v][0], *files[v][1])),
-                 *(p.relative_to(root) for p in sorted((root / ".unbake" / "symbols").glob("*/*.csv")))]
+        files = {v: effort.memo(("facts", str(root), v), lambda v=v: fact_files(config, v)) for v in wanted}
+        def stamps() -> list[tuple[str, int]]:  # tens of thousands of stats: one pass per command, not one per read
+            paths = [*(p for v in wanted for p in (*files[v][0], *files[v][1])),
+                     *(p.relative_to(root) for p in sorted((root / ".unbake" / "symbols").glob("*/*.csv")))]
+            return [(str(p), os.stat(root / p).st_mtime_ns) for p in paths]
         key = digest((str(root), wanted, [(reader(table[v].split), reader(table[v].symbols)) for v in wanted],
-                      reader(symbols.path()), [(str(p), os.stat(root / p).st_mtime_ns) for p in paths]))
+                      reader(symbols.path()), effort.memo(("stamps", str(root), tuple(wanted)), stamps)))
         def compute() -> dict[str, Version]:
             items = [(str(root), rel) for v in wanted for rel in files[v][1]]
             parsed = iter(pool.map(config, "versions.asm", _asm_job, items, _asm_key))

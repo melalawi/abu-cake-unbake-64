@@ -30,7 +30,7 @@ id = "local-include"
 scope = "directives"
 waivable = false
 sentence = "a source file may include only headers under include/"
-regex = '^\s*#\s*include\s*"(?:\.\.?/|[^"]*(?:scratch|nonmatching|drafts)/)[^"]*"'
+regex = '^[ \t]*#[ \t]*include[ \t]*"(?:\.\.?/|[^"]*(?:scratch|nonmatching|drafts)/)[^"]*"'
 
 [[rule]]
 id = "tool-comment"
@@ -44,7 +44,7 @@ id = "file-version-guard"
 scope = "directives"
 waivable = false
 sentence = "a version guard is not allowed in a source file"
-regex = '^\s*#\s*(?:if|ifdef|ifndef|elif)\b[^\n]*\bVERSION_\w+'
+regex = '^[ \t]*#[ \t]*(?:if|ifdef|ifndef|elif)\b[^\n]*\bVERSION_\w+'
 
 [[rule]]
 id = "empty-loop"
@@ -58,7 +58,7 @@ id = "local-define"
 scope = "directives"
 waivable = false
 sentence = "a file-local macro belongs in a shared header"
-regex = '^\s*#\s*define\s+\w+'
+regex = '^[ \t]*#[ \t]*define[ \t]+\w+'
 
 [[rule]]
 id = "raw-gfx"

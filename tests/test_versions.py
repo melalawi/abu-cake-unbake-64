@@ -289,3 +289,16 @@ def test_undefined_reads_the_global_and_weak_names_an_object_leaves_open(tmp_pat
     (0x40800000, False), (0x00000000, False), (0x3C02A450, False), (0x23BDFFB8, False), (0x0000000C, False)])
 def test_delay_slot_predicate(word: int, expected: bool) -> None:
     assert versions.delay_slot(word) is expected
+
+
+def test_one_command_stats_the_fact_files_once(world, monkeypatch) -> None:
+    from unbake import effort
+    cfg, ctx, _ = world
+    stats = []
+    real = versions.os.stat
+    monkeypatch.setattr(versions.os, "stat", lambda *a, **k: stats.append(a[0]) or real(*a, **k))
+    with effort.command("check", []):
+        versions.read(cfg, ctx["reader"])
+        first = len(stats)
+        versions.read(cfg, ctx["reader"])
+    assert first > 0 and len(stats) == first  # the second read reuses the command's stamps
