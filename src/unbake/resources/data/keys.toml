@@ -243,6 +243,10 @@ sentence = "a toolchain download does not match its pin"
 owner = "build"
 sentence = "an installed toolchain file does not match its pin"
 
+[key."member.split-delay-slot"]
+owner = "draft"
+sentence = "a member ends on a branch or jump whose delay slot is in the next member"
+
 [key."version.rom"]
 owner = "versions"
 sentence = "a ROM range is outside the ROM"

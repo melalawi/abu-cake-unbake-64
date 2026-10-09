@@ -128,6 +128,8 @@ class Member:
     placements: tuple[Placement, ...]  # sorted by (version, section)
     def holders(self) -> tuple[str, ...]:
         return tuple(sorted({p.version for p in self.placements}))
+    def reference(self, preferred: str) -> str:
+        return preferred if preferred in self.holders() else self.holders()[0]
 @dataclass(frozen=True)
 class Version:
     id: str

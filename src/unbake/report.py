@@ -9,7 +9,7 @@ import struct
 from collections import defaultdict
 
 from unbake import config as configuration
-from unbake import crack, effort, land, layout, pool, store
+from unbake import crack, draft, effort, land, layout, pool, store
 from unbake.contracts import Config, Finding, Json, Refusal, Snapshot
 
 
@@ -85,24 +85,21 @@ def items(snapshot: Snapshot, params: Json) -> list[Json]:
         if count is not None and (type(count) is not int or count < 1):
             raise Refusal(Finding("report.request", "count must be an integer at least 1"))
         index, modulus = 0, 1
-        if shard is not None:
-            if not isinstance(shard, str) or not re.fullmatch(r"[0-9]+/[0-9]+", shard):
-                raise Refusal(Finding("report.request", "shard must be I/K with 0 <= I < K"))
-            index, modulus = map(int, shard.split("/"))
-            if not 0 <= index < modulus:
-                raise Refusal(Finding("report.request", "shard must be I/K with 0 <= I < K"))
+        if shard is not None and (not isinstance(shard, str) or not (m := re.fullmatch(r"([0-9]+)/([0-9]+)", shard))
+                                  or not 0 <= (index := int(m[1])) < (modulus := int(m[2]))):
+            raise Refusal(Finding("report.request", "shard must be I/K with 0 <= I < K"))
         rows = []
         for name, member, unit, matched, sid in _inventory(snapshot):
             sections = (".text",) if member.kind == "function" else (".data", ".rodata")
             if matched or not any(p.section in sections for p in member.placements):
                 continue
+            if member.kind == "function" and draft.split_slot(snapshot, name) is not None:
+                continue
             if subsystem is not None and sid != subsystem:
                 continue
             if int(hashlib.sha256(name.encode()).hexdigest()[:8], 16) % modulus != index:
                 continue
-            version = snapshot.config.project.names_from
-            if version not in member.holders():
-                version = member.holders()[0]
+            version = member.reference(snapshot.config.project.names_from)
             placement = next(p for p in member.placements if p.version == version)
             rows.append({"member": name, "kind": member.kind, "subsystem": sid, "rank": subsystems[sid]["rank"],
                          "state": crack.state(snapshot, name), "size": placement.size, "address": placement.vram,

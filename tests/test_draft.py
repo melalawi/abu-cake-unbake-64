@@ -228,3 +228,22 @@ def test_run_writes_under_work(tmp_path: Path, toolchains: Any) -> None:
     result = draft.run(snapshot.config, {"item": "d"})
     assert Path(result["path"]) == snapshot.config.project.root / ".unbake" / "work" / "d.c"
     assert Path(result["path"]).is_file()
+
+
+def test_fragment_ending_on_a_jump_refuses_naming_the_slot_holder(tmp_path: Path, toolchains: Any,
+                                                                  monkeypatch: pytest.MonkeyPatch) -> None:
+    cut = {"func_80000400": {"a": (0x1000, _words(0x03E00008)), "b": (0x1000, _words(0x03E00008))},
+           "func_80000404": {"a": (0x1004, _words(0x3C02A450)), "b": (0x1004, _words(0x3C02A450))}}
+    snapshot = _snapshot(tmp_path, functions=cut)
+    calls = _mock_m2c(monkeypatch, b"never")
+    assert draft.split_slot(snapshot, "func_80000400") == "func_80000404"
+    assert draft.split_slot(snapshot, "func_80000404") is None
+    with pytest.raises(Refusal) as caught:
+        draft.create(snapshot, "func_80000400", tmp_path / "out.c")
+    finding, = caught.value.findings
+    assert finding.key == "member.split-delay-slot" and "func_80000404" in finding.reason
+    assert not calls and not (tmp_path / "out.c").exists()
+
+
+def test_whole_function_has_no_split_slot(tmp_path: Path, toolchains: Any) -> None:
+    assert draft.split_slot(_snapshot(tmp_path), "func_80000400") is None

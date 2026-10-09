@@ -72,8 +72,7 @@ def _missing() -> bytes:
 
 def packet(snapshot: Snapshot, member: str) -> Path:
     with effort.stage("crack.packet"):
-        config = snapshot.config
-        root = config.project.root
+        config, root = snapshot.config, snapshot.config.project.root
         source = f".unbake/work/{store.stem(member)}.c"
         path = root / source
         if not path.exists():
@@ -102,7 +101,7 @@ def packet(snapshot: Snapshot, member: str) -> Path:
                                  place.rom_start, place.rom_end), place.vram)
         names = []
         if item.kind == "function":
-            asm = versions.asm_path(config, config.project.names_from, member).read_text()
+            asm = versions.asm_path(config, item.reference(config.project.names_from), member).read_text()
             names = list(dict.fromkeys(a or b for a, b in re.findall(
                 r"\bjal\s+([\w.$]+)|%(?:hi|lo)\(\s*([\w.$]+)\s*\)", asm)))
         kinds = configuration.load_resource("units.toml")["kind"]
@@ -147,8 +146,7 @@ def _delta(base: Recipe, other: Recipe) -> Json:
     return result
 def _permute(config: Config, snap: Snapshot, unit: UnitSpec, member: str,
              recipe: Recipe, seconds: float) -> bytes | None:
-    holders = snap.layout.members[member].holders()
-    version = config.project.names_from if config.project.names_from in holders else holders[0]
+    version = snap.layout.members[member].reference(config.project.names_from)
     with store.work(config) as work:
         (work / "base.c").write_bytes(snap.read(unit.path))
         include = [config.project.root / "asm" / version / "include", config.project.root / "include"]
@@ -172,6 +170,7 @@ def run(config: Config, params: Json) -> Json:
         snapshot = layout.capture(config)
         if member not in snapshot.layout.members:
             raise Refusal(Finding("land.request", f"{member} is unknown"))
+        draft.refuse_fragment(snapshot, member)
         kinds = configuration.load_resource("units.toml")["kind"]
         existing = layout.unit_of(snapshot, member)
         if existing and kinds[existing.kind]["decompiled"]:
@@ -221,7 +220,7 @@ def run(config: Config, params: Json) -> Json:
         flow = configuration.load_resource("flow.toml")
         fuzzy = snapshot.layout.fuzzy.get(member)
         baseline = min(fuzzy["scores"].values()) if fuzzy else 0.0
-        if exact or best - baseline >= flow["fuzzy"]["min_gain"]:
+        if not params.get("no_submit") and (exact or best - baseline >= flow["fuzzy"]["min_gain"]):
             request = {"file": str(cand), "function": member, "overrides": best_overrides, "note": ""}
             submission = land.submit(config, request, unit, proofs, cand.read_bytes(), "crack")
             if exact or submission is not None:

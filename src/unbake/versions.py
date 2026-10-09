@@ -207,6 +207,10 @@ def rows(version: Version, reader: Callable[[str], bytes]) -> list[tuple[str, st
                                   path=version.split, unit=twice))
         span.add(items=len(out))
         return out
+def delay_slot(word: int) -> bool:  # a MIPS jump or branch: the next word is its delay slot
+    op, rt = word >> 26, word >> 16 & 31
+    return ((op == 0 and word & 62 == 8) or (op == 1 and rt & 12 == 0) or 2 <= op <= 7 or 20 <= op <= 23
+            or (16 <= op <= 18 and word >> 21 & 31 == 8))
 def rom_view(version: Version) -> mmap.mmap:
     key = str(version.rom)
     if key not in _ROMS:

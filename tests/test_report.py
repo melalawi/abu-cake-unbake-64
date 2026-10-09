@@ -47,6 +47,7 @@ def snapshot_factory(tmp_path, monkeypatch):
     ))
     boundary = {k: {"applied": 0, "proposed": 0, "withheld": 0} for k in ("prelude", "split", "merge")}
     monkeypatch.setattr(report.layout, "boundary_plan", Mock(return_value=(None, boundary)))
+    monkeypatch.setattr(report.draft, "split_slot", lambda s, m: None)
     monkeypatch.setattr(report.crack, "state", lambda s, m: "fuzzy" if m in s.layout.fuzzy else "open")
     monkeypatch.setattr(report.crack, "history", Mock(return_value=[]))
 
@@ -392,3 +393,9 @@ def test_run_results_validate(snapshot_factory, monkeypatch, next_mode, empty):
         assert result["inbox"] == 2
         assert result["next"] == ("" if empty else report.items(snapshot, {"count": 1})[0]["command"])
         inbox.assert_called_once_with(snapshot.config)
+
+
+def test_items_leave_out_fragments_whose_delay_slot_is_in_the_next_member(snapshot_factory, monkeypatch):
+    monkeypatch.setattr(report.draft, "split_slot", lambda snap, name: "next" if name == "cut" else None)
+    rows = report.items(snapshot_factory([_member("cut"), _member("whole", address=96)]), {})
+    assert [r["member"] for r in rows] == ["whole"]

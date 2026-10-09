@@ -1,5 +1,6 @@
 """Cracking ladder unit tests: no native tools, repositories, ROMs or network."""
 
+import json
 from contextlib import nullcontext
 from dataclasses import asdict, replace
 from datetime import datetime
@@ -52,6 +53,7 @@ def lane(tmp_path, monkeypatch):
     monkeypatch.setattr(crack.store, "rows", Mock(side_effect=lambda cfg, stream: list(rows)))
     monkeypatch.setattr(crack.store, "append", Mock(side_effect=lambda cfg, stream, row: rows.append(row)))
     monkeypatch.setattr(crack.draft, "hints", Mock(return_value=([], [])))
+    monkeypatch.setattr(crack.draft, "split_slot", Mock(return_value=None))
     monkeypatch.setattr(crack.process, "run", Mock(side_effect=AssertionError("unmocked native invocation")))
     monkeypatch.setattr(crack.process, "git", Mock(side_effect=AssertionError("git forbidden")))
     return snapshot, rows
@@ -406,3 +408,29 @@ def test_packet_of_a_candidate_that_did_not_link_has_no_diff(lane, monkeypatch):
     import json
     assert json.loads(crack.packet(snapshot, MEMBER).read_text())["diff"] == ""
     crack.symptoms.diff.assert_not_called()
+
+
+def test_run_refuses_a_fragment_before_any_work(lane, monkeypatch):
+    snapshot, _ = lane
+    monkeypatch.setattr(crack.layout, "capture", Mock(return_value=snapshot))
+    monkeypatch.setattr(crack.draft, "split_slot", Mock(return_value="func_80000404"))
+    with pytest.raises(Refusal) as caught:
+        crack.run(snapshot.config, {"item": MEMBER, "seconds": 2})
+    finding, = caught.value.findings
+    assert finding.key == "member.split-delay-slot" and "func_80000404" in finding.reason
+    assert finding.unit == MEMBER
+
+
+def test_packet_reads_assembly_only_from_a_version_holding_the_member(lane, monkeypatch):
+    snapshot, _ = lane
+    member = replace(snapshot.layout.members[MEMBER], placements=snapshot.layout.members[MEMBER].placements[1:])
+    snapshot = replace(snapshot, layout=replace(snapshot.layout, members={MEMBER: member}))
+    _candidate(snapshot)
+    _measurement(snapshot, monkeypatch, proofs=(_proof(0.4, "b"),))
+    asm = crack.versions.asm_path(snapshot.config, "b", MEMBER)
+    asm.parent.mkdir(parents=True)
+    asm.write_text("jal callee\n")
+    crack.versions.asm_path(snapshot.config, "a", MEMBER).write_text("jal wrong\n")
+    path = crack.packet(snapshot, MEMBER)
+    assert list(json.loads(path.read_text())["target"]) == ["b"]
+    assert "callee" in crack.types.declarations.call_args.args[1]

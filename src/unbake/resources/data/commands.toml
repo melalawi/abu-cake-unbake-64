@@ -48,6 +48,7 @@ handler = "crack.run"
 params = [
   { name = "item", kind = "argument", type = "str", required = true, multiple = false, help = "member name" },
   { name = "seconds", kind = "option", type = "int", required = true, multiple = false, help = "permuter wall budget" },
+  { name = "no-submit", kind = "flag", type = "str", required = false, multiple = false, help = "keep candidates and packets without submitting or landing" },
 ]
 
 [command.submit]

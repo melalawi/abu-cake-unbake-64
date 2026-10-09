@@ -281,3 +281,11 @@ def test_undefined_reads_the_global_and_weak_names_an_object_leaves_open(tmp_pat
     with pytest.raises(Refusal) as caught:
         versions.undefined(path)
     assert caught.value.findings[0].reason == "the object is not a 32-bit big-endian ELF file"
+
+
+@pytest.mark.parametrize("word,expected", [
+    (0x03E00008, True), (0x0320F809, True), (0x08000000, True), (0x0C000000, True), (0x1000FFFF, True),
+    (0x54200001, True), (0x04010000, True), (0x04110000, True), (0x04040000, False), (0x45000001, True),
+    (0x40800000, False), (0x00000000, False), (0x3C02A450, False), (0x23BDFFB8, False), (0x0000000C, False)])
+def test_delay_slot_predicate(word: int, expected: bool) -> None:
+    assert versions.delay_slot(word) is expected

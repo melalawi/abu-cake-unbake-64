@@ -109,7 +109,7 @@ def signature(snapshot: Snapshot, names: Sequence[str]) -> dict[str, str]:
             member = snapshot.layout.members.get(name)
             if name in found or member is None or member.kind != "function":
                 continue
-            version = cfg.project.names_from if cfg.project.names_from in member.holders() else member.holders()[0]
+            version = member.reference(cfg.project.names_from)
             if version not in contexts:
                 try:
                     ctx = headers.context(snapshot, version)
