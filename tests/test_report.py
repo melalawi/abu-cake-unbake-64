@@ -97,6 +97,16 @@ def test_credit_is_layout_state(snapshot_factory, monkeypatch):
     assert reads == [".unbake/check.json"]
 
 
+def test_opaque_rom_bytes_stay_out_of_the_denominator(snapshot_factory):
+    opaque = _member("blob", size=1000, kind="data", section=".data", state="bin")
+    snapshot = snapshot_factory([_member("credited"), opaque], units=[_unit("credited")])
+    result = report.current(snapshot)
+    for version in ("a", "b"):
+        assert result["versions"][version]["data_total"] == 0
+        assert result["versions"][version]["fuzzy_percent"] == 100.0
+        assert "bin" not in result["kinds"]
+
+
 def test_unknown_group_counts_as_unknown_subsystem(snapshot_factory):
     snapshot = snapshot_factory([_member("ungrouped", group="")], groups=[])
     result = report.current(snapshot)

@@ -30,10 +30,10 @@ def _subsystems() -> Json:
 def _inventory(snapshot: Snapshot):
     kinds = configuration.load_resource("units.toml")["kind"]
     for name, member in snapshot.layout.members.items():
-        unit = layout.unit_of(snapshot, name)
+        if (unit := layout.unit_of(snapshot, name)) is None and member.state == "bin":
+            continue  # opaque ROM bytes are neither code nor data
         matched = unit is not None and kinds[unit.kind]["decompiled"] and not unit.withheld  # built in every version
-        subsystem = snapshot.layout.groups[member.group].subsystem if member.group else "unknown"
-        yield name, member, unit, matched, subsystem
+        yield name, member, unit, matched, snapshot.layout.groups[member.group].subsystem if member.group else "unknown"
 
 def _tally(bucket: Json) -> Json:
     return {**bucket, "code_percent": _pct(bucket["code_matched"], bucket["code_total"]),
