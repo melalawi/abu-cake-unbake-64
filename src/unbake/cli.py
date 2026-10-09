@@ -70,11 +70,9 @@ def _run(name: str, params: dict[str, Any], argv: Sequence[str]) -> int:
         code, findings = 3, [Finding("internal.error", repr(exc))]
     return _emit(name, code, result, findings)
 
-def _type(kind: str) -> Any:
-    return click.Path(path_type=Path) if kind == "path" else (int if kind == "int" else str)
-
 def _param(p: Json) -> click.Parameter:
-    kind, flag = _type(p["type"]), f"--{p['name']}"
+    kind = {"path": click.Path(path_type=Path), "int": int}.get(p["type"], str)
+    flag = f"--{p['name']}"
     if p["kind"] == "argument":
         return click.Argument([p["name"]], required=p["required"], nargs=-1 if p["multiple"] else 1, type=kind)
     if p["kind"] == "option":

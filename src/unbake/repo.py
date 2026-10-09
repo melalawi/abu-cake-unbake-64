@@ -302,6 +302,7 @@ def setup(config: Config, params: Json) -> Json:
             for v, result in zip(stale, results, strict=True):
                 _checked(result, "setup.splat", f"extract {v}")
                 stamps[v] = _stamp(config, v)
+            effort.forget("generated", "versions.read")
             _write(project.root / ".unbake/extract.json", json.dumps(stamps, sort_keys=True).encode())
             extracted.update(stale)
         with effort.stage("repo.setup.toolchains"):

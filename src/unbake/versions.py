@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import inspect
 import io
 import mmap
 import os
@@ -21,7 +22,6 @@ from unbake import config as configuration
 from unbake import effort, pool, symbols
 from unbake.contracts import Config, Finding, Placement, Refusal, Version, digest
 
-_CODE = digest(Path(__file__).read_bytes())  # a parsed asm file is only as true as the reader that parsed it
 _SYMBOL = re.compile(r"^\s*([\w.$]+)\s*=\s*(0x[0-9A-Fa-f]+)\s*;")
 _ROMS: dict[str, tuple[Any, mmap.mmap]] = {}
 def _parsed(path: str, data: bytes, parse: Callable[[bytes], Any]) -> Any:
@@ -48,7 +48,7 @@ def _document(data: bytes, file: str) -> list[dict[str, Any]]:
         raise Refusal(Finding("version.split", reason=f"{file} is not a splat yaml: {error}", path=file)) from error
 def _segment_rows(data: bytes) -> tuple[tuple[str, int, int, int], ...]:
     """(name, start, next start, vram or 0) per segment; the last segment ends at its own start (caller widens)."""
-    segments = _document(data, "split")
+    segments = _parsed("document", data, partial(_document, file="split"))
     out = []
     for index, seg in enumerate(segments):
         end = segments[index + 1]["start"] if index + 1 < len(segments) else seg["start"]
@@ -96,6 +96,7 @@ def fact_files(config: Config, vid: str) -> tuple[list[str], list[str]]:
     found = [f"{top}/{name}"[len(base) + 1:] for top, _, names in os.walk(f"{base}/asm/{vid}")
              for name in names if name.endswith(".s")]
     return autos, sorted(found)
+_CODE = digest(inspect.getsource(_asm_symbols))  # a parsed asm file is only as true as the parser that read it
 def _asm_job(item: tuple[str, str]):
     root, rel = item
     return _asm_symbols((Path(root) / rel).read_bytes())
@@ -131,25 +132,28 @@ def _rom_sha(rom: Path) -> str:
     stat = rom.stat()
     return effort.memo(("rom", str(rom), stat.st_mtime_ns, stat.st_size),
                        lambda: hashlib.sha256(rom.read_bytes()).hexdigest())
-def read(config: Config, reader: Callable[[str], bytes], only: Collection[str] | None = None) -> dict[str, Version]:
+def read(config: Config, reader: Callable[[str], bytes], only: Collection[str] | None = None,
+         reuse: Mapping[str, Version] | None = None) -> dict[str, Version]:
     with effort.stage("versions.read"):
         root, table = config.project.root, config.project.version_files
         named = symbols.load(reader, table)
         wanted = [v for v in table if only is None or v in only]
-        files = {v: effort.memo(("facts", str(root), v), lambda v=v: fact_files(config, v)) for v in wanted}
-        def stamps() -> list[tuple[str, int]]:  # tens of thousands of stats: one pass per command, not one per read
-            paths = [*(p for v in wanted for p in (*files[v][0], *files[v][1])),
-                     *(p.relative_to(root) for p in sorted((root / ".unbake" / "symbols").glob("*/*.csv")))]
-            return [(str(p), os.stat(root / p).st_mtime_ns) for p in paths]
         key = digest((str(root), wanted, [(reader(table[v].split), reader(table[v].symbols)) for v in wanted],
-                      reader(symbols.path()), effort.memo(("stamps", str(root), tuple(wanted)), stamps)))
+                      reader(symbols.path())))  # files the command rewrites itself drop the memos (effort.forget)
         def compute() -> dict[str, Version]:
-            items = [(str(root), rel) for v in wanted for rel in files[v][1]]
-            parsed = iter(pool.map(config, "versions.asm", _asm_job, items, _asm_key))
+            seeds = {v: (x.symbols, x.code, {}) for v, x in (reuse or {}).items()}
+            built = effort.memo(("generated", str(root), id(named)), lambda: (named, seeds))[1]
+            todo = [v for v in wanted if v not in built]
+            files = {v: fact_files(config, v) for v in todo}
+            parsed = iter(pool.map(config, "versions.asm", _asm_job,
+                                   [(str(root), rel) for v in todo for rel in files[v][1]], _asm_key))
+            for vid in todo:
+                declared = symbols.declared(named, vid)
+                found = [next(parsed) for _ in files[vid][1]]
+                built[vid] = (*_generated(config, vid, files[vid], found, declared), declared)
             out: dict[str, Version] = {}
             for vid in wanted:
-                declared = symbols.declared(named, vid)
-                facts, code = _generated(config, vid, files[vid], [next(parsed) for _ in files[vid][1]], declared)
+                facts, code, declared = built[vid]
                 row, rom = table[vid], root / table[vid].baserom
                 segments = _parsed(row.split, reader(row.split), _segment_rows)
                 if segments:  # the last segment runs to the end of the ROM
@@ -167,7 +171,7 @@ def section_of(version: Version, kind: str, where: str) -> str:
     return section
 def rows(version: Version, reader: Callable[[str], bytes]) -> list[tuple[str, str, Placement]]:
     with effort.stage("versions.rows") as span:
-        segments = _document(reader(version.split), version.split)
+        segments = _parsed("document", reader(version.split), partial(_document, file=version.split))
         ends = {name: end for name, _, end, _ in version.segments}
         out: list[tuple[str, str, Placement]] = []
         for seg in segments:

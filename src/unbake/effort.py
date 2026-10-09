@@ -32,6 +32,10 @@ def memo(key: object, produce: Callable[[], object]) -> object:
     if key not in _memo:
         _memo[key] = produce()
     return _memo[key]
+def forget(*kinds: str) -> None:
+    """Drops the memoised values of these kinds: the files they read were rewritten by this command."""
+    for key in [k for k in _memo if isinstance(k, tuple) and k[0] in kinds]:
+        del _memo[key]
 def listen(callback: Callable[[str, Json], None]) -> None:
     _listeners.append(callback)
 def _notify(event: str, body: Json) -> None:

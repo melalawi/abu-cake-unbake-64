@@ -480,3 +480,21 @@ def test_unit_options_data_member_refuses_compiled_state(scene):
     with pytest.raises(Refusal) as caught:
         layout.unit_options(snapshot, "tbl", b"x")
     assert caught.value.findings[0].key == "layout.member"
+
+
+def test_dump_map_writes_the_documented_layout_text():
+    import tomllib
+    groups = {"x": Group("x", "s", ("m", "n"), "proven", ("cap",), "unknown", False)}
+    units = {"a.c": UnitSpec("a.c", "c", "x", ("m",), "t", {"add": ["-O1"], "omit": []}, ("eu",)),
+             "b.c": UnitSpec("b.c", "c", "x", ("n",), "t", {"add": [], "omit": []})}
+    fuzzy = {"m": {"path": 'p"q', "scores": {"us-rev1": 0.5, "de": 1.0}}}
+    text = layout.dump_map(LayoutMap(32, groups, {}, units, "d", (), fuzzy))
+    assert text.decode() == (
+        'schema = 3\ncap = 32\n\n[[group]]\nname = "x"\nsegment = "s"\nmembers = ["m", "n"]\nevidence = "proven"\n'
+        'signals = ["cap"]\nsubsystem = "unknown"\nsdk = false\n\n[[unit]]\npath = "a.c"\nkind = "c"\ngroup = "x"\n'
+        'members = ["m"]\ntoolchain = "t"\nwithheld = ["eu"]\n\n[unit.options]\nadd = ["-O1"]\nomit = []\n\n'
+        '[[unit]]\npath = "b.c"\nkind = "c"\ngroup = "x"\nmembers = ["n"]\ntoolchain = "t"\n\n[unit.options]\n'
+        'add = []\nomit = []\n\n[[fuzzy]]\nmember = "m"\npath = "p\\"q"\nscores = {de = 1.0, us-rev1 = 0.5}\n')
+    assert tomllib.loads(text.decode())["fuzzy"][0]["scores"] == {"de": 1.0, "us-rev1": 0.5}
+    empty = tomllib.loads(layout.dump_map(LayoutMap(32, {}, {}, {}, "d", (), {})).decode())
+    assert empty == {"schema": 3, "cap": 32, "group": [], "unit": []}

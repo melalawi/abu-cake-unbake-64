@@ -291,14 +291,41 @@ def test_delay_slot_predicate(word: int, expected: bool) -> None:
     assert versions.delay_slot(word) is expected
 
 
-def test_one_command_stats_the_fact_files_once(world, monkeypatch) -> None:
+def test_one_command_lists_each_versions_files_once_until_they_are_rewritten(world, monkeypatch) -> None:
     from unbake import effort
     cfg, ctx, _ = world
-    stats = []
-    real = versions.os.stat
-    monkeypatch.setattr(versions.os, "stat", lambda *a, **k: stats.append(a[0]) or real(*a, **k))
+    listed = []
+    real = versions.fact_files
+    monkeypatch.setattr(versions, "fact_files", lambda config, vid: listed.append(vid) or real(config, vid))
     with effort.command("check", []):
-        versions.read(cfg, ctx["reader"])
-        first = len(stats)
-        versions.read(cfg, ctx["reader"])
-    assert first > 0 and len(stats) == first  # the second read reuses the command's stamps
+        first = versions.read(cfg, ctx["reader"])
+        versions.read(cfg, ctx["reader"], ["a"])
+        assert sorted(listed) == ["a", "b"]  # the second read built nothing
+        effort.forget("generated", "versions.read")
+        assert versions.read(cfg, ctx["reader"]).keys() == first.keys()
+    assert sorted(listed) == ["a", "a", "b", "b"]
+
+
+def test_reused_versions_keep_their_facts_and_read_only_their_split(world, monkeypatch) -> None:
+    from unbake import effort
+    cfg, ctx, _ = world
+    with effort.command("check", []):
+        before = versions.read(cfg, ctx["reader"])
+    monkeypatch.setattr(versions, "fact_files", lambda *a: pytest.fail("facts were read again"))
+    with effort.command("check", []):
+        after = versions.read(cfg, ctx["reader"], ["a"], before)
+    assert after["a"].symbols == before["a"].symbols and after["a"].code == before["a"].code
+
+
+def test_a_split_file_is_parsed_once_per_command(world, monkeypatch) -> None:
+    from unbake import effort
+    ctx = world[1]
+    parses = []
+    real = versions.yaml.load
+    monkeypatch.setattr(versions.yaml, "load", lambda *a, **k: parses.append(1) or real(*a, **k))
+    version = _version(world, "a")
+    with effort.command("check", []):
+        versions.rows(version, ctx["reader"])
+        before = len(parses)
+        versions.rows(version, ctx["reader"])
+    assert len(parses) == before

@@ -24,6 +24,14 @@ def _schema(name: str) -> Json:
     if not node.is_file():
         raise Refusal(Finding("config.resource", f"schema {name} is not packaged", path=f"schemas/{name}.schema.json"))
     return json.loads(node.read_text(encoding="utf-8"))
+def toml(schema: str, data: bytes, file: str, key: str = "config.schema") -> Json:
+    """The schema-valid document of TOML bytes; text that is not TOML is a finding under `key`."""
+    try:
+        document = tomllib.loads(data.decode())
+    except (tomllib.TOMLDecodeError, UnicodeDecodeError) as error:
+        raise Refusal(Finding(key, str(error), path=file)) from error
+    validate(schema, document, file)
+    return document
 def validate(schema: str, value: Json, file: str) -> None:
     """Raise one Refusal listing every schema error of value, sorted by path."""
     errors = sorted( Draft202012Validator(_schema(schema)).iter_errors(value),
@@ -173,9 +181,8 @@ def load_project(root: Path) -> Project:
     if info["toolchain"] not in load_resource("toolchains.toml")["toolchain"]:
         problems.append(bad("project.toolchain", f"{info['toolchain']} is not in toolchains.toml"))
     for vid, row in table.items():
-        for field in ("baserom", "split", "symbols"):
-            if not (root / row[field]).is_file():
-                problems.append(bad(f"version.{vid}.{field}", f"{row[field]} does not exist"))
+        problems.extend(bad(f"version.{vid}.{field}", f"{row[field]} does not exist")
+                        for field in ("baserom", "split", "symbols") if not (root / row[field]).is_file())
         rom = root / row["baserom"]
         if rom.is_file():
             with rom.open("rb") as handle:

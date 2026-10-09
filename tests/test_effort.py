@@ -217,3 +217,11 @@ def test_wait_is_charged_to_the_innermost_stage_only(tmp_path):
         effort.waited(1.5)
     waits = {r.path[-1]: r.wait_seconds for r in effort.closed() if r.kind in ("stage", "command")}
     assert waits == {"inner": 1.5, "outer": 0.0, "check": 0.0}
+
+
+def test_forget_drops_only_the_named_kinds():
+    with effort.command("check", []):
+        effort.memo(("a", 1), lambda: 1)
+        effort.memo(("b", 1), lambda: 2)
+        effort.forget("a")
+        assert effort.memo(("a", 1), lambda: 3) == 3 and effort.memo(("b", 1), lambda: 4) == 2

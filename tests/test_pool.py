@@ -1,5 +1,6 @@
 """Bounded ordered maps, metrics, and progress using futures and forkserver."""
 import os
+import pickle
 import sys
 from concurrent.futures import Future
 from concurrent.futures.process import BrokenProcessPool
@@ -260,7 +261,18 @@ def test_a_warm_keyed_group_costs_one_store_read(tmp_path, monkeypatch):
     with effort.command("check", []):
         assert pool.map(config, "units", _square, items, key=str) == [1, 4, 9, 16]
         assert effort.counters()["units"] == (4, 0)  # all four still count as hits
-    assert reads == ["units.all"]
+    assert reads == ["units.group"]
     reads.clear()
     assert pool.map(config, "units", _square, [1, 2, 3, 5], key=str) == [1, 4, 9, 25]  # one new item: per-item reads
     assert reads.count("units") == 4
+
+
+def test_whoever_ran_a_keyed_chunk_stores_its_results(tmp_path):
+    config = _config(tmp_path)
+    outcomes = pool._chunk(_square, [2, 3, 4], 0.0, (config, "units", ["a", None, "c"]))
+    assert [o[1] for o in outcomes] == [4, 9, 16]
+    assert pickle.loads(pool.store.get(config, "units", "a")) == 4 and pool.store.get(config, "units", "c") is not None
+    assert pool.store.get(config, "units", "b") is None  # an unkeyed item is not stored
+    failed = pool._chunk(_fail, [1], 0.0, (config, "units", ["f"]))
+    assert failed[0][0] is False and pool.store.get(config, "units", "f") is None
+    assert [o[1] for o in pool._chunk(_square, [5], 0.0, None)] == [25]

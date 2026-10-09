@@ -109,10 +109,16 @@ class _Unpickler(pickle.Unpickler):
                 raise Refusal(Finding("worker.crash", f"snapshot {digest[:12]} is missing from the cache"))
             _SNAPSHOTS[digest] = pickle.loads(value)
         return _SNAPSHOTS[digest]
+def _chunk(function: Callable, items: Sequence, floor: float, sink: tuple | None) -> list[tuple[bool, Any, Json]]:
+    outcomes = [_job(function, item, floor) for item in items]
+    if sink:
+        store.put_many(sink[0], sink[1], [(key, pickle.dumps(value, protocol=5)) for (ok, value, _), key in
+                                          zip(outcomes, sink[2], strict=True) if ok and key is not None])
+    return outcomes
 def _dispatch(blob: bytes, floor: float) -> list[tuple[bool, Any, Json]]:
-    """One chunk travels as its own pickle, so a worker only ever unpacks the items it runs."""
-    function, items = _Unpickler(io.BytesIO(blob)).load()
-    return [_job(function, item, floor) for item in items]
+    """One chunk travels as its own pickle, so a worker only unpacks the items it runs and stores their results."""
+    function, items, sink = _Unpickler(io.BytesIO(blob)).load()
+    return _chunk(function, items, floor, sink)
 def _raise_failure(config: Config, name: str, index: int, exc: Any) -> None:
     if isinstance(exc, Refusal):
         raise exc
@@ -132,7 +138,7 @@ class _Run:
         self.todo = list(range(len(items)))
         self.whole = digest(self.keys) if key and None not in self.keys else None
         if key:  # the parent resolves hits itself: a warm item never travels to a worker
-            blob = self.whole and store.get(config, name + ".all", self.whole)  # a fully warm group is one entry
+            blob = self.whole and store.get(config, name + ".group", self.whole)  # a fully warm group is one entry
             warm = pickle.loads(blob) if blob else [k and store.get(config, name, k) for k in self.keys]
             for index, found in enumerate(warm):
                 effort.count(name, found is not None)
@@ -143,12 +149,12 @@ class _Run:
     def seal(self, config: Config) -> None:
         if self.whole and self.todo and all(o and o[0] for o in self.outcomes):
             blobs = [pickle.dumps(o[1], protocol=5) for o in self.outcomes]
-            store.put(config, self.name + ".all", self.whole, pickle.dumps(blobs))
-    def settle(self, config: Config, picked: Sequence[int], outcomes: Sequence[tuple[bool, Any, Json]]) -> None:
+            store.put(config, self.name + ".group", self.whole, pickle.dumps(blobs))
+    def sink(self, config: Config, picked: Sequence[int]) -> tuple | None:
+        return (config, self.name, [self.keys[i] for i in picked]) if self.key else None
+    def settle(self, picked: Sequence[int], outcomes: Sequence[tuple[bool, Any, Json]]) -> None:
         for index, outcome in zip(picked, outcomes, strict=True):
             self.outcomes[index] = outcome
-            if self.key and outcome[0] and self.keys[index] is not None:
-                store.put(config, self.name, self.keys[index], pickle.dumps(outcome[1], protocol=5))
         self.done += len(picked)
         effort.progress(self.name, self.done, len(self.items))
 def map(config: Config, name: str, function: Callable[[Any], Any], items: Sequence[Any],
@@ -174,10 +180,12 @@ def gather(config: Config, groups: Sequence[tuple]) -> list[list[Any]]:
                     picked = run.todo[lo:lo + size[run]]
                     if inline:
                         pending[future := Future()] = (run, picked)
-                        future.set_result([_job(run.function, run.items[i], floor) for i in picked])
+                        future.set_result(_chunk(run.function, [run.items[i] for i in picked], floor,
+                                                 run.sink(config, picked)))
                     else:
                         stream = io.BytesIO()
-                        _Pickler(stream, protocol=5).dump((run.function, [run.items[i] for i in picked]))
+                        _Pickler(stream, protocol=5).dump(
+                            (run.function, [run.items[i] for i in picked], run.sink(config, picked)))
                         pending[executor.submit(_dispatch, stream.getvalue(), floor)] = (run, picked)
                     run.submitted += len(picked)
                 if not pending:
@@ -194,7 +202,7 @@ def gather(config: Config, groups: Sequence[tuple]) -> list[list[Any]]:
                         raise
                     except Exception as exc:
                         outcomes = [(False, exc, {})] * len(picked)
-                    run.settle(config, picked, outcomes)
+                    run.settle(picked, outcomes)
         except BrokenProcessPool as exc:
             _drop_executor()
             _raise_failure(config, runs[current[0]].name, current[1], exc)

@@ -2,7 +2,6 @@
 
 import json
 import re
-import tomllib
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -19,12 +18,7 @@ def load(snapshot: Snapshot) -> Json:
         if raw is None:
             raise Refusal(Finding("config.missing", "types.toml does not exist", path="types.toml",
                                   action="unbake setup"))
-        try:
-            doc = tomllib.loads(raw.decode())
-        except tomllib.TOMLDecodeError as error:
-            raise Refusal(Finding("config.schema", str(error), path="types.toml")) from error
-        config.validate("types", doc, "types.toml")
-        return doc
+        return effort.memo(("types", digest(raw)), lambda: config.toml("types", raw, "types.toml"))  # megabytes
 def _dump(doc):  # inline tables written directly: the document is megabytes and a TOML library walks it for seconds
     lines = [f"schema = {doc['schema']}"]
     for kind in ("function", "global", "struct"):

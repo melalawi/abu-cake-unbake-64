@@ -332,3 +332,14 @@ def test_load_validates(lane, monkeypatch):
     monkeypatch.setattr(types.config, "validate", validate)
     assert types.load(snapshot) == _document()
     validate.assert_called_once_with("types", _document(), "types.toml")
+
+
+def test_types_toml_is_parsed_once_per_command(lane, monkeypatch):
+    from unbake import effort
+    snapshot = lane[0] if isinstance(lane, tuple) else lane
+    parses = []
+    real = types.config.tomllib.loads
+    monkeypatch.setattr(types.config.tomllib, "loads", lambda text: parses.append(1) or real(text))
+    with effort.command("check", []):
+        assert types.load(snapshot) is types.load(snapshot)
+    assert len(parses) == 1

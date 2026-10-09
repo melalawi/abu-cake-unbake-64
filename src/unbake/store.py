@@ -11,7 +11,7 @@ import shutil
 import tempfile
 import time
 import uuid
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
@@ -58,6 +58,11 @@ def get(config: Config, kind: str, key: str) -> bytes | None:
     return content(config).get(kind, key)
 def put(config: Config, kind: str, key: str, value: bytes) -> None:
     content(config).put(kind, key, value)
+def put_many(config: Config, kind: str, rows: Iterable[tuple[str, bytes]]) -> None:
+    """Entries in one write transaction: tens of thousands of single writes queue on the cache's one writer."""
+    with content(config)._cache.transact():
+        for key, value in rows:
+            put(config, kind, key, value)
 def stem(member: str) -> str:
     """One file-name segment per member: slashes become dots, a name too long for a file keeps head and digest."""
     flat = member.replace("/", ".")

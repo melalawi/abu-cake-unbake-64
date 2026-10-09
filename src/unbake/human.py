@@ -83,10 +83,9 @@ def summary(records: Sequence[StageRecord]) -> list[str]:
     lines.extend(f"cache: {kind} {hits} warm / {misses} cold"
                  for kind, (hits, misses) in sorted(root.cache.items()))
     lines.append("slowest:")
-    for record in sorted(records, key=lambda r: r.wall_seconds, reverse=True)[:10]:
-        lines.append(f"  {' > '.join(record.path)}  {record.wall_seconds:.2f}s  "
-                     f"{record.cores:.2f} cores  {record.execution}  items {record.items} jobs {record.jobs} "
-                     f"workers {record.workers_used}/{record.workers_admitted}")
+    lines.extend(f"  {' > '.join(r.path)}  {r.wall_seconds:.2f}s  {r.cores:.2f} cores  {r.execution}  items {r.items} "
+                 f"jobs {r.jobs} workers {r.workers_used}/{r.workers_admitted}"
+                 for r in sorted(records, key=lambda r: r.wall_seconds, reverse=True)[:10])
     lines.extend(f"slow: {config.sentence(f.key)} {f.reason}"
                  for record in records for f in record.findings if f.key.startswith("budget."))
     return lines

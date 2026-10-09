@@ -3,7 +3,6 @@ label only: nothing reads meaning, a version or an address out of it."""
 from __future__ import annotations
 
 import re
-import tomllib
 from collections import Counter
 from collections.abc import Callable, Collection, Mapping
 
@@ -20,11 +19,7 @@ def empty() -> bytes:
     return dump({})
 def parse(data: bytes, versions: Collection[str]) -> dict[str, dict]:
     """The rows of the table: name -> {"kind": function|data, <version>: vram}."""
-    try:
-        document = tomllib.loads(data.decode())
-    except (tomllib.TOMLDecodeError, UnicodeDecodeError) as error:
-        raise Refusal(Finding("symbols.table", str(error), path=PATH)) from error
-    config.validate("symbols", document, PATH)
+    document = config.toml("symbols", data, PATH, "symbols.table")
     for name, row in document["symbol"].items():
         stray = sorted(set(row) - {"kind", *versions})
         if stray or not any(v in row for v in versions):

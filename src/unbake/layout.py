@@ -3,19 +3,18 @@ from __future__ import annotations
 
 import bisect
 import hashlib
+import json
 import os
 import pickle
 import re
 import struct
 import sys
-import tomllib
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, replace
 from functools import cache, partial
 from itertools import chain, pairwise
 from pathlib import Path
-
-import tomlkit
+from typing import Any
 
 from unbake import config as configuration
 from unbake import contracts, effort, process, store, symbols
@@ -95,18 +94,15 @@ def _overlay(snapshot: Snapshot, writes: Mapping[str, bytes | None]) -> Snapshot
         if watched.intersection(writes):
             changed = {v.id for v in snapshot.versions.values() if {v.split, v.symbols_file} & writes.keys()
                        or symbols.path() in writes}
-            vers = {**snapshot.versions, **version_data.read(snapshot.config, new.read, changed)}
+            kept = None if symbols.path() in writes else snapshot.versions  # their facts stand unless the table moved
+            vers = {**snapshot.versions, **version_data.read(snapshot.config, new.read, changed, kept)}
             layout = load_map(snapshot.config, vers, new.read("layout.toml"), new.read)
             new = replace(new, versions=vers, layout=layout,
                           digest=digest((_content(snapshot.config, layout, vers, new.read), others)))
         return new
 def load_map(config: Config, versions: Mapping[str, Version], text: bytes, reader: Callable[[str], bytes]) -> LayoutMap:
     with effort.stage("layout.load_map"):
-        try:
-            doc = tomllib.loads(text.decode())
-        except (tomllib.TOMLDecodeError, UnicodeDecodeError) as exc:
-            raise Refusal(Finding("layout.map", reason=str(exc), path="layout.toml")) from exc
-        configuration.validate("layout", doc, "layout.toml")
+        doc = configuration.toml("layout", text, "layout.toml", "layout.map")
         groups = {r["name"]: Group(**{**r, "members": tuple(r["members"]), "signals": tuple(r["signals"])})
                   for r in doc["group"]}
         collected = {}
@@ -136,34 +132,23 @@ def load_map(config: Config, versions: Mapping[str, Version], text: bytes, reade
         if missing:
             raise Refusal(Finding("layout.map", reason="fuzzy members are absent from split files", missing=missing))
         return LayoutMap(doc["cap"], groups, members, units, digest(doc), tuple(doc.get("authored", ())), fuzzy)
+def _toml(value: Any) -> str:
+    return f"[{', '.join(map(_toml, value))}]" if isinstance(value, (list, tuple)) else json.dumps(value)
 def dump_map(layout: LayoutMap) -> bytes:
-    doc = tomlkit.document()
-    doc["schema"], doc["cap"] = 3, layout.cap
-    for key, rows in (("group", sorted(layout.groups.values(), key=lambda g: g.name)),
-                      ("unit", sorted(layout.units.values(), key=lambda u: u.path)), ("authored", layout.authored)):
-        tables = tomlkit.aot()
+    """Written as text, not through a TOML document model: the map is megabytes and a model walks it for seconds."""
+    tables = (("group", sorted(layout.groups.values(), key=lambda g: g.name)),
+              ("unit", sorted(layout.units.values(), key=lambda u: u.path)), ("authored", layout.authored))
+    out = [f"schema = 3\ncap = {layout.cap}", *(f"{key} = []" for key, rows in tables[:2] if not rows)]
+    for key, rows in tables:
         for row in rows:
-            table = tomlkit.table()
             values = {k: row[k] for k in ("version", "rom", "kind", "name")} if key == "authored" else asdict(row)
-            for name, value in values.items():
-                if name == "withheld" and not value:
-                    continue
-                if name == "options":
-                    value = {k: list(value[k]) for k in ("add", "omit")}
-                table[name] = list(value) if isinstance(value, tuple) else value
-            tables.append(table)
-        if rows or key != "authored":
-            doc[key] = tables if rows else []
-    if layout.fuzzy:
-        tables = tomlkit.aot()
-        for member, row in sorted(layout.fuzzy.items()):
-            table, scores = tomlkit.table(), tomlkit.inline_table()
-            for version, score in sorted(row["scores"].items()):
-                scores[version] = score
-            table["member"], table["path"], table["scores"] = member, row["path"], scores
-            tables.append(table)
-        doc["fuzzy"] = tables
-    return tomlkit.dumps(doc).encode()
+            options = values.pop("options", None)
+            out += [f"\n[[{key}]]", *(f"{n} = {_toml(v)}" for n, v in values.items() if n != "withheld" or v)]
+            out += [f"\n[{key}.options]", *(f"{k} = {_toml(options[k])}" for k in ("add", "omit"))] if options else []
+    for member, row in sorted(layout.fuzzy.items()):
+        scores = ", ".join(f"{v} = {_toml(score)}" for v, score in sorted(row["scores"].items()))
+        out += ["\n[[fuzzy]]", f"member = {_toml(member)}", f"path = {_toml(row['path'])}", f"scores = {{{scores}}}"]
+    return ("\n".join(out) + "\n").encode()
 def unit_of(snapshot: Snapshot, member: str) -> UnitSpec | None:
     units = snapshot.layout.units  # the unit holding each member first, indexed once per mapping
     return effort.memo(("owners", id(units)), lambda: (units, {m: u for u in reversed(units.values())
@@ -434,8 +419,7 @@ def _boundary(snapshot: Snapshot) -> tuple[Plan, Json]:
             counts[rule]["proposed"] += total
             counts[rule]["applied" if agrees else "withheld"] += total
         if not agrees:
-            reasons = counts["withheld_reasons"]
-            reasons["versions disagree"] = reasons.get("versions disagree", 0) + 1
+            counts["withheld_reasons"]["versions disagree"] = counts["withheld_reasons"].get("versions disagree", 0) + 1
             continue
         preferred = snapshot.config.project.names_from
         reference = preferred if preferred in by_version else sorted(by_version)[0]

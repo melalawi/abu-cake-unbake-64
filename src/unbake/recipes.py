@@ -23,13 +23,11 @@ def _groups(tokens: Sequence[str], paired: Sequence[str]) -> list[tuple[str, ...
     return out
 def _words(items: Sequence[str]) -> list[str]:
     return [word for item in items for word in item.split()]
-def _matches(group: tuple[str, ...], text: str) -> bool:
-    return group[0] == text or " ".join(group) == text
 def _omit(groups: list[tuple[str, ...]], omitted: Sequence[str]) -> list[tuple[str, ...]]:
     for text in omitted:
-        if not any(_matches(g, text) for g in groups):
+        if not any(text in (g[0], " ".join(g)) for g in groups):
             raise Refusal(Finding("recipe.option", f"cannot omit {text}: not in the compiler flags"))
-        groups = [g for g in groups if not _matches(g, text)]
+        groups = [g for g in groups if text not in (g[0], " ".join(g))]
     return groups
 def _make(toolchain: str, config: Config, cflags: Sequence[str]) -> Recipe:
     build = config.project.build
