@@ -35,16 +35,16 @@ def _inventory(snapshot: Snapshot):
         matched = unit is not None and kinds[unit.kind]["decompiled"] and not unit.withheld  # built in every version
         yield name, member, unit, matched, snapshot.layout.groups[member.group].subsystem if member.group else "unknown"
 
-def _tally(bucket: Json) -> Json:
-    return {**bucket, "code_percent": _pct(bucket["code_matched"], bucket["code_total"]),
-            "data_percent": _pct(bucket["data_matched"], bucket["data_total"]),
-            "fuzzy_percent": _pct(bucket["code_matched"] + bucket["data_matched"] + bucket["fuzzy_bytes"],
-                                  bucket["code_total"] + bucket["data_total"])}
+def _tally(b: Json) -> Json:
+    return {**b, "fuzzy_bytes": (fuzzy := b["code_fuzzy"] + b["data_fuzzy"]),
+            "code_percent": _pct(b["code_matched"], b["code_total"]),
+            "data_percent": _pct(b["data_matched"], b["data_total"]),
+            "fuzzy_percent": _pct(b["code_matched"] + b["data_matched"] + fuzzy, b["code_total"] + b["data_total"])}
 
 def current(snapshot: Snapshot) -> Json:
     with effort.stage("report.current"):
         zero = dict.fromkeys(("code_total", "code_matched", "data_total", "data_matched",
-                              "functions_total", "functions_matched", "fuzzy_bytes"), 0)
+                              "functions_total", "functions_matched", "code_fuzzy", "data_fuzzy"), 0)
         totals = {v: dict(zero) for v in snapshot.config.project.versions}
         subsystems, kinds = defaultdict(dict), defaultdict(dict)
         for name, member, unit, matched, subsystem in _inventory(snapshot):
@@ -52,15 +52,15 @@ def current(snapshot: Snapshot) -> Json:
                 placements = [p for p in member.placements if p.version == v]
                 code = sum(p.size for p in placements if p.section == ".text")
                 data = sum(p.size for p in placements if p.section in (".data", ".rodata"))
-                fuzzy = snapshot.layout.fuzzy.get(name)
-                score = fuzzy["scores"][v] if fuzzy and not matched else 0.0
+                score = 0.0 if matched else (snapshot.layout.fuzzy.get(name) or {"scores": {v: 0.0}})["scores"][v]
                 for bucket in (totals[v], subsystems[subsystem].setdefault(v, dict(zero)),
                                kinds[unit.kind if unit else member.state].setdefault(v, dict(zero))):
                     for prefix, size in (("code_", code), ("data_", data),
                                          ("functions_", int(member.kind == "function"))):
                         bucket[prefix + "total"] += size
                         bucket[prefix + "matched"] += size if matched else 0
-                    bucket["fuzzy_bytes"] += round(score * (code + data))
+                    bucket["code_fuzzy"] += round(score * code)
+                    bucket["data_fuzzy"] += round(score * data)
         debt = {"stale": True, "action": "unbake check"}
         try:
             document = json.loads(snapshot.read(".unbake/check.json"))
@@ -176,19 +176,20 @@ def objdiff(snapshot: Snapshot, report: Json, version: str) -> Json:
         categories = [{"id": sid, "name": subsystems[sid]["label"],
                        "measures": _sum_measures([u for u in units if sid in u["metadata"]["progress_categories"]])}
                       for sid in sorted(present, key=lambda s: (subsystems[s]["rank"], s))]
-        result = {"measures": _sum_measures(units), "units": units, "categories": categories}
+        result = {"measures": _sum_measures(units), "units": units, "categories": categories, "version": 2}
         configuration.validate("objdiff", result, f"versions/{version}/report.json")
         return result
 
-def _line(label: str, bucket: Json, cells: int, functions: bool = False) -> str:
-    matched = bucket["functions_matched"] if functions else bucket["code_matched"] + bucket["data_matched"]
-    total = bucket["functions_total"] if functions else bucket["code_total"] + bucket["data_total"]
+def _line(label: str, bucket: Json, cells: int, kind: str = "bytes") -> str:
+    parts = ("code", "data") if kind == "bytes" else (kind,)
+    matched = sum(bucket[p + "_matched"] for p in parts)
+    total = sum(bucket[p + "_total"] for p in parts)
     percent = _pct(matched, total)
-    fuzzy = percent if functions else _pct(matched + bucket["fuzzy_bytes"], total)
+    fuzzy = percent if kind == "functions" else _pct(matched + sum(bucket[p + "_fuzzy"] for p in parts), total)
     solid = int(percent // (100 / cells))
     partial = min(cells - solid, math.ceil(max(0, fuzzy - percent) / (100 / cells)))
     bar = "█" * solid + "▒" * partial + "░" * (cells - solid - partial)
-    suffix = "" if functions else f" (~{fuzzy:.2f}%)"
+    suffix = "" if kind == "functions" else f" (~{fuzzy:.2f}%)"
     return f"{label} [{bar}]  {percent:5.2f}%{suffix}  {matched:,} of {total:,}"
 
 def readme(text: str, snapshot: Snapshot, report: Json) -> str:
@@ -201,7 +202,7 @@ def readme(text: str, snapshot: Snapshot, report: Json) -> str:
         project, versions = snapshot.config.project, report["versions"]
         total = {k: sum(versions[v][k] for v in project.versions) for k in
                  ("code_total", "code_matched", "data_total", "data_matched", "functions_total",
-                  "functions_matched", "fuzzy_bytes")}
+                  "functions_matched", "code_fuzzy", "data_fuzzy")}
         width = max(map(len, ("all", *project.versions))) + 1
         lines = [_line(label.ljust(width), bucket, cells) + " bytes"
                  for label, bucket in [("all", total), *((v, versions[v]) for v in project.versions)]]
@@ -212,8 +213,7 @@ def readme(text: str, snapshot: Snapshot, report: Json) -> str:
             header = f"| {v}" + (f" ({details})" if details else "") + "."
             header += (f" {meta['description']}" if meta.get("description") else "")
             header += f" SHA256 `{snapshot.versions[v].rom_sha256}` |"
-            rows = [_line("bytes".ljust(9), versions[v], cells),
-                    _line("functions".ljust(9), versions[v], cells, True)]
+            rows = [_line(k.ljust(9), versions[v], cells, k) for k in ("code", "data", "functions")]
             blocks.append(header + "\n|---|\n| <pre><code>" + "</code><br><code>".join(rows) + "</code></pre> |")
         return text[:text.index(begin) + len(begin)] + "\n" + "\n\n".join(blocks) + "\n" + text[text.index(end):]
 

@@ -90,7 +90,7 @@ def test_credit_is_layout_state(snapshot_factory, monkeypatch):
     for version in ("a", "b"):
         assert result["versions"][version] == {
             "code_total": 48, "code_matched": 16, "data_total": 0, "data_matched": 0,
-            "functions_total": 3, "functions_matched": 1, "fuzzy_bytes": 0,
+            "functions_total": 3, "functions_matched": 1, "code_fuzzy": 0, "data_fuzzy": 0, "fuzzy_bytes": 0,
             "code_percent": 33.33, "data_percent": 0.0, "fuzzy_percent": 33.33,
         }
         assert result["kinds"]["c"][version]["code_matched"] == 16
@@ -114,9 +114,9 @@ def test_unknown_group_counts_as_unknown_subsystem(snapshot_factory):
     assert result["subsystems"]["unknown"] == result["versions"]
 
 
-@pytest.mark.parametrize("score, fuzzy_bytes, fuzzy_percent", [(0.0, 0, 25.0), (0.25, 8, 35.0),
-                                                          (0.5, 15, 43.75), (0.95, 28, 60.0)])
-def test_fuzzy_bytes_and_percent(snapshot_factory, score, fuzzy_bytes, fuzzy_percent):
+@pytest.mark.parametrize("score, code_fuzzy, data_fuzzy, fuzzy_percent", [(0.0, 0, 0, 25.0), (0.25, 5, 2, 33.75),
+                                                                     (0.5, 10, 4, 42.5), (0.95, 20, 9, 61.25)])
+def test_fuzzy_bytes_and_percent(snapshot_factory, score, code_fuzzy, data_fuzzy, fuzzy_percent):
     matched = _member("matched", size=20)
     fuzzy = replace(_member("fuzzy", size=21), placements=(
         Placement("a", ".text", 0x1000, 0x1015, 0x80000400),
@@ -128,7 +128,8 @@ def test_fuzzy_bytes_and_percent(snapshot_factory, score, fuzzy_bytes, fuzzy_per
                                 fuzzy={"fuzzy": {"path": "src/fuzzy/fuzzy.c", "scores": {"a": score}}})
     tally = report.current(snapshot)["versions"]["a"]
     assert tally == {"code_total": 41, "code_matched": 20, "data_total": 39, "data_matched": 0,
-                     "functions_total": 2, "functions_matched": 1, "fuzzy_bytes": fuzzy_bytes,
+                     "functions_total": 2, "functions_matched": 1, "code_fuzzy": code_fuzzy,
+                     "data_fuzzy": data_fuzzy, "fuzzy_bytes": code_fuzzy + data_fuzzy,
                      "code_percent": 48.78, "data_percent": 0.0, "fuzzy_percent": fuzzy_percent}
 
 
@@ -262,6 +263,9 @@ def test_objdiff_validates_and_is_deterministic(snapshot_factory, monkeypatch):
     def encode(value):
         return json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
     assert encode(first) == encode(second)
+    assert first["version"] == 2  # an unversioned report is migrated by objdiff, doubling every complete_* sum
+    assert first["measures"]["complete_code"] == str(
+        sum(int(u["measures"].get("complete_code", 0)) for u in first["units"]))
     assert validation.call_count == 2
     validation.assert_called_with("objdiff", second, "versions/a/report.json")
     assert [u["name"] for u in first["units"]] == ["matched", "fuzzy", "data", "open"]
@@ -311,9 +315,11 @@ def _readme_case(snapshot_factory):
     snapshot = replace(snapshot, config=replace(snapshot.config, project=replace(
         snapshot.config.project, version_files=files)))
     values = {"us": {"code_total": 1_088_548, "code_matched": 816_136, "data_total": 0,
-                      "data_matched": 0, "fuzzy_bytes": 18_070, "functions_total": 4196, "functions_matched": 3769},
+                      "data_matched": 0, "code_fuzzy": 18_070, "data_fuzzy": 0,
+                      "functions_total": 4196, "functions_matched": 3769},
               "eu": {"code_total": 4_467_256, "code_matched": 3_219_816, "data_total": 0,
-                      "data_matched": 0, "fuzzy_bytes": 165_330, "functions_total": 0, "functions_matched": 0}}
+                      "data_matched": 0, "code_fuzzy": 165_330, "data_fuzzy": 0,
+                      "functions_total": 0, "functions_matched": 0}}
     return snapshot, {"versions": values}
 
 
@@ -328,10 +334,12 @@ def test_readme_block_exact(snapshot_factory):
         "<br><code>eu   [██████████████▒░░░░░]  72.08% (~75.78%)  3,219,816 of 4,467,256 bytes</code></pre>\n\n"
         "| us (NUS-NRWE-0, North America). First NTSC release (black cartridge). SHA256 `" + "a" * 64 + "` |\n"
         "|---|\n"
-        "| <pre><code>bytes     [██████████████▒░░░░░]  74.97% (~76.63%)  816,136 of 1,088,548</code>"
+        "| <pre><code>code      [██████████████▒░░░░░]  74.97% (~76.63%)  816,136 of 1,088,548</code>"
+        "<br><code>data      [░░░░░░░░░░░░░░░░░░░░]   0.00% (~0.00%)  0 of 0</code>"
         "<br><code>functions [█████████████████░░░]  89.82%  3,769 of 4,196</code></pre> |\n\n"
         "| eu. SHA256 `" + "a" * 64 + "` |\n|---|\n"
-        "| <pre><code>bytes     [██████████████▒░░░░░]  72.08% (~75.78%)  3,219,816 of 4,467,256</code>"
+        "| <pre><code>code      [██████████████▒░░░░░]  72.08% (~75.78%)  3,219,816 of 4,467,256</code>"
+        "<br><code>data      [░░░░░░░░░░░░░░░░░░░░]   0.00% (~0.00%)  0 of 0</code>"
         "<br><code>functions [░░░░░░░░░░░░░░░░░░░░]   0.00%  0 of 0</code></pre> |\n"
         f"{end}"
     )

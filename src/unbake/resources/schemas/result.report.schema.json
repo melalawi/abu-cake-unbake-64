@@ -40,6 +40,14 @@
       "type": "integer",
       "minimum": 0
      },
+     "code_fuzzy": {
+      "type": "integer",
+      "minimum": 0
+     },
+     "data_fuzzy": {
+      "type": "integer",
+      "minimum": 0
+     },
      "code_percent": {
       "type": "number"
      },
@@ -58,6 +66,8 @@
      "functions_total",
      "functions_matched",
      "fuzzy_bytes",
+     "code_fuzzy",
+     "data_fuzzy",
      "code_percent",
      "data_percent",
      "fuzzy_percent"
@@ -100,6 +110,14 @@
        "type": "integer",
        "minimum": 0
       },
+      "code_fuzzy": {
+       "type": "integer",
+       "minimum": 0
+      },
+      "data_fuzzy": {
+       "type": "integer",
+       "minimum": 0
+      },
       "code_percent": {
        "type": "number"
       },
@@ -118,6 +136,8 @@
       "functions_total",
       "functions_matched",
       "fuzzy_bytes",
+      "code_fuzzy",
+      "data_fuzzy",
       "code_percent",
       "data_percent",
       "fuzzy_percent"
@@ -161,6 +181,14 @@
        "type": "integer",
        "minimum": 0
       },
+      "code_fuzzy": {
+       "type": "integer",
+       "minimum": 0
+      },
+      "data_fuzzy": {
+       "type": "integer",
+       "minimum": 0
+      },
       "code_percent": {
        "type": "number"
       },
@@ -179,6 +207,8 @@
       "functions_total",
       "functions_matched",
       "fuzzy_bytes",
+      "code_fuzzy",
+      "data_fuzzy",
       "code_percent",
       "data_percent",
       "fuzzy_percent"

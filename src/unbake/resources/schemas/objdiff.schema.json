@@ -3,6 +3,9 @@
  "$id": "unbake:objdiff",
  "type": "object",
  "properties": {
+  "version": {
+   "const": 2
+  },
   "measures": {
    "type": "object",
    "properties": {
@@ -335,7 +338,8 @@
  "required": [
   "measures",
   "units",
-  "categories"
+  "categories",
+  "version"
  ],
  "additionalProperties": false
 }
