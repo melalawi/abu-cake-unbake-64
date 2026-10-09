@@ -1,3 +1,0 @@
-BT source: public main diagnostic reconstruction, 1125B, SHA256 a3e93bdbe3145327a8e3ea3cbbf2e55051dd9568047752e4fb8261e002258f5a; TOOL-ROUTE-B1520-migration-fuzzy-guard.json. No legacy receipt or native proof.
-RW storage: read-only bounded metadata/schema and one real entry/summary/redraft from rw-land-b-sol-20261007/RageWars/build/types.sqlite, 277524480B; TOOL-ROUTE-migration-storage0-1cb28b9.json. Original writer before 9bc5490 stored meta schema=1 without PRAGMA user_version.
-Old fuzzy publisher at 8c75b46 src/unbake/work/attempts.py guarded(): opt-in #ifdef NON_MATCHING whole-file body, default assembly retained; comment spelling on endif is not preprocessor semantics. Bare diagnostic guard is source identity only, never a published proof receipt.

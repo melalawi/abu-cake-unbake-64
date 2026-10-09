@@ -1,0 +1,167 @@
+"""Preprocessed source views pinned to active project dependencies."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import re
+from collections.abc import Sequence
+from dataclasses import replace
+from pathlib import Path
+
+from unbake import adapters, effort, pool, store
+from unbake import config as configuration
+from unbake.contracts import Finding, Recipe, Refusal, Snapshot, SourceView, UnitSpec, digest
+
+_CODE = digest(Path(__file__).read_bytes())  # a view is only as true as the dependency rules that pinned it
+
+
+def _sha(value: bytes) -> str:
+    return hashlib.sha256(value).hexdigest()
+def _pin(snapshot: Snapshot, path: str) -> str:
+    """The hash of a project file as the snapshot reads it; a file on disk is hashed once per command."""
+    try:
+        if path in snapshot.overlays:
+            return _sha(snapshot.read(path))
+        full = snapshot.config.project.root / path
+        stat = full.stat()
+        return effort.memo(("pin", str(full), stat.st_mtime_ns, stat.st_size), lambda: _sha(full.read_bytes()))
+    except FileNotFoundError:
+        return "missing"
+def _path(marker: str, root: Path, overlay: Path | None, real: bool = True) -> tuple[str, bool]:
+    if marker.startswith("<") and marker.endswith(">"):
+        return marker, False
+    path = Path(marker)
+    path = path if path.is_absolute() else root / path
+    path = path.resolve() if real else Path(os.path.normpath(path))  # real follows links; a closure only needs names
+    for base in (overlay, root):
+        if base is not None and path.is_relative_to(base):
+            return path.relative_to(base).as_posix(), True
+    return str(path), False
+_INCLUDE = re.compile(rb'^[ \t]*(?:#[ \t]*include|\.include)[ \t]*[<"]([^>"\n]+)[>"]', re.M)
+def _included(path: Path) -> tuple[bytes, ...]:
+    stat = path.stat()
+    return effort.memo(("includes", str(path), stat.st_mtime_ns, stat.st_size),
+                       lambda: tuple(_INCLUDE.findall(path.read_bytes())))
+def _link_relative(overlay: Path, root: Path, path: str, content: bytes) -> None:
+    """A quoted include is found beside the file that names it: link each such file of the real tree into the
+    overlay when the overlay holds only the including file."""
+    for name in _INCLUDE.findall(content):
+        relative = os.path.normpath(Path(path).parent / name.decode())
+        real, target = root / relative, overlay / relative
+        if not relative.startswith("..") and real.is_file() and not (target.exists() or target.is_symlink()):
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.symlink_to(real)
+            _link_relative(overlay, root, relative, real.read_bytes())
+def _reached(source: Path, include: Sequence[Path]) -> set[Path]:
+    """Every file the source can include. The preprocessor's line markers are what dependencies were read from, and
+    a flag such as -P removes them, so the include graph is read from the sources instead (a superset is safe)."""
+    found, pending = set(), [source]
+    while pending:
+        current = pending.pop()
+        for name in _included(current):
+            for base in (current.parent, *include):
+                candidate = base / name.decode()
+                if candidate.is_file():
+                    if candidate not in found:
+                        found.add(candidate)
+                        pending.append(candidate)
+                    break
+    return found
+def closure(snapshot: Snapshot, unit: UnitSpec, version: str) -> tuple[tuple[str, str], ...] | None:
+    """(path, pin) of the unit's source and every project file it can reach. None when an overlay holds one of them."""
+    return effort.memo(("closure", snapshot.digest, unit.path, version), lambda: _closure(snapshot, unit, version))
+def _closure(snapshot: Snapshot, unit: UnitSpec, version: str) -> tuple[tuple[str, str], ...] | None:
+    cfg = snapshot.config
+    root = cfg.project.root.resolve()
+    macros = configuration.load_resource("repo.toml")["splat"]["options"]["generated_asm_macros_directory"]
+    include = [root / "include", root / "src", root / macros.format(version=version, name=cfg.project.name)]
+    try:
+        names = [unit.path, *sorted(_path(str(p), root, None, False)[0] for p in _reached(root / unit.path, include))]
+    except FileNotFoundError:
+        return None
+    return None if snapshot.overlays.keys() & set(names) else tuple((n, _pin(snapshot, n)) for n in names)
+def _lines(text: str, root: Path, overlay: Path | None, source: str):
+    lines, files = [], {source}
+    current, number = source, 1
+    for output, text_line in enumerate(text.splitlines(), 1):
+        marker = text_line.startswith("# ") and re.match(r'^# (\d+) "([^"]+)"', text_line)
+        if marker:
+            current, project_file = _path(marker[2], root, overlay)
+            number = int(marker[1])
+            if project_file:
+                files.add(current)
+        else:
+            lines.append((output, current, number))
+            number += 1
+    return tuple(lines), [source, *sorted(files - {source})]
+def get(snapshot: Snapshot, unit: UnitSpec, version: str, recipe: Recipe, *, lines: bool = True) -> SourceView:
+    """The preprocessed view; lines=False skips the per-line marker table that only active_lines needs."""
+    with effort.stage("view.get"):
+        config = snapshot.config
+        root = config.project.root.resolve()
+        overlay = root / "build" / "views" / snapshot.digest[:16] if snapshot.overlays else None
+        try:
+            source_hash = _sha(snapshot.read(unit.path))
+        except FileNotFoundError:
+            raise Refusal(Finding("preprocess.error", "Source file is missing.", path=unit.path)) from None
+        # every file the build can reach, pinned; an overlay holding one makes the snapshot itself the pin
+        reads = closure(snapshot, unit, version)
+        key = digest((unit.path, source_hash, recipe.digest, version, config.project.version_macros[version], _CODE,
+                      snapshot.digest if reads is None else reads))
+        def produce() -> bytes:
+            if overlay is not None:
+                for path, content in snapshot.overlays.items():
+                    target = overlay / path
+                    if content is not None and not target.exists():
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        target.write_bytes(content)
+                    if content is not None:
+                        _link_relative(overlay, root, path, content)
+            include = [root / "include", root / "src"]
+            if overlay is not None:
+                include = [overlay / "include", include[0], overlay / "src", include[1]]
+            source = (overlay if overlay is not None and unit.path in snapshot.overlays else root) / unit.path
+            work = root / "build" / "views" / snapshot.digest[:16] / ".work" / key
+            work.mkdir(parents=True, exist_ok=True)
+            out = work / "view.i"
+            toolchain = adapters.toolchain(config, recipe.toolchain)
+            # -P drops the line markers
+            marked = replace(recipe, cppflags=tuple(f for f in recipe.cppflags if f != "-P"))
+            result = toolchain.preprocess(source, marked, version, include, out=out)
+            findings = list(toolchain.diagnose(result))
+            stderr = result.stderr.decode(errors="replace")
+            if not findings and (result.exit != 0 or result.signal is not None):
+                findings.append(Finding("preprocess.error", stderr or "Preprocessing failed.", path=unit.path))
+            missing = re.search(r'(\S+): No such file or directory|Cannot open include file "(\S+)"', stderr)
+            if missing and (findings or result.exit != 0 or result.signal is not None):
+                header = missing[1] or missing[2]
+                findings.append(Finding("view.include", f"Include file {header} is missing.",
+                                        path=unit.path, missing=(header,)))
+            if findings:
+                raise Refusal(*findings)
+            text = out.read_text()
+            _, files = _lines(text, root, overlay, unit.path)
+            for reached in sorted(_reached(source, include)):
+                name, project_file = _path(str(reached), root, overlay)
+                if project_file and name not in files:
+                    files.append(name)
+            deps = [(path, _pin(snapshot, path)) for path in files]
+            return json.dumps({"text": text, "deps": deps}).encode()
+        value = json.loads(store.cached(config, "view", key, produce))
+        table = _lines(value["text"], root, overlay, unit.path)[0] if lines else ()
+        return SourceView(unit.path, version, key, value["text"],
+                          tuple((path, sha) for path, sha in value["deps"]), table)
+def _one(item: tuple[Snapshot, UnitSpec, str, Recipe]) -> SourceView:
+    return get(*item)
+def all_versions(snapshot: Snapshot, unit: UnitSpec, recipe: Recipe,
+                 versions: Sequence[str]) -> dict[str, SourceView]:
+    with effort.stage("view.all_versions"):
+        results = pool.map(snapshot.config, "view.all_versions", _one,
+                           [(snapshot, unit, version, recipe) for version in versions])
+        return dict(zip(versions, results, strict=True))
+def active_lines(view: SourceView, path: str) -> dict[int, str]:
+    with effort.stage("view.active_lines"):
+        text = view.text.splitlines()
+        return {source: text[output - 1] for output, file, source in view.lines if file == path}

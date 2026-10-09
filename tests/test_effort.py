@@ -1,212 +1,219 @@
-"""Every command and step reports its effort (this process, its tools, pool work by function, peak RSS, counts) and
-is checked against the host's budgets."""
+"""Effort spans, accounting, and revision-4 events."""
+import json
+from dataclasses import asdict
 
-import unittest
-from types import SimpleNamespace
-from unittest.mock import patch
+import fixture
+import pytest
 
-from tests.kit import BUDGETS
 from unbake import effort
-
-MB = effort.MB
-
-
-class EffortTests(unittest.TestCase):
-    def setUp(self) -> None:
-        for name, value in (("_ledger", {}), ("_counts", {}), ("_windows", [[0, 0]]), ("_stages", [])):
-            patcher = patch.object(effort, name, value)
-            patcher.start()
-            self.addCleanup(patcher.stop)
-        self.peak = 10 * MB
-        for name, fake in (("resident_peak", lambda: self.peak), ("_reset_peak", lambda: None)):
-            patcher = patch.object(effort, name, fake)
-            patcher.start()
-            self.addCleanup(patcher.stop)
-
-    def test_since_counts_only_work_after_the_mark(self) -> None:
-        usage = {"self": [1.0, 0.5], "children": [2.0, 0.0]}
-
-        def rusage(who: int) -> SimpleNamespace:
-            utime, stime = usage["self" if who == effort.resource.RUSAGE_SELF else "children"]
-            return SimpleNamespace(ru_utime=utime, ru_stime=stime)
-
-        effort.charge("typemap.facts._job", 5.0)
-        effort.count("facts", 3, 10)
-        with (
-            patch.object(effort.resource, "getrusage", side_effect=rusage),
-            patch.object(effort.time, "monotonic", side_effect=[10.0, 14.0]),
-        ):
-            start = effort.mark()
-            usage["self"], usage["children"] = [2.0, 0.5], [3.0, 0.0]
-            effort.charge("typemap.facts._job", 7.0, rss=300 * MB)
-            effort.charge("work.plan._drafters", 1.0)
-            effort.count("facts", 1, 100)
-            spent = effort.since(start)
-        self.assertEqual((spent.wall, spent.main, spent.tools), (4.0, 1.0, 1.0))
-        self.assertEqual(spent.pool, {"typemap.facts._job": (7.0, 1), "work.plan._drafters": (1.0, 1)})
-        self.assertEqual(spent.counts, {"facts": (1, 100)})
-        document = spent.document()
-        self.assertEqual(
-            {key: document[key] for key in ("cpu_percent", "pool_cpu_seconds", "worker_rss_bytes", "counts")},
-            {
-                "cpu_percent": 250.0,
-                "pool_cpu_seconds": 8.0,
-                "worker_rss_bytes": 300 * MB,
-                "counts": {"facts": [1, 100]},
-            },
-        )
-
-    def test_stages_report_wall_and_cores_once_per_name_after_the_mark(self) -> None:
-        effort.record_stage("Indexing layout", 1.0, 1.0)
-        start = effort.mark()
-        for name, wall, cpu in (
-            ("Proving every version", 4.0, 12.0),
-            ("Committing", 2.0, 0.5),
-            ("Committing", 2.0, 0.5),
-        ):
-            effort.record_stage(name, wall, cpu)
-        rows = effort.since(start).document()["stages"]
-        self.assertEqual(
-            rows,
-            [
-                {"name": "Proving every version", "runs": 1, "wall_seconds": 4.0, "cores": 3.0},
-                {"name": "Committing", "runs": 2, "wall_seconds": 4.0, "cores": 0.25},
-            ],
-        )
-
-    def test_a_window_holds_its_own_peak_and_a_wider_mark_sees_the_highest(self) -> None:
-        outer = effort.mark()
-        effort.window()
-        first = effort.mark()
-        self.peak = 900 * MB
-        effort.charge("a", 1.0, rss=50 * MB)
-        self.assertEqual((effort.since(first).main_rss, effort.since(first).worker_rss), (900 * MB, 50 * MB))
-        effort.window()
-        self.peak = 20 * MB
-        second = effort.mark()
-        self.assertEqual((effort.since(second).main_rss, effort.since(second).worker_rss), (20 * MB, 0))
-        self.assertEqual((effort.since(outer).main_rss, effort.since(outer).worker_rss), (900 * MB, 50 * MB))
+from unbake.contracts import Config, Finding, Host, Origin, Project, Refusal
 
 
-def budgets(**changes: float) -> SimpleNamespace:
-    return SimpleNamespace(**{**BUDGETS, **changes})
+def _config(tmp_path):
+    keys = ("resources.memory_parent_bytes", "resources.memory_worker_bytes", "budgets.serial_seconds")
+    origins = {key: Origin(key, "/host.toml", "0" * 64) for key in keys}
+    host = Host(2, 2, 1 << 30, 1 << 30, 1 << 30,
+                tmp_path / "tools", {}, None, 2, 2, 0.8, 2, ("test", "test@invalid"), origins, "host")
+    project = Project(tmp_path, "fixture", "fixture", "Fixture", (), "", "test", {}, {}, {}, {}, 200, {}, "project")
+    return Config(project, host, "config")
 
 
-def spent(
-    wall: float = 1.0,
-    main_rss: int = 0,
-    worker_rss: int = 0,
-    facts: tuple[int, int] | None = None,
-    main: float = 0.0,
-    pool: float = 0.0,
-    external: float = 0.0,
-):
-    return effort.Effort(
-        wall,
-        main,
-        0.0,
-        {"f": (pool, 1)} if pool else {},
-        main_rss,
-        worker_rss,
-        {"facts": facts} if facts else {},
-        external,
-    )
+@pytest.fixture(autouse=True)
+def _listeners(monkeypatch):
+    monkeypatch.setattr(effort, "_listeners", [])
 
 
-class FindingTests(unittest.TestCase):
-    def test_step_memory_at_the_budget_passes_and_above_is_named(self) -> None:
-        limits = budgets(main_rss_bytes=100 * MB, worker_rss_bytes=10 * MB)
-        for label, used, expected in [
-            ("at both budgets", spent(main_rss=100 * MB, worker_rss=10 * MB), []),
-            ("main over", spent(main_rss=100 * MB + 1), ["budget.main_rss_bytes"]),
-            ("worker over", spent(worker_rss=11 * MB), ["budget.worker_rss_bytes"]),
-        ]:
-            with self.subTest(label):
-                found = effort.step_findings("types", used, limits)
-                self.assertEqual([line.split(":")[0] for line in found], expected)
-                self.assertTrue(all("types peaked at" in line for line in found))
-
-    def test_chain_seconds_and_facts_misses_by_kind(self) -> None:
-        limits = budgets(recompute_seconds=450, unchanged_seconds=30, changed_seconds=90, facts_miss_fraction=0.01)
-        for label, kind, used, expected in [
-            ("changed at its budget", "changed", spent(90.0, facts=(1, 100)), []),
-            ("changed over", "changed", spent(90.5), ["budget.changed_seconds"]),
-            ("unchanged over", "unchanged", spent(31.0), ["budget.unchanged_seconds"]),
-            ("recompute misses never count", "recompute", spent(10.0, facts=(100, 100)), []),
-            ("changed misses over", "changed", spent(10.0, facts=(2, 100)), ["budget.facts_miss_fraction"]),
-            ("no solve ran", "changed", spent(10.0), []),
-        ]:
-            with self.subTest(label):
-                found, notes = effort.chain_findings(kind, used, limits)
-                self.assertEqual([line.split(":")[0] for line in found], expected)
-                self.assertEqual(notes, [])
-
-    def test_cpu_is_the_verdict_and_a_contended_wall_miss_is_only_noted(self) -> None:
-        limits = budgets(recompute_seconds=450, recompute_cpu_seconds=3000, contended_cores=2)
-        for label, used, findings, contended in [
-            ("wall miss on a quiet host", spent(500.0, pool=2000.0, external=100.0), ["budget.recompute_seconds"], 0),
-            (
-                "near miss: 1.9 other cores is not contended",
-                spent(500.0, external=950.0),
-                ["budget.recompute_seconds"],
-                0,
-            ),
-            ("wall miss under 2 other cores", spent(500.0, pool=2000.0, external=1000.0), [], 1),
-            (
-                "cpu over is a failure whatever the load",
-                spent(400.0, pool=3001.0, external=4000.0),
-                ["budget.recompute_cpu_seconds"],
-                0,
-            ),
-        ]:
-            with self.subTest(label):
-                found, notes = effort.chain_findings("recompute", used, limits)
-                self.assertEqual([line.split(":")[0] for line in found], findings)
-                self.assertEqual(len(notes), contended)
-                self.assertTrue(all(note.startswith("contended budget.recompute_seconds") for note in notes))
-
-    def test_a_single_core_stretch_is_its_own_finding(self) -> None:
-        limits = budgets(main_cpu_seconds=60, main_cpu_fraction=0.5, step_cpu_seconds=1000)
-        for label, used, expected in [
-            ("small step mostly in one process", spent(main=50.0, pool=1.0), []),
-            ("long step spread over workers", spent(main=100.0, pool=400.0), []),
-            ("long step mostly in one process", spent(main=300.0, pool=100.0), ["budget.main_cpu_fraction"]),
-            ("step cpu over", spent(main=10.0, pool=1000.0), ["budget.step_cpu_seconds"]),
-        ]:
-            with self.subTest(label):
-                found = effort.step_findings("types", used, limits)
-                self.assertEqual([line.split(":")[0] for line in found], expected)
+def test_listen_events():
+    events = []
+    effort.listen(lambda event, body: events.append((event, body)))
+    with effort.command("check", []), effort.stage("outer"), effort.capture():
+        effort.record_native("tool", fixture.native_result(cpu=2), 0)
+    assert [(event, body["path"]) for event, body in events] == [
+        ("open", ["check"]), ("open", ["check", "outer"]),
+        ("close", ["check", "outer"]), ("close", ["check"]),
+    ]
+    for event, body in events:
+        if event == "close":
+            assert body["wall"] >= 0
+            assert body["status"] == "ok"
 
 
-class HostLoadTests(unittest.TestCase):
-    def test_other_processes_cpu_is_host_busy_time_less_ours(self) -> None:
-        busy = iter([1000.0, 1300.0])
-        with (
-            patch.object(effort, "host_busy", lambda: next(busy)),
-            patch.object(effort, "_ledger", {}),
-            patch.object(effort, "_counts", {}),
-            patch.object(effort, "_windows", [[0, 0]]),
-            patch.object(effort, "resident_peak", lambda: 0),
-            patch.object(effort.time, "monotonic", side_effect=[0.0, 100.0]),
-        ):
-            start = effort.mark()
-            effort.charge("f", 200.0)
-            used = effort.since(start)
-        self.assertEqual((round(used.external, 2), round(used.external_cores, 2)), (100.0, 1.0))
-        self.assertEqual(used.document()["external_cores"], 1.0)
-
-    def test_proc_stat_busy_excludes_idle_and_iowait(self) -> None:
-        stat = "cpu  100 20 30 5000 70 8 2 0 0 0\ncpu0 1 2 3\n"
-        with (
-            patch.object(effort.Path, "read_text", return_value=stat),
-            patch.object(effort.os, "sysconf", return_value=100),
-        ):
-            self.assertEqual(effort.host_busy(), 1.6)
+def test_progress_event():
+    events = []
+    effort.listen(lambda event, body: events.append((event, body)))
+    effort.progress("units", 2, 7)
+    assert events == [("progress", {"name": "units", "done": 2, "total": 7})]
 
 
-class ExactCountTests(unittest.TestCase):
-    def test_bool_negative_or_out_of_total_counts_fail_before_accounting(self):
-        for done, total in ((True, 1), (-1, 1), (2, 1), (0, -1)):
-            with self.assertRaises(ValueError):
-                effort.count("invalid", done, total)
-        self.assertNotIn("invalid", effort.counted())
+def test_closed_records():
+    with effort.command("first", []), effort.stage("child"):
+        pass
+    records = effort.closed()
+    assert isinstance(records, tuple)
+    assert [r.kind for r in records] == ["stage", "own", "command"]
+    assert records[0].parent == records[-1].span
+    assert records[1].path == ("first", "(own)")
+    assert effort.tree()["span"] == records[-1].span
+    with effort.command("second", []):
+        pass
+    assert [r.path for r in effort.closed()] == [("second",)]
+    assert records[-1].invocation != effort.invocation()
+
+
+def test_sink_under_dot_unbake(tmp_path, capsys):
+    with effort.command("check", []):
+        with effort.stage("before.bind"):
+            pass
+        effort.bind(_config(tmp_path))
+    rows = [json.loads(line) for line in (tmp_path / ".unbake/stages.jsonl").read_text().splitlines()]
+    closed = effort.closed()
+    assert {r["span"] for r in rows} <= {r.span for r in closed}
+    assert rows[-1]["span"] == closed[-1].span  # the root is kept
+    assert not (tmp_path / "build/stages.jsonl").exists()
+    assert capsys.readouterr().err == ""
+
+
+@pytest.mark.parametrize("event", ["open", "close", "progress"])
+def test_listener_failure_is_finding(event):
+    def fail(kind, body):
+        if kind == event:
+            raise ValueError("listener broke")
+    seen = []
+    effort.listen(fail)
+    effort.listen(lambda kind, body: seen.append(kind))
+    with effort.command("check", []):
+        effort.progress("work", 1, 1)
+    findings = effort.closed()[-1].findings
+    assert len(findings) == 1
+    assert findings[0].key == "effort.log"
+    assert not findings[0].blocking
+    assert "listener broke" in findings[0].reason
+    assert seen == ["open", "progress", "close"]
+
+
+def test_listeners_survive_commands():
+    events = []
+    effort.listen(lambda event, body: events.append(event))
+    for name in ("one", "two"):
+        with effort.command(name, []):
+            pass
+    assert events == ["open", "close", "open", "close"]
+
+
+@pytest.mark.parametrize("exc,status", [
+    (Refusal(Finding("effort.log", "stop")), "refused"),
+    (ValueError("stop"), "failed"), (KeyboardInterrupt(), "interrupted"),
+])
+def test_span_status_and_stack_restore(exc, status):
+    with pytest.raises(type(exc)), effort.command("check", []), effort.stage("work"):
+        raise exc
+    assert all(r.status == status for r in effort.closed())
+    assert effort._stack.get() == ()
+    if isinstance(exc, Refusal):
+        assert effort.closed()[-1].findings == exc.findings
+
+
+def test_own_wall_and_cpu(monkeypatch):
+    wall = iter([0, 1_000_000_000, 3_000_000_000, 5_000_000_000])
+    cpu = iter([0.0, 1.0, 3.0, 6.0])
+    monkeypatch.setattr(effort.time, "perf_counter_ns", lambda: next(wall))
+    monkeypatch.setattr(effort, "_cpu", lambda: next(cpu))
+    with effort.command("check", []), effort.stage("work"):
+        pass
+    child, own, root = effort.closed()
+    assert (child.wall_seconds, child.parent_cpu_seconds) == (2, 2)
+    assert (own.wall_seconds, own.parent_cpu_seconds) == (3, 4)
+    assert (root.wall_seconds, root.parent_cpu_seconds, root.cores) == (5, 6, 1.2)
+
+
+def test_native_and_pool_cpu_cache(tmp_path):
+    with effort.command("check", []):
+        effort.bind(_config(tmp_path))
+        effort.record_native("tool", fixture.native_result(cpu=3), effort.time.perf_counter_ns())
+        effort.record_pool("units", 2, 2, 2, effort.time.perf_counter_ns(), [
+            {"worker_cpu": 4, "native_cpu": 5, "rss": 1234, "pid": 10, "start_ns": 0, "end_ns": 2_000_000_000,
+             "cache": {"object": (2, 1)}, "records": []},
+            {"worker_cpu": 6, "native_cpu": 7, "rss": 2345, "pid": 11, "start_ns": 0, "end_ns": 3_000_000_000,
+             "cache": {"object": (1, 2)}, "records": []},
+        ])
+    root = effort.closed()[-1]
+    assert (root.worker_cpu_seconds, root.native_cpu_seconds) == (10, 15)
+    assert (root.items, root.jobs, root.workers_used, root.workers_admitted) == (2, 2, 2, 2)
+    assert root.worker_rss_peak_bytes == 2345
+    assert root.cache["object"] == (3, 3)
+
+
+def test_pool_job_records_rebased():
+    with effort.capture() as captured, effort.stage("work"):
+        effort.count("object", True)
+    raws = [asdict(r) for r in captured]
+    with effort.command("check", []):
+        effort.record_pool("units", 1, 1, 1, effort.time.perf_counter_ns(), [
+            {"worker_cpu": 1, "native_cpu": 0, "rss": 1, "pid": 1, "start_ns": 0, "end_ns": 1,
+             "cache": {"object": (1, 0)}, "records": raws},
+        ])
+    jobs = [r for r in effort.closed() if r.path[:2] == ("check", "units") and r.kind != "pool"]
+    assert [r.kind for r in jobs] == [r["kind"] for r in raws]
+    assert all(r.parent_cpu_seconds == 0 for r in jobs)
+    assert [r.worker_cpu_seconds for r in jobs] == [r["parent_cpu_seconds"] for r in raws]
+    assert all(r.path[:2] == ("check", "units") for r in jobs)
+    assert all(r.invocation == effort.invocation() for r in jobs)
+    assert not {r.span for r in jobs} & {r["span"] for r in raws}
+
+
+def test_capture_restores_and_null_stage():
+    with effort.stage("outside") as span:
+        span.add(items=3)
+    with effort.command("check", []):
+        effort.count("object", True)
+        with effort.capture() as records:
+            effort.count("view", False)
+        assert effort.counters() == {"object": (1, 0)}
+        assert records[-1].kind == "job"
+    assert effort.closed()[-1].cache == {"object": (1, 0)}
+
+
+def test_log_failure_is_debt(tmp_path, capsys):
+    (tmp_path / ".unbake").write_text("cannot be a directory")
+    with effort.command("check", []):
+        effort.bind(_config(tmp_path))
+    assert any(f.key == "effort.log" and not f.blocking for f in effort.closed()[-1].findings)
+    assert capsys.readouterr().err == ""
+
+
+def test_nested_cpu_inclusive_spans_exclusive_own(monkeypatch):
+    cpu = iter([0., 1., 2., 4., 7., 10.])
+    monkeypatch.setattr(effort, "_cpu", lambda: next(cpu))
+    with effort.command("check", []), effort.stage("outer"), effort.stage("inner"):
+        pass
+    rows = {r.path: r for r in effort.closed()}
+    assert rows[("check",)].parent_cpu_seconds == 10
+    assert rows[("check", "outer")].parent_cpu_seconds == 6
+    assert rows[("check", "outer", "inner")].parent_cpu_seconds == 2
+    assert rows[("check", "(own)")].parent_cpu_seconds == 4
+    assert rows[("check", "outer", "(own)")].parent_cpu_seconds == 4
+
+
+def test_imported_native_own_and_cpu_classification():
+    with effort.capture() as captured, effort.stage("work"):
+        effort.record_native("tool", fixture.native_result(cpu=2), effort.time.perf_counter_ns())
+    raw = [asdict(r) for r in captured]
+    with effort.command("check", []):
+        effort.record_pool("units", 1, 1, 1, effort.time.perf_counter_ns(), [
+            {"worker_cpu": 1, "native_cpu": 2, "rss": 1, "pid": 1, "start_ns": 0, "end_ns": 1, "cache": {},
+             "records": raw}])
+    imported = [r for r in effort.closed() if r.path[:3] == ("check", "units", "job")]
+    assert [r.kind for r in imported] == [r["kind"] for r in raw]
+    native = next(r for r in imported if r.kind == "native")
+    assert native.native_cpu_seconds == 2 and native.worker_cpu_seconds == 0
+    root = next(r for r in imported if r.kind == "job")
+    assert root.worker_cpu_seconds > 0 and root.parent_cpu_seconds == 0
+    assert root.parent_rss_peak_bytes == 0 and root.worker_rss_peak_bytes > 0
+
+
+def test_wait_is_charged_to_the_innermost_stage_only(tmp_path):
+    effort.bind(_config(tmp_path))
+    with effort.command("check", []), effort.stage("outer"), effort.stage("inner"):
+        effort.waited(1.5)
+    waits = {r.path[-1]: r.wait_seconds for r in effort.closed() if r.kind in ("stage", "command")}
+    assert waits == {"inner": 1.5, "outer": 0.0, "check": 0.0}

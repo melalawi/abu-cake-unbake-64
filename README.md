@@ -27,6 +27,7 @@ python3 -m venv ~/.venvs/unbake
 . ~/.venvs/unbake/bin/activate
 pip install "splat64[mips]==0.50.0" spimdisasm==1.42.4 rabbitizer==1.16.2 \
   "m2c @ git+https://github.com/matt-kempster/m2c@708d2d2cb2698f091a92492b328f73b24209f72d" \
+  git+https://github.com/melalawi/abu-cache-64 \
   git+https://github.com/melalawi/abu-cake-unbake-64
 ```
 

@@ -1,0 +1,5 @@
+      - uses: ${upload}
+        with:
+          name: ${version}_report
+          path: versions/${version}/report.json
+          if-no-files-found: error

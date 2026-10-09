@@ -1,285 +1,162 @@
-"""Host (unbake.toml) and project (config.toml) loading: precedence, merge and every refusal."""
+"""config: packaged resources, templates, host auto resolution, project metadata and refusals."""
+
+from __future__ import annotations
 
 import os
-import tomllib
 from pathlib import Path
-from unittest.mock import patch
+from typing import Any
 
-from tests.kit import TempCase, edited, host_values
-from unbake import config
-from unbake.config import Held, Host
+import fixture
+import pytest
 
-BAD_VALUES = {
-    "domain": ["relative/domain.toml", "Standalone", "", "  ", 3, True, [], {}],
-    "int": [0, -1, "3", True, 1.5],
-    "path": ["relative/dir"],
-    "dirs": [[], ["relative"], ["/nonexistent-dir-for-unbake-tests"]],
-    "fraction": [0, 1.5, "half"],
-    "hex64": ["abc", "g" * 64],
-    "text": ["", "  "],
-}
-SAMPLE_KEY = {
-    "domain": "resources.domain",
-    "int": "resources.cores",
-    "path": "cache.machine_root",
-    "dirs": "tools.path",
-    "fraction": "setup.same_game_similarity",
-    "hex64": "tools.permuter_sha256",
-    "text": "publish.branch",
-}
+from unbake import config as configuration
+from unbake.contracts import Refusal
 
 
-class HostPathTests(TempCase):
-    def test_precedence(self) -> None:
-        explicit = self.root / "explicit.toml"
-        cases = [
-            ("explicit wins", explicit, {"UNBAKE_CONFIG": "/env.toml", "XDG_CONFIG_HOME": "/xdg"}, explicit),
-            ("env next", None, {"UNBAKE_CONFIG": "/env.toml", "XDG_CONFIG_HOME": "/xdg"}, Path("/env.toml")),
-            ("xdg next", None, {"XDG_CONFIG_HOME": "/xdg"}, Path("/xdg/unbake/unbake.toml")),
-            ("home fallback", None, {"HOME": str(self.root)}, self.root / ".config/unbake/unbake.toml"),
-        ]
-        for label, argument, env, expected in cases:
-            with self.subTest(label), patch.dict(os.environ, env):
-                for name in {"UNBAKE_CONFIG", "XDG_CONFIG_HOME"} - set(env):
-                    os.environ.pop(name, None)
-                self.assertEqual(config.host_path(argument), expected)
+def _refusal(call: Any, *args: Any) -> Refusal:
+    with pytest.raises(Refusal) as caught:
+        call(*args)
+    return caught.value
 
 
-class LoadHostTests(TempCase):
-    def write(self, path: Path, values: dict) -> Path:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        lines = []
-        for section, table in values.items():
-            lines.append(f"[{section}]")
-            lines += [f"{key} = {self.literal(value)}" for key, value in table.items()]
-        path.write_text("\n".join(lines) + "\n")
-        return path
-
-    def literal(self, value: object) -> str:
-        if isinstance(value, list):
-            return "[" + ", ".join(self.literal(item) for item in value) + "]"
-        return repr(value).replace("'", '"') if isinstance(value, str) else str(value).lower()
-
-    def test_project_override_replaces_single_keys(self) -> None:
-        values = host_values(self.root)
-        user = self.write(self.root / "user.toml", values)
-        project = self.root / "project"
-        self.write(project / ".unbake/unbake.toml", {"resources": {"cores": 7}})
-        host = config.load_host(user, project, "check")
-        self.assertEqual(host.cores, 7)
-        self.assertEqual(host.make, Path(values["tools"]["make"]))
-        self.assertEqual(tomllib.loads(user.read_text())["resources"]["cores"], 4)
-
-    def test_user_file_alone_when_project_has_no_override(self) -> None:
-        user = self.write(self.root / "user.toml", host_values(self.root))
-        self.assertEqual(config.load_host(user, self.root / "project", "check").cores, 4)
-        self.assertEqual(config.load_host(user, None, "check").cores, 4)
-
-    def test_a_project_cannot_split_itself_into_another_machine_resource_domain(self) -> None:
-        user = self.write(self.root / "user.toml", host_values(self.root))
-        project = self.root / "project"
-        for domain in ("/other/domain.toml", "standalone"):
-            with self.subTest(domain=domain):
-                self.write(project / ".unbake/unbake.toml", {"resources": {"domain": domain}})
-                with self.assertRaisesRegex(Held, r"\[resources\].domain: machine domain belongs to the host file"):
-                    config.load_host(user, project, "check")
-
-    def test_standalone_host_loads_for_every_resource_command(self) -> None:
-        values = edited(host_values(self.root), "resources.domain", "standalone")
-        user = self.write(self.root / "user.toml", values)
-        for command, keys in config.NEEDS.items():
-            if "resources.domain" in keys:
-                with self.subTest(command=command):
-                    self.assertEqual(config.load_host(user, None, command).domain, "standalone")
-
-    def test_missing_file(self) -> None:
-        missing = self.root / "none.toml"
-        with self.assertRaises(Held) as raised:
-            config.load_host(missing, None, "check")
-        self.assertEqual(raised.exception.reason, f"unbake.toml: missing file {missing}")
-        self.assertEqual(raised.exception.phase, "config")
-
-    def test_unknown_names_in_either_file(self) -> None:
-        values = host_values(self.root)
-        project = self.root / "project"
-        bad_key = {**values, "cache": {**values["cache"], "bogus": 1}}
-        cases = [
-            ("user key", bad_key, None, r"\[cache\]\.bogus: unknown key"),
-            ("user section", {**values, "bogus": {"a": 1}}, None, r"\[bogus\]"),
-            ("project key", values, {"resources": {"bogus": 1}}, r"\[resources\]\.bogus: unknown key"),
-        ]
-        for label, user_values, override, pattern in cases:
-            with self.subTest(label):
-                user = self.write(self.root / "user.toml", user_values)
-                if override:
-                    self.write(project / ".unbake/unbake.toml", override)
-                with self.assertRaisesRegex(Held, pattern):
-                    config.load_host(user, project, "check")
+def _keys(refusal: Refusal) -> set[str]:
+    return {f.key for f in refusal.findings}
 
 
-class HostRefusalTests(TempCase):
-    def setUp(self) -> None:
-        super().setUp()
-        self.values = host_values(self.root)
-
-    def test_missing_value_names_key_and_command(self) -> None:
-        for command, dotted in [
-            ("compare", "tools.n64link"),
-            ("check", "tools.make"),
-            ("publish", "publish.branch"),
-            ("next", "resources.domain"),
-        ]:
-            with self.subTest(command=command, key=dotted):
-                host = Host.from_values(edited(self.values, dotted), command)
-                section, key = dotted.split(".")
-                expected = f"unbake.toml [{section}].{key}: missing value (needed by {command})"
-                if dotted == "resources.domain":
-                    expected += '; set "standalone" or an absolute broker manifest path'
-                with self.assertRaises(Held) as raised:
-                    host.require_command(command)
-                self.assertEqual(raised.exception.reason, expected)
-
-    def test_each_kind_refuses_bad_values_with_the_key_label(self) -> None:
-        for kind, bad_values in BAD_VALUES.items():
-            dotted = SAMPLE_KEY[kind]
-            section, key = dotted.split(".")
-            for bad in bad_values:
-                with self.subTest(kind=kind, value=bad):
-                    host = Host.from_values(edited(self.values, dotted, bad), "check")
-                    with self.assertRaisesRegex(Held, rf"unbake\.toml \[{section}\]\.{key}: expected"):
-                        host.get(dotted)
-
-    def test_executable_refusals(self) -> None:
-        plain = self.root / "plain"
-        plain.write_text("not executable")
-        plain.chmod(0o644)
-        cases = [
-            ("relative", "bin/make", "expected absolute path"),
-            ("absent", str(self.root / "nope"), "missing executable"),
-            ("not executable", str(plain), f"missing executable {plain}"),
-            ("directory", str(self.root), "missing executable"),
-        ]
-        for label, value, message in cases:
-            with self.subTest(label):
-                host = Host.from_values(edited(self.values, "tools.make", value), "check")
-                with self.assertRaisesRegex(Held, rf"unbake\.toml \[tools\]\.make: {message}"):
-                    host.get("tools.make")
-
-    def test_valid_values_read_back_typed(self) -> None:
-        host = Host.from_values(self.values, "check")
-        self.assertEqual((host.cores, host.cache_max_bytes), (4, 1_000))
-        self.assertEqual(host.same_game_similarity, 0.5)
-        self.assertEqual(host.permuter_sha256, "b" * 64)
-        self.assertEqual(host.tool_path, (self.root / "bin",))
-
-    def test_domain_preserves_standalone_and_absolute_manifest_paths(self) -> None:
-        for raw, expected in (
-            ("standalone", "standalone"),
-            (str(self.root / "domain.toml"), self.root / "domain.toml"),
-            ("~/domain.toml", Path.home() / "domain.toml"),
-        ):
-            with self.subTest(domain=raw):
-                host = Host.from_values(edited(self.values, "resources.domain", raw), "compare")
-                self.assertEqual(host.domain, expected)
-
-    def test_invalid_domain_names_both_choices(self) -> None:
-        for value in BAD_VALUES["domain"]:
-            with (
-                self.subTest(value=value),
-                self.assertRaisesRegex(
-                    Held, r'\[resources\]\.domain: expected "standalone" or an absolute broker manifest path'
-                ),
-            ):
-                Host.from_values(edited(self.values, "resources.domain", value), "next").require_command("next")
-
-    def test_workers_default_to_the_core_count_and_single_worker_is_refused(self) -> None:
-        unset = Host.from_values(edited(self.values, "resources.workers"), "compare")
-        self.assertEqual(unset.workers, unset.cores)
-        explicit = Host.from_values(edited(self.values, "resources.workers", 2), "compare")
-        self.assertEqual(explicit.workers, 2)
-        single = Host.from_values(edited(self.values, "resources.workers", 1), "compare")
-        with self.assertRaisesRegex(Held, r"resources\.workers|\[resources\]\.workers"):
-            self.assertIsNone(single.workers)
-
-    def test_cross_key_rules(self) -> None:
-        cache = ["cache.max_bytes", "cache.trim_to_bytes"]
-        memory = ["resources.memory_total_bytes", "resources.memory_parent_bytes", "resources.memory_worker_bytes"]
-        cases = [
-            ("trim equals max", {"cache.trim_to_bytes": 1_000}, cache, "trim_to_bytes"),
-            ("trim above max", {"cache.trim_to_bytes": 2_000}, cache, "trim_to_bytes"),
-            (
-                "parent equals total",
-                {"resources.memory_parent_bytes": self.values["resources"]["memory_total_bytes"]},
-                memory,
-                "memory_parent_bytes",
-            ),
-            (
-                "worker over remainder",
-                {
-                    "resources.memory_worker_bytes": self.values["resources"]["memory_total_bytes"]
-                    - self.values["resources"]["memory_parent_bytes"]
-                    + 1
-                },
-                memory,
-                "memory_worker_bytes",
-            ),
-        ]
-        for label, changes, keys, name in cases:
-            with self.subTest(label):
-                values = self.values
-                for dotted, value in changes.items():
-                    values = edited(values, dotted, value)
-                with self.assertRaisesRegex(Held, name):
-                    Host.from_values(values, "compare").require(keys)
-        with self.subTest("worker exactly the remainder is accepted"):
-            values = edited(
-                self.values,
-                "resources.memory_worker_bytes",
-                self.values["resources"]["memory_total_bytes"] - self.values["resources"]["memory_parent_bytes"],
-            )
-            Host.from_values(values, "compare").require(memory)
-
-    def test_the_retired_push_keys_are_unknown(self) -> None:
-        for key in ("remote", "credential_env", "credential_helper"):
-            with self.subTest(key), self.assertRaisesRegex(Held, rf"\[publish\]\.{key}: unknown key"):
-                Host.from_values({"publish": {key: "x"}}, "publish")
-
-    def test_from_values_refuses_unknown_names(self) -> None:
-        with self.assertRaisesRegex(Held, r"\[cache\]\.bogus: unknown key"):
-            Host.from_values({"cache": {"bogus": 1}}, "check")
+@pytest.mark.parametrize("name", list(configuration.SCHEMA_OF))
+def test_load_resource_every_data_file(name: str) -> None:
+    document = configuration.load_resource(name)
+    assert document
+    if name == "hints.jsonl":
+        assert list(document) == ["rows"]
+        assert len(document["rows"]) == 19
 
 
-class ProjectConfigTests(TempCase):
-    BASE = 'schema = 1\n[project]\nid = "x"\nstate = "ready"\nlayout_cap = 2\n'
-
-    def load(self, text: str) -> None:
-        (self.root / "config.toml").write_text(text)
-        config.load(self.root)
-
-    def test_retired_sections_are_refused(self) -> None:
-        for section in ("paths", "workspace"):
-            with self.subTest(section):
-                path = self.root / "config.toml"
-                with self.assertRaises(Held) as raised:
-                    self.load(self.BASE + f'[{section}]\nroms = "roms"\n')
-                self.assertEqual(raised.exception.reason, f"{path} [{section}]: retired section; remove it")
-
-    def test_unknown_build_key_is_refused(self) -> None:
-        with self.assertRaisesRegex(Held, r"\[build\]\.cpp: unknown key"):
-            self.load(self.BASE + '[build]\ncpp = "cpp"\n')
-
-    def test_fixed_layout_has_one_include_root(self) -> None:
-        layout = config.Layout(self.root)
-        self.assertEqual(layout.include, (self.root / "include",))
-        self.assertEqual(layout.work, self.root / "build" / "work")
+def test_schema_of_has_no_features() -> None:
+    assert "features.toml" not in configuration.SCHEMA_OF
+    assert len(configuration.SCHEMA_OF) == 12
+    assert _keys(_refusal(configuration.load_resource, "features.toml")) == {"config.resource"}
 
 
-class BudgetConfigTests(TempCase):
-    def test_budgets_are_host_keys_refused_by_name_and_never_project_facts(self) -> None:
-        values = host_values(self.root)
-        del values["budgets"]["facts_miss_fraction"]
-        for command in ("recompute", "cycle", "check"):
-            with self.subTest(command), self.assertRaisesRegex(Held, r"\[budgets\]\.facts_miss_fraction: missing"):
-                config.Host.from_values(values, command).require_command(command)
-        self.assertNotIn("budgets", config.CONFIG_SECTIONS)
-        config.Host.from_values(values, "next").require_command("next")  # a command that runs no steps
+def test_template_known_and_missing() -> None:
+    assert "${units}" in configuration.template("Makefile.in")
+    assert configuration.template("sdk/" + next(p for p in _sdk_names()))
+    refusal = _refusal(configuration.template, "nope")
+    assert _keys(refusal) == {"config.resource"}
+    assert refusal.findings[0].path == "templates/nope"
+
+
+def _sdk_names() -> list[str]:
+    from importlib import resources
+
+    return [p.name for p in (resources.files("unbake.resources") / "templates" / "sdk").iterdir() if p.is_file()]
+
+
+def test_sentence_known() -> None:
+    assert configuration.sentence("config.schema")
+
+
+def test_host_auto_resolves(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(os, "sched_getaffinity", lambda pid: set(range(12)))
+    loaded = configuration.load_host(fixture.host(tmp_path, **{"resources.cores": "auto", "resources.workers": "auto"}))
+    assert (loaded.cores, loaded.workers) == (12, 12)
+    for key in ("resources.cores", "resources.workers"):
+        assert loaded.origins[key].note == "auto: os.sched_getaffinity -> 12"
+
+
+def test_host_explicit_keeps_ints(tmp_path: Path) -> None:
+    loaded = configuration.load_host(fixture.host(tmp_path))
+    assert (loaded.cores, loaded.workers) == (2, 2)
+    assert not loaded.origins["resources.cores"].note
+
+
+def test_host_workers_exceed_cores(tmp_path: Path) -> None:
+    refusal = _refusal(configuration.load_host, fixture.host(tmp_path, **{"resources.workers": 3}))
+    assert _keys(refusal) == {"config.file"}
+    assert refusal.findings[0].path == "host:resources.workers"
+
+
+def test_host_schema_1_refused(tmp_path: Path) -> None:
+    path = fixture.host(tmp_path)
+    path.write_text(path.read_text().replace("schema = 2", "schema = 1", 1))
+    assert "config.schema" in _keys(_refusal(configuration.load_host, path))
+
+
+def test_host_unknown_key_refused(tmp_path: Path) -> None:
+    path = fixture.host(tmp_path)
+    path.write_text(path.read_text() + "\n[bogus]\nx = 1\n")
+    refusal = _refusal(configuration.load_host, path)
+    assert _keys(refusal) == {"config.schema"}
+
+
+@pytest.mark.parametrize(
+    ("extra", "path"),
+    [("[search]\nx = 1\n", "host:search"), ("[cycle]\nx = 1\n", "host:cycle")],
+)
+def test_host_retired_keys(tmp_path: Path, extra: str, path: str) -> None:
+    host = fixture.host(tmp_path)
+    host.write_text(host.read_text() + "\n" + extra)
+    refusal = _refusal(configuration.load_host, host)
+    assert _keys(refusal) == {"config.retired"}
+    assert refusal.findings[0].path == path
+
+
+def test_host_relative_tool_refused(tmp_path: Path) -> None:
+    refusal = _refusal(configuration.load_host, fixture.host(tmp_path, **{"tools.git": "git"}))
+    assert _keys(refusal) == {"config.file"}
+    assert refusal.findings[0].path == "host:tools.git"
+
+
+def test_host_missing_file_refused(tmp_path: Path) -> None:
+    assert _keys(_refusal(configuration.load_host, tmp_path / "absent.toml")) == {"config.missing"}
+
+
+def test_project_title_and_meta(tmp_path: Path, toolchains: dict[str, Any]) -> None:
+    root = fixture.project(
+        tmp_path,
+        functions={"func_80000400": {v: (fixture.ROM_BASE, b"\x03\xe0\x00\x08\x00\x00\x00\x00") for v in "ab"}},
+        region={"a": "North America"},
+    )
+    project = configuration.load_project(root)
+    assert project.title == "Fixture"
+    assert project.version_files["a"].meta == {"region": "North America"}
+    assert project.version_files["b"].meta == {}
+
+
+def test_project_retired_key(tmp_path: Path, toolchains: dict[str, Any]) -> None:
+    config = fixture.config(tmp_path).project.root / "config.toml"
+    config.write_text(config.read_text() + "\n[compilers]\nx = 1\n")
+    refusal = _refusal(configuration.load_project, config.parent)
+    assert _keys(refusal) == {"config.retired"}
+
+
+def test_project_unknown_key(tmp_path: Path, toolchains: dict[str, Any]) -> None:
+    config = fixture.config(tmp_path).project.root / "config.toml"
+    config.write_text(config.read_text() + "\n[bogus]\nx = 1\n")
+    assert _keys(_refusal(configuration.load_project, config.parent)) == {"config.schema"}
+
+
+def test_project_sha1_mismatch(tmp_path: Path, toolchains: dict[str, Any]) -> None:
+    config = fixture.config(tmp_path).project.root / "config.toml"
+    text = config.read_text()
+    sha = next(line for line in text.splitlines() if line.startswith("baserom_sha1")).split('"')[1]
+    config.write_text(text.replace(sha, "0" * 40))
+    refusal = _refusal(configuration.load_project, config.parent)
+    assert _keys(refusal) == {"config.file"}
+    assert refusal.findings[0].path.endswith(".baserom_sha1")
+
+
+def test_load_combines_digests(cfg: Any) -> None:
+    assert cfg.digest
+    assert cfg.digest != cfg.project.digest
+
+@pytest.mark.parametrize("tool", ["cpp", "mips_as", "mips_ld", "mips_objcopy", "mips_objdump",
+                                  "n64link", "m2c", "armips", "permuter"])
+def test_optional_host_tool_absent_and_bad_path(tmp_path: Path, tool: str) -> None:
+    path = fixture.host(tmp_path)
+    path.write_text("\n".join(line for line in path.read_text().splitlines() if not line.startswith(tool + " = ")))
+    assert tool not in configuration.load_host(path).tools
+    invalid = fixture.host(tmp_path, **{f"tools.{tool}": str(tmp_path / "absent")})
+    refusal = _refusal(configuration.load_host, invalid)
+    assert refusal.findings[0].key == "config.file"
+    assert refusal.findings[0].path == f"host:tools.{tool}"

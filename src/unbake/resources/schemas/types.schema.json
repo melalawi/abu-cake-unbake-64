@@ -1,0 +1,99 @@
+{
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "$id": "unbake:types",
+ "type": "object",
+ "properties": {
+  "schema": {
+   "const": 1
+  },
+  "function": {
+   "type": "object",
+   "additionalProperties": {
+    "type": "object",
+    "properties": {
+     "signature": {
+      "type": "string",
+      "minLength": 1
+     },
+     "evidence": {
+      "enum": [
+       "m2c",
+       "landed",
+       "declared",
+       "authored"
+      ]
+     }
+    },
+    "required": [
+     "signature",
+     "evidence"
+    ],
+    "additionalProperties": false
+   }
+  },
+  "global": {
+   "type": "object",
+   "additionalProperties": {
+    "type": "object",
+    "properties": {
+     "declaration": {
+      "type": "string",
+      "minLength": 1
+     },
+     "section": {
+      "type": "string",
+      "minLength": 1
+     },
+     "size": {
+      "type": "integer",
+      "minimum": 0
+     },
+     "evidence": {
+      "enum": [
+       "splat",
+       "landed",
+       "declared",
+       "authored"
+      ]
+     }
+    },
+    "required": [
+     "declaration",
+     "section",
+     "size",
+     "evidence"
+    ],
+    "additionalProperties": false
+   }
+  },
+  "struct": {
+   "type": "object",
+   "additionalProperties": {
+    "type": "object",
+    "properties": {
+     "declaration": {
+      "type": "string",
+      "minLength": 1
+     },
+     "evidence": {
+      "enum": [
+       "authored"
+      ]
+     }
+    },
+    "required": [
+     "declaration",
+     "evidence"
+    ],
+    "additionalProperties": false
+   }
+  }
+ },
+ "required": [
+  "schema",
+  "function",
+  "global",
+  "struct"
+ ],
+ "additionalProperties": false
+}

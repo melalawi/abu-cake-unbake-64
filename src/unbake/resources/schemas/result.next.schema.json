@@ -1,0 +1,78 @@
+{
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "$id": "unbake:result.next",
+ "type": "object",
+ "properties": {
+  "items": {
+   "type": "array",
+   "items": {
+    "type": "object",
+    "properties": {
+     "member": {
+      "type": "string",
+      "minLength": 1
+     },
+     "kind": {
+      "enum": [
+       "function",
+       "data"
+      ]
+     },
+     "subsystem": {
+      "type": "string",
+      "minLength": 1
+     },
+     "rank": {
+      "type": "integer",
+      "minimum": 0
+     },
+     "state": {
+      "enum": [
+       "open",
+       "tool",
+       "creative",
+       "fuzzy"
+      ]
+     },
+     "size": {
+      "type": "integer",
+      "minimum": 0
+     },
+     "address": {
+      "type": "integer",
+      "minimum": 0
+     },
+     "best": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+     },
+     "command": {
+      "type": "string",
+      "minLength": 1
+     },
+     "packet": {
+      "type": "string",
+      "minLength": 1
+     }
+    },
+    "required": [
+     "member",
+     "kind",
+     "subsystem",
+     "rank",
+     "state",
+     "size",
+     "address",
+     "best",
+     "command"
+    ],
+    "additionalProperties": false
+   }
+  }
+ },
+ "required": [
+  "items"
+ ],
+ "additionalProperties": false
+}

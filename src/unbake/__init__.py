@@ -1,1 +1,1 @@
-"""Tools for standalone N64 decompilation projects."""
+"""unbake: derive, prove and publish a decompilation project."""

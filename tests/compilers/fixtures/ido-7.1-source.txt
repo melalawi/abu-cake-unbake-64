@@ -1,1 +1,0 @@
-Exact first 55 retained assembly lines from func_8010AA6C_us (tests/fixtures/battletanx_float_abi), produced by pinned IDO 7.1: cc -G0 -non_shared -mips2 -O2 -K -S -c source.c -o source.o. Only this small real C payload was compiled. No ROM build.

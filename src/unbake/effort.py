@@ -1,533 +1,281 @@
-"""Effort of one command or step: wall time, CPU of this process, its tools and its pool work by function, the
-peak resident memory of this process and of its workers, and counts a step reports (facts extracted of all).
-
-The pool charges each task's worker CPU and peak RSS to its function (pool.run); a command reports the totals in its
-result when it ends, and each step reports its own share. A step opens a memory window (window()), so its peak is
-its own; a mark taken before several windows sees the highest of them."""
-
+"""Invocation spans, exclusive parent work, and worker/native accounting."""
 from __future__ import annotations
 
-import contextlib
 import json
-import math
 import os
 import resource
-import threading
 import time
-from collections.abc import Sequence
-from dataclasses import dataclass, field, replace
+from collections.abc import Callable, Sequence
+from contextlib import AbstractContextManager as ContextManager
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import asdict, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, NamedTuple
+from uuid import uuid4
 
-if TYPE_CHECKING:
-    from unbake.config import Host
+import psutil
 
-TOP = 5
-MB = 1_000_000
+from unbake.contracts import Config, Finding, Json, NativeResult, Origin, Refusal, Span, StageRecord
 
-_lock = threading.Lock()
-# function name -> [worker CPU seconds, tasks]
-_ledger: dict[str, list[float]] = {}
-# name -> [done, total], summed (facts: source units extracted of all)
-_counts: dict[str, list[int]] = {}
-
-
-class Stage(NamedTuple):
-    """One finished stage: its full path, wall, all-process CPU and the detail record (see stage_detail)."""
-
-    name: str
-    wall: float
-    cpu: float
-    detail: dict[str, object]
-
-
-_stages: list[Stage] = []
-# One record per pool.run: action, items, workers, wall, worker CPU, worker peak RSS.
-_pools: list[dict[str, object]] = []
-# pool action -> worker peak RSS seen since its run began
-_run_rss: dict[str, int] = {}
-# per memory window: [main peak, worker peak] in bytes; the last window is open
-_windows: list[list[int]] = [[0, 0]]
-
-
-def host_busy() -> float:
-    """CPU-seconds every process on this host has used since boot (/proc/stat), or 0 where it cannot be read."""
-    try:
-        fields = Path("/proc/stat").read_text().split("\n", 1)[0].split()[1:]
-    except OSError:
-        return 0.0
-    # user nice system idle iowait irq softirq steal: everything but idle and iowait is busy.
-    busy = sum(int(value) for index, value in enumerate(fields[:8]) if index not in (3, 4))
-    return busy / os.sysconf("SC_CLK_TCK")
-
-
-def resident_peak() -> int:
-    """This process's peak resident bytes since the last reset (VmHWM), else its lifetime peak."""
-    try:
-        for line in Path("/proc/self/status").read_text().splitlines():
-            if line.startswith("VmHWM:"):
-                return int(line.split()[1]) * 1024
-    except OSError:
-        pass
-    return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024
-
-
-def _reset_peak() -> None:
-    # A kernel control write (resets VmHWM to the current RSS), not a file the tool publishes.
-    with contextlib.suppress(OSError):
-        from unbake import atomic
-
-        atomic.control(Path("/proc/self/clear_refs"), b"5")
-
-
-def window() -> None:
-    """Close the open memory window (keeping its peak) and open a new one."""
-    with _lock:
-        _windows[-1][0] = max(_windows[-1][0], resident_peak())
-        _windows.append([0, 0])
-        _reset_peak()
-
-
-def charge(name: str, seconds: float, rss: int = 0, counts: dict[str, tuple[int, int]] | None = None) -> None:
-    """One pool task's CPU, peak resident bytes and the counts it added (the worker's, merged into this ledger)."""
-    if (
-        type(name) is not str
-        or not name
-        or type(seconds) not in (int, float)
-        or seconds < 0
-        or not math.isfinite(seconds)
-    ):
-        raise ValueError("effort.charge: required named finite nonnegative CPU seconds")
-    if type(rss) is not int or rss < 0:
-        raise ValueError("effort.charge: required nonnegative integer measured RSS")
-    for kind, (done, total) in (counts or {}).items():
-        if type(kind) is not str or type(done) is not int or type(total) is not int or not 0 <= done <= total:
-            raise ValueError(f"effort.charge.{kind}: invalid counts")
-    with _lock:
-        row = _ledger.setdefault(name, [0.0, 0])
-        row[0] += seconds
-        row[1] += 1
-        _windows[-1][1] = max(_windows[-1][1], rss)
-        _run_rss[name.removesuffix(".failed")] = max(_run_rss.get(name.removesuffix(".failed"), 0), rss)
-        for kind, (done, total) in (counts or {}).items():
-            added = _counts.setdefault(kind, [0, 0])
-            added[0] += done
-            added[1] += total
-
-
-def counted() -> dict[str, tuple[int, int]]:
-    """This process's counts so far, by name."""
-    with _lock:
-        return {name: (row[0], row[1]) for name, row in _counts.items()}
-
-
-# Items a stage may process in the parent alone before the guard names it; the pool width the command expects.
-PARENT_ITEMS = 256
-PARENT_ONLY = "parent-only: "
-_width = 1
-
-
-def expect_workers(count: int) -> None:
-    """The pool width this command runs with; a stage over PARENT_ITEMS that used no worker is then a finding."""
-    global _width
-    _width = count
-
-
-# Seconds a parent stage may run on about one core with workers available before the guard names it.
-PARENT_SECONDS = 30.0
-
-
-def parent_only(label: str, items: int, pooled: bool, wall: float = 0.0, cpu: float = 0.0) -> bool:
-    """A stage the parent ran alone: many items with no pool task, or over PARENT_SECONDS at about one core."""
-    if _width <= 1 or pooled:
-        return False
-    return items > PARENT_ITEMS or (wall > PARENT_SECONDS and cpu < 1.5 * wall)
-
-
+_stack: ContextVar[tuple[_Open, ...]] = ContextVar("effort_stack", default=())
+_closed: list[StageRecord] = []
+_counters: dict[str, list[int]] = {}
+_config: Config | None = None
 _sink: Path | None = None
-
-
-def stage_log(path: Path | None) -> None:
-    """Append each stage to PATH as it finishes, so a refused or killed command still leaves its timings."""
-    global _sink
-    _sink = path
-
-
-def _append(record: dict[str, object]) -> None:
-    sink = _sink
-    if sink is not None:
-        with contextlib.suppress(OSError), sink.open("a") as handle:
-            handle.write(json.dumps(record) + "\n")
-
-
-def record_stage(name: str, wall: float, cpu: float, **detail: object) -> None:
-    """One finished stage (NAME is its full path): wall seconds, CPU seconds all processes spent, and its detail."""
-    with _lock:
-        _stages.append(Stage(name, wall, cpu, dict(detail)))
-    _append({"stage": name, "wall_seconds": round(wall, 3), "cpu_seconds": round(cpu, 3), **detail})
-
-
-def pool_start(action: str) -> tuple[str, float, float]:
-    """Open the record of one pool.run of ACTION; pass the result to pool_end."""
-    with _lock:
-        _run_rss[action] = 0
-        spent = _ledger_cpu(action)
-    return action, time.monotonic(), spent
-
-
-def _ledger_cpu(action: str) -> float:
-    return sum(_ledger.get(name, [0.0])[0] for name in (action, action + ".failed"))
-
-
-def pool_end(token: tuple[str, float, float], items: int, workers: int) -> None:
-    """Close a pool.run record: items, workers actually used, wall, worker CPU and worker peak RSS."""
-    action, began, cpu_before = token
-    wall = time.monotonic() - began
-    with _lock:
-        record: dict[str, object] = {
-            "pool": action,
-            "items": items,
-            "workers": workers,
-            "wall_seconds": round(wall, 3),
-            "worker_cpu_seconds": round(_ledger_cpu(action) - cpu_before, 3),
-            "worker_rss_bytes": _run_rss.get(action, 0),
-        }
-        _pools.append(record)
-    _append(record)
-
-
-def native_call(wall: float, cpu: float) -> None:
-    """One native tool call (compiler, assembler, linker, preprocessor): counted and summed, never a line each."""
-    wall_us, cpu_us = round(wall * 1e6), round(cpu * 1e6)
-    count("native.calls", 1, 1)
-    count("native.wall_us", wall_us, wall_us)
-    count("native.cpu_us", cpu_us, cpu_us)
-
-
-# Numeric stage detail that a parent's children account for; the rest of the parent is its "(own)" work.
-NUMERIC = (
-    "wall_seconds",
-    "parent_cpu_seconds",
-    "tools_cpu_seconds",
-    "worker_cpu_seconds",
-    "items",
-    "jobs",
-    "native_calls",
-    "native_wall_seconds",
-    "native_cpu_seconds",
-)
-PARALLEL_CORES = 1.5
-
-
-def stage_detail(path: str, spent: Effort, own: bool = False) -> dict[str, object]:
-    """The record of a stage: path, depth, wall, parent/tools/worker CPU, cores, pool items/jobs/workers, natives."""
-    worker = sum(seconds for seconds, _ in spent.pool.values())
-    native = spent.counts
-    return {
-        "path": path,
-        "depth": path.count(" > "),
-        "own": own,
-        "wall_seconds": spent.wall,
-        "parent_cpu_seconds": spent.main,
-        "tools_cpu_seconds": spent.tools,
-        "worker_cpu_seconds": worker,
-        "cores": _cores(spent.main + spent.tools + worker, spent.wall),
-        "items": sum(int(run["items"]) for run in spent.pools),  # type: ignore[call-overload]
-        "jobs": len(spent.pools),
-        "workers": max((int(run["workers"]) for run in spent.pools), default=0),  # type: ignore[call-overload]
-        "native_calls": native.get("native.calls", (0, 0))[0],
-        "native_wall_seconds": native.get("native.wall_us", (0, 0))[0] / 1e6,
-        "native_cpu_seconds": native.get("native.cpu_us", (0, 0))[0] / 1e6,
-        # Cache and memo hits of all (misses = total less hits): per-process memos miss again in every worker.
-        "cache": {
-            name: [done, total]
-            for name, (done, total) in sorted(native.items())
-            if name.startswith(("cache.", "memo."))
-        },
-    }
-
-
-def _cores(cpu: float, wall: float) -> float:
-    return cpu / wall if wall > 0 else 0.0
-
-
-def own_detail(path: str, whole: dict[str, object], children: dict[str, float]) -> dict[str, object]:
-    """The part of a stage no child stage accounts for: its numbers less its children's, with its own cores."""
-    own: dict[str, object] = dict(whole, path=path, own=True, cache={})
-    for key, value in numbers(whole).items():
-        own[key] = max(0.0, value - children.get(key, 0.0))
-    own["cores"] = _cores(detail_cpu(own), float(own["wall_seconds"]))  # type: ignore[arg-type]
-    return own
-
-
-def numbers(detail: dict[str, object]) -> dict[str, float]:
-    """The numeric fields of a detail record."""
-    return {key: float(detail[key]) for key in NUMERIC}  # type: ignore[arg-type]
-
-
-def detail_cpu(detail: dict[str, object]) -> float:
-    figures = numbers(detail)
-    return figures["parent_cpu_seconds"] + figures["tools_cpu_seconds"] + figures["worker_cpu_seconds"]
-
-
-def record_detail(name: str, detail: dict[str, object]) -> float:
-    """Record a stage from its detail record (wall and CPU come from it); returns its CPU seconds."""
-    cpu = detail_cpu(detail)
-    record_stage(name, float(detail["wall_seconds"]), cpu, **detail)  # type: ignore[arg-type]
-    return cpu
-
-
-def summary(stages: Sequence[Stage], top: int = 10) -> list[str]:
-    """The TOP stages by wall (a stage run twice counts once, summed), each tagged serial or parallel by its cores."""
-    rows: dict[str, list[float]] = {}
-    for stage in stages:
-        if stage.name.startswith(PARENT_ONLY):
-            continue
-        row = rows.setdefault(stage.name, [0.0, 0.0])
-        row[0] += stage.wall
-        row[1] += stage.cpu
-    ranked = sorted(rows.items(), key=lambda item: -item[1][0])[:top]
-    return [
-        f"{wall:9.1f} s  {_cores(cpu, wall):5.1f} cores  {_tag(_cores(cpu, wall)):8}  {name}"
-        for name, (wall, cpu) in ranked
-    ]
-
-
-def _tag(cores: float) -> str:
-    return "parallel" if cores >= PARALLEL_CORES else "serial"
-
-
-def stage_tree(stages: Sequence[Stage]) -> list[dict[str, object]]:
-    """The stages as a tree by path: each node has its numbers (summed over runs) and its children."""
-    roots: list[dict[str, object]] = []
-    nodes: dict[str, dict[str, object]] = {}
-    for stage in stages:
-        if stage.name.startswith(PARENT_ONLY):
-            continue
-        node = nodes.get(stage.name)
-        if node is None:
-            node = {"name": stage.name.rsplit(" > ", 1)[-1], "path": stage.name, "runs": 0, "wall_seconds": 0.0}
-            node["cpu_seconds"] = 0.0
-            node["children"] = []
-            nodes[stage.name] = node
-        node["runs"] = int(node["runs"]) + 1  # type: ignore[call-overload]
-        node["wall_seconds"] = round(float(node["wall_seconds"]) + stage.wall, 3)  # type: ignore[arg-type]
-        node["cpu_seconds"] = round(float(node["cpu_seconds"]) + stage.cpu, 3)  # type: ignore[arg-type]
-        for key in ("items", "jobs", "workers", "native_calls"):
-            if key in stage.detail:
-                node[key] = max(int(node.get(key, 0)), int(stage.detail[key]))  # type: ignore[call-overload]
-    for path, node in nodes.items():
-        node["cores"] = _cores(float(node["cpu_seconds"]), float(node["wall_seconds"]))  # type: ignore[arg-type]
-        node["cores"] = round(float(node["cores"]), 2)  # type: ignore[arg-type]
-        if path.endswith(" (own)"):
-            parent = path.removesuffix(" (own)")
-        else:
-            parent = path.rsplit(" > ", 1)[0] if " > " in path else ""
-        owner = nodes.get(parent)
-        kin: list[dict[str, object]] = roots if owner is None else owner["children"]  # type: ignore[assignment]
-        kin.append(node)
-    return roots
-
-
-def count(name: str, done: int, total: int) -> None:
-    if type(name) is not str or not name or type(done) is not int or type(total) is not int or not 0 <= done <= total:
-        raise ValueError(f"effort.count.{name}: required nonnegative integer done <= total")
-    with _lock:
-        row = _counts.setdefault(name, [0, 0])
-        row[0] += done
-        row[1] += total
-
-
-def name_of(fn: object) -> str:
-    module = getattr(fn, "__module__", type(fn).__module__) or ""
-    return f"{module.removeprefix('unbake.')}.{getattr(fn, '__qualname__', type(fn).__qualname__)}"
-
-
-@dataclass(frozen=True)
-class Mark:
-    wall: float
-    main: float
-    tools: float
-    pool: dict[str, tuple[float, int]]
-    window: int = 0
-    counts: dict[str, tuple[int, int]] = field(default_factory=dict)
-    host: float = 0.0
-    stage: int = 0
-    pools: int = 0
-
-
-def mark() -> Mark:
-    own = resource.getrusage(resource.RUSAGE_SELF)
-    children = resource.getrusage(resource.RUSAGE_CHILDREN)
-    with _lock:
-        pool = {name: (row[0], int(row[1])) for name, row in _ledger.items()}
-        counts = {name: (row[0], row[1]) for name, row in _counts.items()}
-        opened = len(_windows) - 1
-        staged = len(_stages)
-        pooled = len(_pools)
-    return Mark(
-        time.monotonic(),
-        own.ru_utime + own.ru_stime,
-        children.ru_utime + children.ru_stime,
-        pool,
-        opened,
-        counts,
-        host_busy(),
-        staged,
-        pooled,
-    )
-
-
-@dataclass(frozen=True)
-class Effort:
-    wall: float
-    main: float
-    tools: float
-    pool: dict[str, tuple[float, int]]
-    main_rss: int = 0
-    worker_rss: int = 0
-    counts: dict[str, tuple[int, int]] = field(default_factory=dict)
-    # CPU-seconds other processes on the host used meanwhile (host busy time less this command's).
-    external: float = 0.0
-    stages: tuple[Stage, ...] = ()
-    pools: tuple[dict[str, object], ...] = ()
-
-    @property
-    def cpu(self) -> float:
-        return self.main + self.tools + sum(seconds for seconds, _ in self.pool.values())
-
-    def stage_rows(self) -> list[dict[str, object]]:
-        """Each named stage once, in first-seen order: runs, wall seconds and cores used (CPU over wall)."""
-        rows: dict[str, list[float]] = {}
-        for name, wall, cpu, _ in self.stages:
-            row = rows.setdefault(name, [0, 0.0, 0.0])
-            row[0] += 1
-            row[1] += wall
-            row[2] += cpu
-        return [
-            {
-                "name": name,
-                "runs": int(r[0]),
-                "wall_seconds": round(r[1], 3),
-                "cores": round(r[2] / r[1], 2) if r[1] > 0 else 0.0,
-            }
-            for name, r in rows.items()
-        ]
-
-    @property
-    def external_cores(self) -> float:
-        return self.external / self.wall if self.wall > 0 else 0.0
-
-    @property
-    def percent(self) -> float:
-        return 100 * self.cpu / self.wall if self.wall > 0 else 0.0
-
-    def document(self) -> dict[str, object]:
-        return {
-            "wall_seconds": round(self.wall, 3),
-            "cpu_seconds": round(self.cpu, 3),
-            "cpu_percent": round(self.percent, 1),
-            "main_cpu_seconds": round(self.main, 3),
-            "tools_cpu_seconds": round(self.tools, 3),
-            "pool_cpu_seconds": round(sum(seconds for seconds, _ in self.pool.values()), 3),
-            "main_rss_bytes": self.main_rss,
-            "worker_rss_bytes": self.worker_rss,
-            "counts": {name: list(value) for name, value in sorted(self.counts.items())},
-            "pool": {
-                name: [round(seconds, 3), tasks]
-                for name, (seconds, tasks) in sorted(self.pool.items(), key=lambda item: -item[1][0])[:TOP]
-            },
-            "stages": self.stage_rows(),
-            "stage_tree": stage_tree(self.stages),
-            "pool_runs": list(self.pools),
-            "external_cpu_seconds": round(self.external, 3),
-            "external_cores": round(self.external_cores, 2),
-        }
-
-
-def since(start: Mark) -> Effort:
-    """What this process spent after START. Tools count once reaped; pool work counts once its task returned."""
-    end = mark()
-    pool = {}
-    for name, (seconds, tasks) in end.pool.items():
-        before = start.pool.get(name, (0.0, 0))
-        if tasks > before[1]:
-            pool[name] = (seconds - before[0], tasks - before[1])
-    counts = {}
-    for name, (done, total) in end.counts.items():
-        before_count = start.counts.get(name, (0, 0))
-        if total > before_count[1]:
-            counts[name] = (done - before_count[0], total - before_count[1])
-    with _lock:
-        _windows[-1][0] = max(_windows[-1][0], resident_peak())
-        seen = _windows[start.window :]
-        main_rss, worker_rss = max(row[0] for row in seen), max(row[1] for row in seen)
-    spent = Effort(
-        end.wall - start.wall, end.main - start.main, end.tools - start.tools, pool, main_rss, worker_rss, counts
-    )
-    # Pool CPU arrives when a task returns, so a window can count a task that started before it: never negative.
-    external = max(0.0, end.host - start.host - spent.cpu) if start.host and end.host else 0.0
-    with _lock:
-        staged = tuple(_stages[start.stage :])
-        pooled = tuple(_pools[start.pools :])
-    return replace(spent, external=external, stages=staged, pools=pooled)
-
-
-def step_findings(name: str, spent: Effort, budgets: Host) -> list[str]:
-    """A step over the host's [budgets], each named by its budget key: its memory, its CPU, and a single-core
-    stretch (this process's CPU above main_cpu_fraction of the step's, once it passes main_cpu_seconds)."""
-    found = [
-        f"budget.parent_only: {row[0].removeprefix(PARENT_ONLY)} ran in the parent process with workers > 1"
-        for row in spent.stages
-        if row[0].startswith(PARENT_ONLY)
-    ]
-    for field_name, value, limit in (
-        ("main_rss_bytes", spent.main_rss, budgets.main_rss_bytes),
-        ("worker_rss_bytes", spent.worker_rss, budgets.worker_rss_bytes),
-    ):
-        if value > limit:
-            found.append(f"budget.{field_name}: {name} peaked at {value / MB:.0f} MB, over {limit / MB:.0f} MB")
-    if spent.cpu > budgets.step_cpu_seconds:
-        found.append(f"budget.step_cpu_seconds: {name} spent {spent.cpu:.1f} cpu-s, over {budgets.step_cpu_seconds:g}")
-    if spent.main > budgets.main_cpu_seconds and spent.main > budgets.main_cpu_fraction * spent.cpu:
-        found.append(
-            f"budget.main_cpu_fraction: {name} spent {spent.main:.1f} of {spent.cpu:.1f} cpu-s in one process "
-            f"({spent.main / spent.cpu:.0%}), over {budgets.main_cpu_fraction:.0%}"
-        )
-    return found
-
-
-def contended(spent: Effort, budgets: Host) -> bool:
-    """Other processes kept at least contended_cores busy on average while this ran."""
-    return spent.wall > 0 and spent.external / spent.wall >= budgets.contended_cores
-
-
-def chain_findings(kind: str, spent: Effort, budgets: Host) -> tuple[list[str], list[str]]:
-    """A step chain against the host's [budgets]: (findings, contended). KIND is recompute, unchanged or changed.
-
-    The verdict is CPU time, which other processes cannot inflate. A wall-time miss is a finding too, unless other
-    processes kept contended_cores busy meanwhile: then it is reported as contended, not a failure. An unforced
-    solve's facts misses count against facts_miss_fraction."""
-    found: list[str] = []
-    notes: list[str] = []
-    seconds, cpu = {
-        "recompute": (budgets.recompute_seconds, budgets.recompute_cpu_seconds),
-        "unchanged": (budgets.unchanged_seconds, budgets.unchanged_cpu_seconds),
-        "changed": (budgets.changed_seconds, budgets.changed_cpu_seconds),
-    }[kind]
-    if spent.cpu > cpu:
-        found.append(f"budget.{kind}_cpu_seconds: the {kind} chain spent {spent.cpu:.1f} cpu-s, over {cpu:g}")
-    if spent.wall > seconds:
-        line = f"budget.{kind}_seconds: the {kind} chain took {spent.wall:.1f} s, over {seconds:g} s"
-        if contended(spent, budgets):
-            notes.append(f"contended {line} (other processes used {spent.external_cores:.1f} cores)")
-        else:
-            found.append(line)
-    done, total = spent.counts.get("facts", (0, 0))
-    fraction = budgets.facts_miss_fraction
-    if kind != "recompute" and total and done / total > fraction:
-        found.append(
-            f"budget.facts_miss_fraction: {done} of {total} source units extracted ({done / total:.2%}), "
-            f"over {fraction:.2%}"
-        )
-    return found, notes
+_buffer: list[StageRecord] = []
+_invocation = ""
+_memo: dict = {}  # pure readers' values for this command, by input digest
+_seen: set[tuple[str, ...]] = set()  # slow stage paths already closed in this command
+_listeners: list[Callable[[str, Json], None]] = []
+def memo(key: object, produce: Callable[[], object]) -> object:
+    """A pure reader's value for the running command: computed once per key, dropped when the command ends."""
+    if key not in _memo:
+        _memo[key] = produce()
+    return _memo[key]
+def listen(callback: Callable[[str, Json], None]) -> None:
+    _listeners.append(callback)
+def _notify(event: str, body: Json) -> None:
+    for callback in tuple(_listeners):
+        try:
+            callback(event, body)
+        except Exception as exc:
+            if _stack.get():
+                _stack.get()[-1].findings.append(Finding("effort.log", reason=f"Listener: {exc}", blocking=False))
+def progress(name: str, done: int, total: int) -> None:
+    _notify("progress", {"name": name, "done": done, "total": total})
+def closed() -> tuple[StageRecord, ...]:
+    return tuple(_closed)
+def _cpu() -> float:
+    usage = resource.getrusage(resource.RUSAGE_SELF)
+    return usage.ru_utime + usage.ru_stime
+class _Open:
+    def __init__(self, name: str, kind: str, parent: _Open | None = None):
+        self.span, self.parent = uuid4().hex, parent.span if parent else None
+        self.path, self.kind = (parent.path if parent else ()) + (name,), kind
+        self.start, self.cpu = time.perf_counter_ns(), _cpu()
+        self.rss = psutil.Process(os.getpid()).memory_info().rss if kind in ("command", "pool") else 0
+        self.cache, self.items, self.findings, self.children, self.wait = counters(), 0, [], [], 0.0
+        self.remote_cache: dict[str, tuple[int, int]] = {}
+    def add(self, *, items: int = 0, findings: Sequence[Finding] = ()) -> None:
+        self.items += items
+        self.findings.extend(findings)
+def waited(seconds: float) -> None:
+    _stack.get()[-1:] and setattr(_stack.get()[-1], "wait", _stack.get()[-1].wait + seconds)
+def _limits() -> dict:
+    keys = ("resources.memory_parent_bytes", "resources.memory_worker_bytes")
+    return {"memory_limits": {k: _config.host.origins[k] for k in keys},
+            "memory_limit_values": dict(zip(keys, (_config.host.memory_parent_bytes,
+                                                    _config.host.memory_worker_bytes), strict=True))} if _config else {}
+def _record(opened: _Open, wall: float, parent: float = 0, worker: float = 0,
+            native: float = 0, **values) -> StageRecord:
+    cores = (parent + worker + native) / wall if wall else 0
+    execution = "parallel" if _config and cores >= _config.host.serial_cores else "serial"
+    values.setdefault("wait_seconds", opened.wait)
+    return StageRecord(_invocation, opened.span, opened.parent, opened.path, opened.kind,
+                       "ok", execution, opened.start, wall, parent, worker, native, cores,
+                       values.pop("items", opened.items), values.pop("jobs", 0),
+                       values.pop("workers_used", 0), values.pop("workers_admitted", 0),
+                       values.pop("parent_rss_peak_bytes", 0), values.pop("worker_rss_peak_bytes", 0),
+                       **(_limits() if opened.parent is None else {}), **values)
+def _budget(record: StageRecord, leaf: bool) -> StageRecord:
+    """The watchdog: a stage that breaks a [budgets] rule carries a non-blocking budget.* finding naming it."""
+    if not _config or record.kind not in ("stage", "own", "pool"):
+        return record
+    host, found, cores, pool = _config.host, [], f"{record.cores:.2f} cores", record.kind == "pool"
+    slow = record.wall_seconds >= host.serial_seconds
+    hits, misses = (sum(v[i] for v in record.cache.values()) for i in (0, 1))
+    if leaf and slow and record.cores < host.serial_cores:
+        found.append(("single_core", "serial_seconds", f"ran {record.wall_seconds:.1f}s at {cores}"))
+    if pool and record.jobs >= host.pool_fanout * record.workers_admitted and (
+            record.cores < host.pool_fill * record.workers_admitted):
+        found.append(("pool_underused", "pool_fill", f"kept {cores} of {record.workers_admitted} workers busy"))
+    if pool and record.jobs and hits and not misses:
+        found.append(("warm_dispatch", "pool_fill", f"dispatched {record.jobs} jobs with every cache lookup warm"))
+    if slow and record.kind != "own":
+        if record.path in _seen:
+            found.append(("repeated", "serial_seconds", "closed twice in one command"))
+        _seen.add(record.path)
+    return replace(record, findings=(*record.findings, *(
+        Finding(f"budget.{key}", reason=f"{' > '.join(record.path)} {why}", blocking=False,
+                origin=host.origins[f"budgets.{name}"]) for key, name, why in found)))
+def _log_failure() -> Finding:
+    finding = Finding("effort.log", reason="Stage log could not be written.", blocking=False)
+    if _stack.get():
+        _stack.get()[0].findings.append(finding)
+    return finding
+def _emit(record: StageRecord, leaf: bool = False) -> StageRecord:
+    record = _budget(record, leaf)
+    if _sink and (record.parent is None or record.kind == "pool" or record.findings
+                  or record.wall_seconds >= _config.host.serial_seconds / 4):
+        try:
+            with _sink.open("a", encoding="utf-8") as stream:
+                stream.write(json.dumps(asdict(record)) + "\n")
+        except OSError:
+            finding = _log_failure()
+            if record.parent is None:
+                record = replace(record, findings=(*record.findings, finding))
+            _buffer.append(record)
+    elif not _sink:
+        _buffer.append(record)
+    _closed.append(record)
+    return record
+def _close(opened: _Open, status: str) -> StageRecord:
+    end = time.perf_counter_ns()
+    children = opened.children
+    wall = max(0, end - opened.start) / 1e9
+    parent = max(0, _cpu() - opened.cpu)
+    own_cpu = max(0, parent - sum(c.parent_cpu_seconds for c in children))
+    cache = {k: (v[0] - opened.cache.get(k, (0, 0))[0], v[1] - opened.cache.get(k, (0, 0))[1])
+             for k, v in counters().items()}
+    _merge_cache(cache, opened.remote_cache)
+    record = _record(opened, wall, parent, sum(c.worker_cpu_seconds for c in children),
+                     sum(c.native_cpu_seconds for c in children), cache=cache,
+                     items=opened.items + sum(c.items for c in children if c.kind == "pool"),
+                     jobs=sum(c.jobs for c in children),
+                     workers_used=max((c.workers_used for c in children), default=0),
+                     workers_admitted=max((c.workers_admitted for c in children), default=0),
+                     parent_rss_peak_bytes=max(opened.rss, psutil.Process(os.getpid()).memory_info().rss,
+                                               resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024),
+                     worker_rss_peak_bytes=max((c.worker_rss_peak_bytes for c in children), default=0))
+    if children:
+        covered, cursor = 0, opened.start
+        for start, stop in sorted((max(opened.start, c.start_ns), min(end, c.start_ns + int(c.wall_seconds * 1e9)))
+                                  for c in children):
+            covered += max(0, stop - max(cursor, start))
+            cursor = max(cursor, stop)
+        own = _Open.__new__(_Open)
+        own.span, own.parent, own.path = uuid4().hex, opened.span, (*opened.path, "(own)")
+        own.kind, own.start, own.items, own.wait = "own", opened.start, 0, 0.0
+        _emit(replace(_record(own, max(0, wall - covered / 1e9), own_cpu), status=status), True)
+    return replace(record, status=status)
+@contextmanager
+def _scope(opened: _Open):
+    token = _stack.set((*_stack.get(), opened))
+    status = "ok"
+    try:
+        if opened.kind in ("command", "stage", "pool"):
+            _notify("open", {"path": list(opened.path)})
+        yield opened
+    except BaseException as exc:
+        status = ("refused" if isinstance(exc, Refusal) else
+                  "interrupted" if isinstance(exc, KeyboardInterrupt) else "failed")
+        if isinstance(exc, Refusal):
+            opened.findings.extend(exc.findings)
+        raise
+    finally:
+        try:
+            record = _close(opened, status)
+            if opened.kind in ("command", "stage", "pool"):
+                _notify("close", {"path": list(opened.path), "wall": record.wall_seconds, "status": record.status})
+            record = _emit(replace(record, findings=tuple(opened.findings)), not opened.children)
+            stack = _stack.get()
+            if len(stack) > 1:
+                stack[-2].children.append(record)
+                _merge_cache(stack[-2].remote_cache, opened.remote_cache)
+        finally:
+            _stack.reset(token)
+@contextmanager
+def command(name: str, argv: Sequence[str]) -> ContextManager[None]:
+    global _closed, _counters, _config, _sink, _buffer, _invocation, _memo, _seen
+    _closed, _counters, _config, _sink, _buffer, _invocation = [], {}, None, None, [], uuid4().hex
+    _memo, _seen = {}, set()
+    token = _stack.set(())
+    try:
+        with _scope(_Open(name, "command")):
+            yield None
+    finally:
+        _stack.reset(token)
+def bind(config: Config) -> None:
+    global _config, _sink, _buffer
+    with stage("effort.bind"):
+        _config, _sink = config, config.project.root / ".unbake" / "stages.jsonl"
+        try:
+            _sink.parent.mkdir(parents=True, exist_ok=True)
+            with _sink.open("a", encoding="utf-8") as stream:
+                while _buffer:
+                    stream.write(json.dumps(asdict(_buffer[0])) + "\n")
+                    stream.flush()
+                    _buffer.pop(0)
+        except OSError:
+            _log_failure()
+@contextmanager
+def stage(name: str) -> ContextManager[Span]:
+    if not _stack.get():
+        yield _Null()
+    else:
+        with _scope(_Open(name, "stage", _stack.get()[-1])) as span:
+            yield span
+def record_native(name: str, result: NativeResult, start_ns: int) -> None:
+    if _stack.get():
+        opened = _Open(name, "native", _stack.get()[-1])
+        opened.start = start_ns
+        record = _emit(_record(opened, result.wall_seconds, native=result.cpu_seconds,
+                               worker_rss_peak_bytes=result.max_rss_bytes))
+        _stack.get()[-1].children.append(record)
+def record_pool(name: str, items: int, jobs: int, admitted: int, start_ns: int, envelopes: Sequence[Json],
+                dispatch_seconds: float = 0.0) -> None:
+    if not _stack.get():
+        return
+    opened = _Open(name, "pool", _stack.get()[-1])
+    opened.start = start_ns
+    cache: dict[str, tuple[int, int]] = {}
+    for envelope in envelopes:
+        _merge_cache(cache, envelope.get("cache", {}))
+        records = envelope.get("records", [])
+        ids = {r["span"]: uuid4().hex for r in records}
+        parents = {r["parent"] for r in records}  # a shipped stage nothing else hangs under is a worker's leaf
+        for raw in records:
+            values = dict(raw)
+            values.update(invocation=_invocation, span=ids[raw["span"]], parent=ids.get(raw["parent"], opened.span),
+                          path=opened.path + tuple(raw["path"]), parent_cpu_seconds=0,
+                          worker_cpu_seconds=raw["parent_cpu_seconds"] + raw["worker_cpu_seconds"],
+                          parent_rss_peak_bytes=0,
+                          worker_rss_peak_bytes=max(raw["parent_rss_peak_bytes"], raw["worker_rss_peak_bytes"]))
+            values["memory_limits"] = {k: Origin(**v) for k, v in raw.get("memory_limits", {}).items()}
+            values.update(_limits())
+            values["cache"] = {k: tuple(v) for k, v in raw.get("cache", {}).items()}
+            values["findings"] = tuple(Finding(**{**f, "versions": tuple(f.get("versions", ())),
+                                       "missing": tuple(f.get("missing", ())),
+                                       "origin": Origin(**f["origin"]) if f.get("origin") else None})
+                                       for f in raw.get("findings", []))
+            _emit(StageRecord(**values), raw["span"] not in parents)
+    record = _emit(_record(opened, max(0, time.perf_counter_ns() - start_ns) / 1e9,
+                           worker=sum(e["worker_cpu"] for e in envelopes),
+                           native=sum(e["native_cpu"] for e in envelopes),
+                           items=items, jobs=jobs, workers_admitted=admitted, cache=cache,
+                           workers_used=len({e["pid"] for e in envelopes}), dispatch_seconds=dispatch_seconds,
+                           busy_seconds=sum((e["end_ns"] - e["start_ns"]) / 1e9 for e in envelopes),
+                           worker_rss_peak_bytes=max((e["rss"] for e in envelopes), default=0)), True)
+    _stack.get()[-1].children.append(record)
+    _merge_cache(_stack.get()[-1].remote_cache, cache)
+class _Null:
+    def add(self, *, items: int = 0, findings: Sequence[Finding] = ()) -> None:
+        pass
+def _merge_cache(target: dict, source: dict) -> None:
+    for key, pair in source.items():
+        previous = target.get(key, (0, 0))
+        target[key] = (previous[0] + pair[0], previous[1] + pair[1])
+def count(kind: str, hit: bool) -> None:
+    _counters.setdefault(kind, [0, 0])[0 if hit else 1] += 1
+def counters() -> dict[str, tuple[int, int]]:
+    return {k: (v[0], v[1]) for k, v in _counters.items()}
+@contextmanager
+def capture() -> ContextManager[list[StageRecord]]:
+    global _closed, _counters, _sink, _buffer, _invocation, _seen
+    saved = _closed, _counters, _sink, _buffer, _invocation, _seen
+    _closed, _counters, _sink, _buffer, _invocation, _seen = [], {}, None, [], uuid4().hex, set()
+    token = _stack.set(())
+    try:
+        with _scope(_Open("job", "job")):
+            yield _closed
+    finally:
+        _stack.reset(token)
+        _closed, _counters, _sink, _buffer, _invocation, _seen = saved
+def tree() -> Json:
+    nodes = {r.span: {**asdict(r), "children": []} for r in _closed}
+    roots = []
+    for record in _closed:
+        (nodes[record.parent]["children"] if record.parent in nodes else roots).append(nodes[record.span])
+    return roots[-1] if roots else {}
+def invocation() -> str:
+    return _invocation

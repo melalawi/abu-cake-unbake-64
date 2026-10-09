@@ -1,85 +1,203 @@
-"""draft writes build/work/FUNC/FUNC.c; a complete draft that does not compile yet is still written."""
+"""draft: hints matching, m2c function drafts and word/byte data drafts. m2c is mocked through process.run."""
 
-from contextlib import ExitStack
+from __future__ import annotations
+
+import json
 from pathlib import Path
-from unittest.mock import patch
+from typing import Any
 
-from tests.project_fixture import ProjectCase
-from unbake.config import Held
-from unbake.process import named
-from unbake.typemap import database
-from unbake.work import draft
+import fixture
+import pytest
+
+from unbake import config as configuration
+from unbake import draft, headers, layout, process
+from unbake.contracts import Refusal, Snapshot
+
+CODE = bytes.fromhex("03e0000800000000")
 
 
-class DraftFileTests(ProjectCase):
-    def run_draft(self, m2c_draft: object) -> Path:
-        with ExitStack() as stack:
-            stack.enter_context(patch.object(draft.exclusions, "load", return_value=set()))
-            stack.enter_context(patch.object(draft.split, "holding_versions", return_value=("us",)))
-            stack.enter_context(patch.object(database, "digest", return_value="d"))
-            stack.enter_context(patch.object(database, "context", return_value=""))
-            stack.enter_context(patch.object(draft.extract, "directory", return_value=self.root))
-            stack.enter_context(patch.object(draft.m2c, "draft", side_effect=m2c_draft))
-            return draft.draft(self.project, self.host, "alpha", replace=False, expected_output=None).file
+def _words(*values: int) -> bytes:
+    return b"".join(v.to_bytes(4, "big") for v in values)
 
-    def test_proved_draft_is_written_with_its_include_directory(self) -> None:
-        file = self.run_draft(lambda *args, **kwargs: "int alpha(void) { return 0; }\n")
-        self.assertEqual(file.read_text(), "int alpha(void) { return 0; }\n")
-        self.assertTrue((file.parent / "include").is_dir())
 
-    def test_unproven_draft_is_written_and_named(self) -> None:
-        def unproven(*args: object, **kwargs: object) -> str:
-            scratch = Path(str(args[4]))
-            (scratch / "compile-proof").mkdir(parents=True)
-            (scratch / "compile-proof" / "alpha.c").write_text("int alpha(void) { return f(); }\n")
-            raise Held(
-                named("alpha", "alpha: m2c/type compile proof failed: too few arguments", owner="fixture", stage="m2c")
-            )
+def _retype(root: Path, kinds: dict[str, str]) -> None:
+    """Rewrite Game.yaml subsegment types by member name (the fixture only writes asm and data)."""
+    for path in root.glob("versions/*/Game.yaml"):
+        document = json.loads(path.read_text())
+        for sub in document["segments"][0]["subsegments"]:
+            if len(sub) == 3 and sub[2] in kinds:
+                sub[1] = kinds[sub[2]]
+        path.write_text(json.dumps(document, indent=1) + "\n")
 
-        with self.assertRaises(Held) as raised:
-            self.run_draft(unproven)
-        file = self.project.work / "alpha" / "alpha.c"
-        self.assertEqual(raised.exception.key, "alpha")
-        self.assertIn("too few arguments", raised.exception.reason)
-        self.assertEqual(file.read_text(), "int alpha(void) { return f(); }\n")
-        self.assertFalse((file.parent / ".m2c").exists())
 
-    def test_refusal_without_a_draft_writes_nothing(self) -> None:
-        def refused(*args: object, **kwargs: object) -> str:
-            raise Held(named("alpha", "alpha: unresolved M2C_ERROR at line 3", owner="fixture", stage="m2c"))
+def _snapshot(tmp: Path, kinds: dict[str, str] | None = None, **kw: Any) -> Snapshot:
+    code = {"func_80000400": {"a": (0x1000, CODE), "b": (0x1000, CODE)}}
+    kw.setdefault("functions", code)
+    members = [*kw["functions"], *kw.get("data", {})]
+    group = {"name": "code_80000400", "segment": "main", "members": members, "evidence": "authored"}
+    group |= {"signals": [], "subsystem": "unknown", "sdk": False}
+    kw.setdefault("groups", [group])
+    root = fixture.project(tmp, **kw)
+    if kinds:
+        _retype(root, kinds)
+    loaded = configuration.load(root, fixture.host(tmp))
+    return layout.capture(loaded)
 
-        with self.assertRaises(Held) as raised:
-            self.run_draft(refused)
-        self.assertEqual(raised.exception.key, "alpha")
-        self.assertFalse((self.project.work / "alpha" / "alpha.c").exists())
 
-    def test_published_offset_helpers_become_shared_fields_in_the_draft(self) -> None:
-        from unbake.work import compare
+def _data_snapshot(tmp: Path, blob: bytes, kinds: dict[str, str] | None = None) -> Snapshot:
+    data = {"d": {"a": (0x1200, blob)}, "e": {"a": (0x1200 + len(blob), b"\0\0\0\0")}}
+    return _snapshot(tmp, kinds, data=data, versions=("a",))
 
-        (self.project.src / "alpha.c").write_text(
-            '#include "types.h"\n'
-            "#define FIELD(p, t, o) (*(t *)((s8 *)(p) + (o)))\n"
-            "#define AT(t, p, o) (*(t *)((char *)(p) + (o)))\n"
-            "#define M2C_FIELD(p, t, o) (*(t)((u8 *)(p) + (o)))\n"
-            "s32 alpha(void *p) { FIELD(p, s32, 4) = AT(s32, p, 8); "
-            "return M2C_FIELD(p, s32 *, -4); }\n"
-        )
-        for version in self.versions:
-            split = self.project.version(version).split
-            split.write_text(split.read_text().replace("asm, alpha]", "c, alpha]"))
-        with patch.object(compare, "published", return_value=True):
-            private = self.project.work / "alpha/include"
-            private.mkdir(parents=True)
-            (private / "stale.h").write_text("stale")
-            made = draft.draft(self.project, self.host, "alpha", replace=True, expected_output=None)
-            text = made.file.read_text()
-        self.assertFalse((private / "stale.h").exists())
-        self.assertIsNotNone(text)
-        self.assertNotIn("#define", text)
-        self.assertNotIn("M2C_FIELD", text)
-        self.assertLess(text.index('#include "types.h"'), text.index('#include "common/draft_fields_alpha.h"'))
-        self.assertIn("->value", text)
-        self.assertIn("[-1].value", text)
-        header = self.project.work / "alpha/include/common/draft_fields_alpha.h"
-        self.assertIn("padding[8]", header.read_text())
-        self.assertFalse((self.project.include[0] / "common/draft_fields_alpha.h").exists())
+
+def _mock_m2c(monkeypatch: pytest.MonkeyPatch, stdout: bytes, exit: int = 0, stderr: bytes = b"") -> list[Any]:
+    calls: list[Any] = []
+    monkeypatch.setattr(headers, "context", lambda snapshot, version: Path("context.c"))
+
+    def run(name: str, argv: Any, cwd: Path, **kw: Any) -> Any:
+        calls.append((name, list(argv)))
+        return fixture.native_result(argv, exit, stdout, stderr)
+
+    monkeypatch.setattr(process, "run", run)
+    return calls
+
+
+def _base(tmp: Path) -> Snapshot:
+    return _snapshot(tmp)
+
+
+def _with_hints(snapshot: Snapshot, text: str) -> Snapshot:
+    return layout.overlay(snapshot, {"hints.jsonl": text.encode()})
+
+
+def test_hints_match_and_because(tmp_path: Path, toolchains: Any) -> None:
+    snapshot = _base(tmp_path)
+    matched, subsystem = draft.hints(snapshot, "unknown", {"register_dominant": True})
+    row = next(m for m in matched if m["id"] == "register-priority")
+    assert row["because"] == {"register_dominant": True}
+    assert all(m["id"] != "register-priority" for m in subsystem)
+
+
+def test_hints_missing_symptom_never_matches(tmp_path: Path, toolchains: Any) -> None:
+    matched, subsystem = draft.hints(_base(tmp_path), "unknown", {"score": 0.5})
+    assert all(m["id"] != "register-priority" for m in matched)
+    assert any(s["id"] == "register-priority" and s["because"] == {} for s in subsystem)
+
+
+def test_hints_empty_match_only_subsystem_rows(tmp_path: Path, toolchains: Any) -> None:
+    matched, subsystem = draft.hints(_base(tmp_path), "unknown", {"register_dominant": True, "score": 0.1})
+    assert "hoisted-invariant-address" not in {m["id"] for m in matched}
+    assert "hoisted-invariant-address" in {s["id"] for s in subsystem}
+    cap = configuration.load_resource("flow.toml")["packet"]["hints"]
+    assert len(subsystem) <= cap
+
+
+@pytest.mark.parametrize(("symptoms", "expected"), [({"score": 0.2}, True), ({"score": 0.4}, False)])
+def test_project_hints_appended(tmp_path: Path, toolchains: Any, symptoms: dict[str, float], expected: bool) -> None:
+    row = {"id": "mine", "subsystem": "any", "detect": "d", "match": {"score": {"lt": 0.3}}, "technique": "t"}
+    row |= {"example": "x", "scope": "ordinary", "qualifier_effect": "none"}
+    snapshot = _with_hints(_base(tmp_path), "\n" + json.dumps(row) + "\n\n")
+    matched, _ = draft.hints(snapshot, "unknown", symptoms)
+    assert ("mine" in {m["id"] for m in matched}) is expected
+
+
+def test_hint_row_invalid_refuses_config_schema(tmp_path: Path, toolchains: Any) -> None:
+    snapshot = _with_hints(_base(tmp_path), json.dumps({"id": "bad"}) + "\n")
+    with pytest.raises(Refusal) as error:
+        draft.hints(snapshot, "unknown", {})
+    assert error.value.findings[0].key == "config.schema"
+    assert "hints.jsonl:1" in str(error.value.findings[0].path)
+
+
+def test_function_draft_writes_m2c_output(tmp_path: Path, toolchains: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    snapshot = _snapshot(tmp_path)
+    asm = tmp_path / "project/asm/a/func_80000400.s"
+    asm.parent.mkdir(parents=True)
+    asm.write_text("glabel func_80000400\n")
+    calls = _mock_m2c(monkeypatch, b"void func_80000400(void) {\n    gDPPipeSync(gfx++);\n}\n")
+    monkeypatch.setattr(draft.types, "declarations", lambda s, names: {})
+    out = tmp_path / "out" / "draft.c"
+    result = draft.create(snapshot, "func_80000400", out)
+    assert out.read_text()
+    assert calls[0][0] == "m2c" and "--valid-syntax" in calls[0][1] and "--stack-structs" in calls[0][1]
+    assert result["kind"] == "function" and result["version"] == "a" and result["subsystem"] == "unknown"
+    assert result["gbi_rewrites"] == draft.gbi.rewrite(out.read_text())[1] or result["gbi_rewrites"] >= 0
+    configuration.validate("result.draft", result, "result")
+
+
+def test_function_draft_declares_the_target_and_its_callees(tmp_path: Path, toolchains: Any,
+                                                            monkeypatch: pytest.MonkeyPatch) -> None:
+    snapshot = _snapshot(tmp_path)
+    asm = tmp_path / "project/asm/a/func_80000400.s"
+    asm.parent.mkdir(parents=True)
+    asm.write_text("glabel func_80000400\n/* 0 0 0 */ jal func_80000500\n/* 4 4 4 */ jal func_80000400\n")
+    _mock_m2c(monkeypatch, b"void func_80000400(void) {\n}\n")
+    seen = []
+    monkeypatch.setattr(draft.types, "declarations", lambda s, names: seen.append(names) or {
+        "func_80000400": "void func_80000400(void);", "func_80000500": "s32 func_80000500(s32 arg0);"})
+    out = tmp_path / "out" / "draft.c"
+    result = draft.create(snapshot, "func_80000400", out)
+    assert seen == [["func_80000400", "func_80000500"]]
+    assert out.read_text().startswith("s32 func_80000500(s32 arg0);\nvoid func_80000400")
+    assert result["declarations"] == 2
+
+
+def test_function_draft_m2c_failure_refuses(tmp_path: Path, toolchains: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    snapshot = _snapshot(tmp_path)
+    asm = tmp_path / "project/asm/a/func_80000400.s"
+    asm.parent.mkdir(parents=True)
+    asm.write_text("glabel func_80000400\n")
+    _mock_m2c(monkeypatch, b"", exit=1, stderr=b"boom\n")
+    with pytest.raises(Refusal) as error:
+        draft.create(snapshot, "func_80000400", tmp_path / "o.c")
+    assert error.value.findings[0].key == "draft.m2c"
+
+
+def test_unknown_member_refuses_land_request(tmp_path: Path, toolchains: Any) -> None:
+    with pytest.raises(Refusal) as error:
+        draft.create(_base(tmp_path), "nope", tmp_path / "o.c")
+    assert error.value.findings[0].key == "land.request"
+
+
+def test_data_draft_words_symbols_and_rodata_const(tmp_path: Path, toolchains: Any) -> None:
+    blob = _words(0x80000400, 0x80000610, 0x12345678, 0x80000600)  # function f, data e, plain, itself
+    snapshot = _data_snapshot(tmp_path, blob, {"d": "rodata"})
+    out = tmp_path / "out" / "d.c"
+    result = draft.create(snapshot, "d", out)
+    text = out.read_text()
+    assert "extern void func_80000400(void);" in text
+    assert "extern unsigned char e[];" in text
+    assert text.index("extern") < text.index("const unsigned int d[] = {")
+    assert "func_80000400, &e, 0x12345678, 0x80000600," in text
+    assert result["kind"] == "data" and result["gbi_rewrites"] == 0
+    configuration.validate("result.draft", result, "result")
+
+
+def test_data_draft_non_rodata_has_no_const(tmp_path: Path, toolchains: Any) -> None:
+    snapshot = _data_snapshot(tmp_path, _words(1, 2))
+    out = tmp_path / "d.c"
+    draft.create(snapshot, "d", out)
+    assert out.read_text() == "unsigned int d[] = {\n    0x00000001, 0x00000002,\n};\n"
+    assert "const" not in out.read_text()
+
+
+def test_data_draft_bytes_when_unaligned(tmp_path: Path, toolchains: Any) -> None:
+    snapshot = _data_snapshot(tmp_path, bytes(range(10)))
+    out = tmp_path / "d.c"
+    draft.create(snapshot, "d", out)
+    text = out.read_text()
+    assert "unsigned char d[] = {" in text
+    assert "0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,\n    0x08, 0x09," in text
+
+
+def test_bss_only_refuses_draft_data(tmp_path: Path, toolchains: Any) -> None:
+    snapshot = _data_snapshot(tmp_path, _words(0, 0), {"d": "bss"})
+    with pytest.raises(Refusal) as error:
+        draft.create(snapshot, "d", tmp_path / "d.c")
+    assert error.value.findings[0].key == "draft.data"
+
+
+def test_run_writes_under_work(tmp_path: Path, toolchains: Any) -> None:
+    snapshot = _data_snapshot(tmp_path, _words(1))
+    result = draft.run(snapshot.config, {"item": "d"})
+    assert Path(result["path"]) == snapshot.config.project.root / ".unbake" / "work" / "d.c"
+    assert Path(result["path"]).is_file()

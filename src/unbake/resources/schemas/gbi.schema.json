@@ -1,0 +1,164 @@
+{
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "$id": "unbake:gbi",
+ "type": "object",
+ "properties": {
+  "schema": {
+   "const": 2
+  },
+  "command": {
+   "type": "array",
+   "items": {
+    "type": "object",
+    "properties": {
+     "macro": {
+      "type": "string",
+      "minLength": 1
+     },
+     "opcode": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 255
+     },
+     "words": {
+      "enum": [
+       2
+      ]
+     },
+     "variants": {
+      "type": "array",
+      "items": {
+       "type": "object",
+       "properties": {
+        "microcode": {
+         "enum": [
+          "f3d",
+          "f3dex",
+          "f3dex2"
+         ]
+        },
+        "opcode": {
+         "type": "integer",
+         "minimum": 0
+        }
+       },
+       "required": [
+        "microcode",
+        "opcode"
+       ],
+       "additionalProperties": false
+      }
+     },
+     "microcode": {
+      "enum": [
+       "f3d",
+       "f3dex",
+       "f3dex2"
+      ]
+     },
+     "args": {
+      "type": "array",
+      "items": {
+       "type": "string",
+       "minLength": 1
+      }
+     },
+     "fields": {
+      "type": "array",
+      "items": {
+       "type": "object",
+       "properties": {
+        "name": {
+         "type": "string",
+         "minLength": 1
+        },
+        "word": {
+         "enum": [
+          0,
+          1
+         ]
+        },
+        "shift": {
+         "type": "integer",
+         "minimum": 0,
+         "maximum": 31
+        },
+        "bits": {
+         "type": "integer",
+         "minimum": 1,
+         "maximum": 32
+        },
+        "match": {
+         "type": "integer",
+         "minimum": 0
+        },
+        "bias": {
+         "type": "integer"
+        },
+        "scale": {
+         "type": "integer",
+         "minimum": 1
+        },
+        "divisor": {
+         "type": "integer",
+         "minimum": 1
+        },
+        "xor": {
+         "type": "integer",
+         "minimum": 0
+        },
+        "choices": {
+         "type": "object",
+         "additionalProperties": {
+          "type": "string",
+          "minLength": 1
+         }
+        },
+        "flags": {
+         "type": "object",
+         "additionalProperties": {
+          "type": "string",
+          "minLength": 1
+         }
+        },
+        "constant": {
+         "type": "string",
+         "minLength": 1
+        },
+        "subtract": {
+         "type": "string",
+         "minLength": 1
+        },
+        "reverse": {
+         "type": "integer"
+        },
+        "strict": {
+         "type": "boolean"
+        }
+       },
+       "required": [
+        "name",
+        "word",
+        "shift",
+        "bits"
+       ],
+       "additionalProperties": false
+      }
+     }
+    },
+    "required": [
+     "macro",
+     "opcode",
+     "words",
+     "fields"
+    ],
+    "additionalProperties": false
+   }
+  }
+ },
+ "required": [
+  "schema",
+  "command"
+ ],
+ "additionalProperties": false
+}

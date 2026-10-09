@@ -1,0 +1,3348 @@
+# Bit layouts and inverse transforms from the old GBI decoder. No opcode dispatch in Python.
+schema = 2
+
+[[command]]
+macro = "gDPLoadSync"
+opcode = 230
+words = 2
+fields = []
+
+[[command]]
+macro = "gDPPipeSync"
+opcode = 231
+words = 2
+fields = []
+
+[[command]]
+macro = "gDPTileSync"
+opcode = 232
+words = 2
+fields = []
+
+[[command]]
+macro = "gDPFullSync"
+opcode = 233
+words = 2
+fields = []
+
+[[command]]
+macro = "gSPEndDisplayList"
+opcode = 223
+words = 2
+fields = []
+
+[[command.variants]]
+microcode = "f3d"
+opcode = 184
+
+[[command.variants]]
+microcode = "f3dex"
+opcode = 184
+
+[[command.variants]]
+microcode = "f3dex2"
+opcode = 223
+
+[[command]]
+macro = "gSPDisplayList"
+opcode = 222
+words = 2
+
+[[command.fields]]
+name = "branch"
+word = 0
+shift = 16
+bits = 8
+match = 0
+
+[[command.fields]]
+name = "dl"
+word = 1
+shift = 0
+bits = 32
+
+[[command.variants]]
+microcode = "f3d"
+opcode = 6
+
+[[command.variants]]
+microcode = "f3dex"
+opcode = 6
+
+[[command.variants]]
+microcode = "f3dex2"
+opcode = 222
+
+[[command]]
+macro = "gSPBranchList"
+opcode = 222
+words = 2
+
+[[command.fields]]
+name = "branch"
+word = 0
+shift = 16
+bits = 8
+match = 1
+
+[[command.fields]]
+name = "dl"
+word = 1
+shift = 0
+bits = 32
+
+[[command.variants]]
+microcode = "f3d"
+opcode = 6
+
+[[command.variants]]
+microcode = "f3dex"
+opcode = 6
+
+[[command.variants]]
+microcode = "f3dex2"
+opcode = 222
+
+[[command]]
+macro = "gDPSetFillColor"
+opcode = 247
+words = 2
+
+[[command.fields]]
+name = "color"
+word = 1
+shift = 0
+bits = 32
+
+[[command]]
+macro = "gDPSetDepthImage"
+opcode = 254
+words = 2
+
+[[command.fields]]
+name = "address"
+word = 1
+shift = 0
+bits = 32
+
+[[command]]
+macro = "gDPSetFogColor"
+opcode = 248
+words = 2
+
+[[command.fields]]
+name = "r"
+word = 1
+shift = 24
+bits = 8
+
+[[command.fields]]
+name = "g"
+word = 1
+shift = 16
+bits = 8
+
+[[command.fields]]
+name = "b"
+word = 1
+shift = 8
+bits = 8
+
+[[command.fields]]
+name = "a"
+word = 1
+shift = 0
+bits = 8
+
+[[command]]
+macro = "gDPSetBlendColor"
+opcode = 249
+words = 2
+
+[[command.fields]]
+name = "r"
+word = 1
+shift = 24
+bits = 8
+
+[[command.fields]]
+name = "g"
+word = 1
+shift = 16
+bits = 8
+
+[[command.fields]]
+name = "b"
+word = 1
+shift = 8
+bits = 8
+
+[[command.fields]]
+name = "a"
+word = 1
+shift = 0
+bits = 8
+
+[[command]]
+macro = "gDPSetPrimColor"
+opcode = 250
+words = 2
+
+[[command.fields]]
+name = "m"
+word = 0
+shift = 8
+bits = 8
+
+[[command.fields]]
+name = "l"
+word = 0
+shift = 0
+bits = 8
+
+[[command.fields]]
+name = "r"
+word = 1
+shift = 24
+bits = 8
+
+[[command.fields]]
+name = "g"
+word = 1
+shift = 16
+bits = 8
+
+[[command.fields]]
+name = "b"
+word = 1
+shift = 8
+bits = 8
+
+[[command.fields]]
+name = "a"
+word = 1
+shift = 0
+bits = 8
+
+[[command]]
+macro = "gDPSetEnvColor"
+opcode = 251
+words = 2
+
+[[command.fields]]
+name = "r"
+word = 1
+shift = 24
+bits = 8
+
+[[command.fields]]
+name = "g"
+word = 1
+shift = 16
+bits = 8
+
+[[command.fields]]
+name = "b"
+word = 1
+shift = 8
+bits = 8
+
+[[command.fields]]
+name = "a"
+word = 1
+shift = 0
+bits = 8
+
+[[command]]
+macro = "gDPTexRect"
+opcode = 228
+words = 2
+
+[[command.fields]]
+name = "ulx"
+word = 1
+shift = 12
+bits = 12
+
+[[command.fields]]
+name = "uly"
+word = 1
+shift = 0
+bits = 12
+
+[[command.fields]]
+name = "lrx"
+word = 0
+shift = 12
+bits = 12
+
+[[command.fields]]
+name = "lry"
+word = 0
+shift = 0
+bits = 12
+
+[[command.fields]]
+name = "tile"
+word = 1
+shift = 24
+bits = 3
+
+[[command]]
+macro = "gDPFillRectangle"
+opcode = 246
+words = 2
+
+[[command.fields]]
+name = "ulx"
+word = 1
+shift = 14
+bits = 10
+
+[[command.fields]]
+name = "uly"
+word = 1
+shift = 2
+bits = 10
+
+[[command.fields]]
+name = "lrx"
+word = 0
+shift = 14
+bits = 10
+
+[[command.fields]]
+name = "lry"
+word = 0
+shift = 2
+bits = 10
+
+[[command]]
+macro = "gDPSetTileSize"
+opcode = 242
+words = 2
+
+[[command.fields]]
+name = "tile"
+word = 1
+shift = 24
+bits = 3
+
+[[command.fields]]
+name = "uls"
+word = 0
+shift = 12
+bits = 12
+
+[[command.fields]]
+name = "ult"
+word = 0
+shift = 0
+bits = 12
+
+[[command.fields]]
+name = "lrs"
+word = 1
+shift = 12
+bits = 12
+
+[[command.fields]]
+name = "lrt"
+word = 1
+shift = 0
+bits = 12
+
+[[command]]
+macro = "gDPLoadBlock"
+opcode = 243
+words = 2
+
+[[command.fields]]
+name = "tile"
+word = 1
+shift = 24
+bits = 3
+
+[[command.fields]]
+name = "uls"
+word = 0
+shift = 12
+bits = 12
+
+[[command.fields]]
+name = "ult"
+word = 0
+shift = 0
+bits = 12
+
+[[command.fields]]
+name = "lrs"
+word = 1
+shift = 12
+bits = 12
+
+[[command.fields]]
+name = "lrt"
+word = 1
+shift = 0
+bits = 12
+
+[[command]]
+macro = "gDPLoadTile"
+opcode = 244
+words = 2
+
+[[command.fields]]
+name = "tile"
+word = 1
+shift = 24
+bits = 3
+
+[[command.fields]]
+name = "uls"
+word = 0
+shift = 12
+bits = 12
+
+[[command.fields]]
+name = "ult"
+word = 0
+shift = 0
+bits = 12
+
+[[command.fields]]
+name = "lrs"
+word = 1
+shift = 12
+bits = 12
+
+[[command.fields]]
+name = "lrt"
+word = 1
+shift = 0
+bits = 12
+
+[[command]]
+macro = "gDPSetTile"
+opcode = 245
+words = 2
+
+[[command.fields]]
+name = "fmt"
+word = 0
+shift = 21
+bits = 3
+
+[command.fields.choices]
+0 = "G_IM_FMT_RGBA"
+1 = "G_IM_FMT_YUV"
+2 = "G_IM_FMT_CI"
+3 = "G_IM_FMT_IA"
+4 = "G_IM_FMT_I"
+
+[[command.fields]]
+name = "siz"
+word = 0
+shift = 19
+bits = 2
+
+[command.fields.choices]
+0 = "G_IM_SIZ_4b"
+1 = "G_IM_SIZ_8b"
+2 = "G_IM_SIZ_16b"
+3 = "G_IM_SIZ_32b"
+
+[[command.fields]]
+name = "line"
+word = 0
+shift = 9
+bits = 9
+
+[[command.fields]]
+name = "tmem"
+word = 0
+shift = 0
+bits = 9
+
+[[command.fields]]
+name = "tile"
+word = 1
+shift = 24
+bits = 3
+
+[[command.fields]]
+name = "palette"
+word = 1
+shift = 20
+bits = 4
+
+[[command.fields]]
+name = "cmt"
+word = 1
+shift = 18
+bits = 2
+
+[[command.fields]]
+name = "maskt"
+word = 1
+shift = 14
+bits = 4
+
+[[command.fields]]
+name = "shiftt"
+word = 1
+shift = 10
+bits = 4
+
+[[command.fields]]
+name = "cms"
+word = 1
+shift = 8
+bits = 2
+
+[[command.fields]]
+name = "masks"
+word = 1
+shift = 4
+bits = 4
+
+[[command.fields]]
+name = "shifts"
+word = 1
+shift = 0
+bits = 4
+
+[[command]]
+macro = "gDPLoadTLUTCmd"
+opcode = 240
+words = 2
+
+[[command.fields]]
+name = "tile"
+word = 1
+shift = 24
+bits = 3
+
+[[command.fields]]
+name = "count"
+word = 1
+shift = 14
+bits = 10
+
+[[command]]
+macro = "gDPSetScissorFrac"
+opcode = 237
+words = 2
+
+[[command.fields]]
+name = "mode"
+word = 1
+shift = 24
+bits = 2
+
+[[command.fields]]
+name = "ulx"
+word = 0
+shift = 12
+bits = 12
+
+[[command.fields]]
+name = "uly"
+word = 0
+shift = 0
+bits = 12
+
+[[command.fields]]
+name = "lrx"
+word = 1
+shift = 12
+bits = 12
+
+[[command.fields]]
+name = "lry"
+word = 1
+shift = 0
+bits = 12
+
+[[command]]
+macro = "gDPSetPrimDepth"
+opcode = 238
+words = 2
+
+[[command.fields]]
+name = "z"
+word = 1
+shift = 16
+bits = 16
+
+[[command.fields]]
+name = "dz"
+word = 1
+shift = 0
+bits = 16
+
+[[command]]
+macro = "gDPSetTextureImage"
+opcode = 253
+words = 2
+
+[[command.fields]]
+name = "format"
+word = 0
+shift = 21
+bits = 3
+
+[command.fields.choices]
+0 = "G_IM_FMT_RGBA"
+1 = "G_IM_FMT_YUV"
+2 = "G_IM_FMT_CI"
+3 = "G_IM_FMT_IA"
+4 = "G_IM_FMT_I"
+
+[[command.fields]]
+name = "size"
+word = 0
+shift = 19
+bits = 2
+
+[command.fields.choices]
+0 = "G_IM_SIZ_4b"
+1 = "G_IM_SIZ_8b"
+2 = "G_IM_SIZ_16b"
+3 = "G_IM_SIZ_32b"
+
+[[command.fields]]
+name = "width"
+word = 0
+shift = 0
+bits = 12
+bias = 1
+
+[[command.fields]]
+name = "image"
+word = 1
+shift = 0
+bits = 32
+
+[[command]]
+macro = "gDPSetColorImage"
+opcode = 255
+words = 2
+
+[[command.fields]]
+name = "format"
+word = 0
+shift = 21
+bits = 3
+
+[command.fields.choices]
+0 = "G_IM_FMT_RGBA"
+1 = "G_IM_FMT_YUV"
+2 = "G_IM_FMT_CI"
+3 = "G_IM_FMT_IA"
+4 = "G_IM_FMT_I"
+
+[[command.fields]]
+name = "size"
+word = 0
+shift = 19
+bits = 2
+
+[command.fields.choices]
+0 = "G_IM_SIZ_4b"
+1 = "G_IM_SIZ_8b"
+2 = "G_IM_SIZ_16b"
+3 = "G_IM_SIZ_32b"
+
+[[command.fields]]
+name = "width"
+word = 0
+shift = 0
+bits = 12
+bias = 1
+
+[[command.fields]]
+name = "image"
+word = 1
+shift = 0
+bits = 32
+
+[[command]]
+macro = "gSPMatrix"
+opcode = 218
+words = 2
+microcode = "f3dex2"
+
+[[command.fields]]
+name = "matrix"
+word = 1
+shift = 0
+bits = 32
+
+[[command.fields]]
+name = "param"
+word = 0
+shift = 0
+bits = 8
+xor = 1
+
+[command.fields.flags]
+1 = "G_MTX_PUSH"
+2 = "G_MTX_LOAD"
+4 = "G_MTX_PROJECTION"
+
+[[command.fields]]
+name = "dma"
+word = 0
+shift = 19
+bits = 5
+match = 7
+
+[[command]]
+macro = "gSPMatrix"
+opcode = 1
+words = 2
+microcode = "f3d"
+
+[[command.fields]]
+name = "matrix"
+word = 1
+shift = 0
+bits = 32
+
+[[command.fields]]
+name = "param"
+word = 0
+shift = 16
+bits = 8
+
+[command.fields.flags]
+1 = "G_MTX_PROJECTION"
+2 = "G_MTX_LOAD"
+4 = "G_MTX_PUSH"
+
+[[command.fields]]
+name = "dma"
+word = 0
+shift = 0
+bits = 16
+match = 64
+
+[[command]]
+macro = "gSPMatrix"
+opcode = 1
+words = 2
+microcode = "f3dex"
+
+[[command.fields]]
+name = "matrix"
+word = 1
+shift = 0
+bits = 32
+
+[[command.fields]]
+name = "param"
+word = 0
+shift = 16
+bits = 8
+
+[command.fields.flags]
+1 = "G_MTX_PROJECTION"
+2 = "G_MTX_LOAD"
+4 = "G_MTX_PUSH"
+
+[[command.fields]]
+name = "dma"
+word = 0
+shift = 0
+bits = 16
+match = 64
+
+[[command]]
+macro = "gSPSegment"
+opcode = 219
+words = 2
+microcode = "f3dex2"
+
+[[command.fields]]
+name = "index"
+word = 0
+shift = 16
+bits = 8
+match = 6
+
+[[command.fields]]
+name = "segment"
+word = 0
+shift = 0
+bits = 16
+divisor = 4
+
+[[command.fields]]
+name = "base"
+word = 1
+shift = 0
+bits = 32
+
+[[command]]
+macro = "gSPMoveWord"
+opcode = 219
+words = 2
+microcode = "f3dex2"
+
+[[command.fields]]
+name = "index"
+word = 0
+shift = 16
+bits = 8
+
+[command.fields.choices]
+0 = "G_MW_MATRIX"
+2 = "G_MW_NUMLIGHT"
+4 = "G_MW_CLIP"
+8 = "G_MW_FOG"
+10 = "G_MW_LIGHTCOL"
+14 = "G_MW_PERSPNORM"
+
+[[command.fields]]
+name = "offset"
+word = 0
+shift = 0
+bits = 16
+
+[[command.fields]]
+name = "value"
+word = 1
+shift = 0
+bits = 32
+
+[[command]]
+macro = "gSPSegment"
+opcode = 188
+words = 2
+microcode = "f3d"
+
+[[command.fields]]
+name = "index"
+word = 0
+shift = 0
+bits = 8
+match = 6
+
+[[command.fields]]
+name = "segment"
+word = 0
+shift = 8
+bits = 16
+divisor = 4
+
+[[command.fields]]
+name = "base"
+word = 1
+shift = 0
+bits = 32
+
+[[command]]
+macro = "gSPMoveWord"
+opcode = 188
+words = 2
+microcode = "f3d"
+
+[[command.fields]]
+name = "index"
+word = 0
+shift = 0
+bits = 8
+
+[command.fields.choices]
+0 = "G_MW_MATRIX"
+2 = "G_MW_NUMLIGHT"
+4 = "G_MW_CLIP"
+8 = "G_MW_FOG"
+10 = "G_MW_LIGHTCOL"
+14 = "G_MW_PERSPNORM"
+
+[[command.fields]]
+name = "offset"
+word = 0
+shift = 8
+bits = 16
+
+[[command.fields]]
+name = "value"
+word = 1
+shift = 0
+bits = 32
+
+[[command]]
+macro = "gSPSegment"
+opcode = 188
+words = 2
+microcode = "f3dex"
+
+[[command.fields]]
+name = "index"
+word = 0
+shift = 0
+bits = 8
+match = 6
+
+[[command.fields]]
+name = "segment"
+word = 0
+shift = 8
+bits = 16
+divisor = 4
+
+[[command.fields]]
+name = "base"
+word = 1
+shift = 0
+bits = 32
+
+[[command]]
+macro = "gSPMoveWord"
+opcode = 188
+words = 2
+microcode = "f3dex"
+
+[[command.fields]]
+name = "index"
+word = 0
+shift = 0
+bits = 8
+
+[command.fields.choices]
+0 = "G_MW_MATRIX"
+2 = "G_MW_NUMLIGHT"
+4 = "G_MW_CLIP"
+8 = "G_MW_FOG"
+10 = "G_MW_LIGHTCOL"
+14 = "G_MW_PERSPNORM"
+
+[[command.fields]]
+name = "offset"
+word = 0
+shift = 8
+bits = 16
+
+[[command.fields]]
+name = "value"
+word = 1
+shift = 0
+bits = 32
+
+[[command]]
+macro = "gSPMoveMem"
+opcode = 220
+words = 2
+microcode = "f3dex2"
+
+[[command.fields]]
+name = "index"
+word = 0
+shift = 0
+bits = 8
+
+[command.fields.choices]
+8 = "G_MV_VIEWPORT"
+10 = "G_MV_LIGHT"
+14 = "G_MV_MATRIX"
+
+[[command.fields]]
+name = "offset"
+word = 0
+shift = 8
+bits = 8
+scale = 8
+
+[[command.fields]]
+name = "size"
+word = 0
+shift = 19
+bits = 5
+bias = 1
+scale = 8
+
+[[command.fields]]
+name = "address"
+word = 1
+shift = 0
+bits = 32
+
+[[command]]
+macro = "gSPGeometryMode"
+opcode = 217
+words = 2
+microcode = "f3dex2"
+
+[[command.fields]]
+name = "clear"
+word = 0
+shift = 0
+bits = 24
+xor = 16777215
+
+[command.fields.flags]
+1 = "G_ZBUFFER"
+4 = "G_SHADE"
+512 = "G_CULL_FRONT"
+1024 = "G_CULL_BACK"
+65536 = "G_FOG"
+131072 = "G_LIGHTING"
+262144 = "G_TEXTURE_GEN"
+524288 = "G_TEXTURE_GEN_LINEAR"
+2097152 = "G_SHADING_SMOOTH"
+
+[[command.fields]]
+name = "set"
+word = 1
+shift = 0
+bits = 32
+
+[command.fields.flags]
+1 = "G_ZBUFFER"
+4 = "G_SHADE"
+512 = "G_CULL_FRONT"
+1024 = "G_CULL_BACK"
+65536 = "G_FOG"
+131072 = "G_LIGHTING"
+262144 = "G_TEXTURE_GEN"
+524288 = "G_TEXTURE_GEN_LINEAR"
+2097152 = "G_SHADING_SMOOTH"
+
+[[command]]
+macro = "gSPClearGeometryMode"
+opcode = 182
+words = 2
+microcode = "f3d"
+
+[[command.fields]]
+name = "mode"
+word = 1
+shift = 0
+bits = 32
+
+[[command]]
+macro = "gSPSetGeometryMode"
+opcode = 183
+words = 2
+microcode = "f3d"
+
+[[command.fields]]
+name = "mode"
+word = 1
+shift = 0
+bits = 32
+
+[[command]]
+macro = "gSPClearGeometryMode"
+opcode = 182
+words = 2
+microcode = "f3dex"
+
+[[command.fields]]
+name = "mode"
+word = 1
+shift = 0
+bits = 32
+
+[[command]]
+macro = "gSPSetGeometryMode"
+opcode = 183
+words = 2
+microcode = "f3dex"
+
+[[command.fields]]
+name = "mode"
+word = 1
+shift = 0
+bits = 32
+
+[[command]]
+macro = "gSPTexture"
+opcode = 215
+words = 2
+microcode = "f3dex2"
+
+[[command.fields]]
+name = "s"
+word = 1
+shift = 16
+bits = 16
+
+[[command.fields]]
+name = "t"
+word = 1
+shift = 0
+bits = 16
+
+[[command.fields]]
+name = "level"
+word = 0
+shift = 11
+bits = 3
+
+[[command.fields]]
+name = "xparam"
+word = 0
+shift = 16
+bits = 8
+match = 0
+
+[[command.fields]]
+name = "tile"
+word = 0
+shift = 8
+bits = 3
+
+[[command.fields]]
+name = "on"
+word = 0
+shift = 1
+bits = 7
+
+[command.fields.choices]
+0 = "G_OFF"
+1 = "G_ON"
+
+[[command]]
+macro = "gSPTextureL"
+opcode = 215
+words = 2
+microcode = "f3dex2"
+
+[[command.fields]]
+name = "s"
+word = 1
+shift = 16
+bits = 16
+
+[[command.fields]]
+name = "t"
+word = 1
+shift = 0
+bits = 16
+
+[[command.fields]]
+name = "level"
+word = 0
+shift = 11
+bits = 3
+
+[[command.fields]]
+name = "xparam"
+word = 0
+shift = 16
+bits = 8
+
+[[command.fields]]
+name = "tile"
+word = 0
+shift = 8
+bits = 3
+
+[[command.fields]]
+name = "on"
+word = 0
+shift = 1
+bits = 7
+
+[command.fields.choices]
+0 = "G_OFF"
+1 = "G_ON"
+
+[[command]]
+macro = "gLoadUcode"
+opcode = 221
+words = 2
+microcode = "f3dex2"
+
+[[command.fields]]
+name = "start"
+word = 1
+shift = 0
+bits = 32
+
+[[command.fields]]
+name = "size"
+word = 0
+shift = 0
+bits = 16
+bias = 1
+
+[[command]]
+macro = "gLoadUcode"
+opcode = 175
+words = 2
+microcode = "f3dex"
+
+[[command.fields]]
+name = "start"
+word = 1
+shift = 0
+bits = 32
+
+[[command.fields]]
+name = "size"
+word = 0
+shift = 0
+bits = 16
+bias = 1
+
+[[command]]
+macro = "gSPLine3D"
+opcode = 8
+words = 2
+microcode = "f3dex2"
+
+[[command.fields]]
+name = "v0"
+word = 0
+shift = 16
+bits = 8
+divisor = 2
+
+[[command.fields]]
+name = "v1"
+word = 0
+shift = 8
+bits = 8
+divisor = 2
+
+[[command.fields]]
+name = "width"
+word = 0
+shift = 0
+bits = 8
+match = 0
+
+[[command.fields]]
+name = "flag"
+word = 0
+shift = 0
+bits = 1
+constant = "0"
+
+[[command]]
+macro = "gSPLineW3D"
+opcode = 8
+words = 2
+microcode = "f3dex2"
+
+[[command.fields]]
+name = "v0"
+word = 0
+shift = 16
+bits = 8
+divisor = 2
+
+[[command.fields]]
+name = "v1"
+word = 0
+shift = 8
+bits = 8
+divisor = 2
+
+[[command.fields]]
+name = "width"
+word = 0
+shift = 0
+bits = 8
+
+[[command.fields]]
+name = "flag"
+word = 0
+shift = 0
+bits = 1
+constant = "0"
+
+[[command]]
+macro = "gSPVertex"
+opcode = 1
+words = 2
+microcode = "f3dex2"
+
+[[command.fields]]
+name = "vertices"
+word = 1
+shift = 0
+bits = 32
+
+[[command.fields]]
+name = "n"
+word = 0
+shift = 12
+bits = 8
+
+[[command.fields]]
+name = "v0"
+word = 0
+shift = 1
+bits = 7
+subtract = "n"
+
+[[command]]
+macro = "gSP1Triangle"
+opcode = 5
+words = 2
+microcode = "f3dex2"
+
+[[command.fields]]
+name = "v0_0"
+word = 0
+shift = 16
+bits = 8
+divisor = 2
+
+[[command.fields]]
+name = "v0_1"
+word = 0
+shift = 8
+bits = 8
+divisor = 2
+
+[[command.fields]]
+name = "v0_2"
+word = 0
+shift = 0
+bits = 8
+divisor = 2
+
+[[command.fields]]
+name = "flag0"
+word = 0
+shift = 0
+bits = 1
+constant = "0"
+
+[[command]]
+macro = "gSP2Triangles"
+opcode = 6
+words = 2
+microcode = "f3dex2"
+
+[[command.fields]]
+name = "v0_0"
+word = 0
+shift = 16
+bits = 8
+divisor = 2
+
+[[command.fields]]
+name = "v0_1"
+word = 0
+shift = 8
+bits = 8
+divisor = 2
+
+[[command.fields]]
+name = "v0_2"
+word = 0
+shift = 0
+bits = 8
+divisor = 2
+
+[[command.fields]]
+name = "flag0"
+word = 0
+shift = 0
+bits = 1
+constant = "0"
+
+[[command.fields]]
+name = "v1_0"
+word = 1
+shift = 16
+bits = 8
+divisor = 2
+
+[[command.fields]]
+name = "v1_1"
+word = 1
+shift = 8
+bits = 8
+divisor = 2
+
+[[command.fields]]
+name = "v1_2"
+word = 1
+shift = 0
+bits = 8
+divisor = 2
+
+[[command.fields]]
+name = "flag1"
+word = 0
+shift = 0
+bits = 1
+constant = "0"
+
+[[command]]
+macro = "gSP1Triangle"
+opcode = 191
+words = 2
+microcode = "f3d"
+
+[[command.fields]]
+name = "v0"
+word = 1
+shift = 16
+bits = 8
+divisor = 10
+
+[[command.fields]]
+name = "v1"
+word = 1
+shift = 8
+bits = 8
+divisor = 10
+
+[[command.fields]]
+name = "v2"
+word = 1
+shift = 0
+bits = 8
+divisor = 10
+
+[[command.fields]]
+name = "flag"
+word = 1
+shift = 24
+bits = 8
+
+[[command]]
+macro = "gSP1Triangle"
+opcode = 191
+words = 2
+microcode = "f3dex"
+
+[[command.fields]]
+name = "v0"
+word = 1
+shift = 16
+bits = 8
+divisor = 2
+
+[[command.fields]]
+name = "v1"
+word = 1
+shift = 8
+bits = 8
+divisor = 2
+
+[[command.fields]]
+name = "v2"
+word = 1
+shift = 0
+bits = 8
+divisor = 2
+
+[[command.fields]]
+name = "flag"
+word = 0
+shift = 0
+bits = 1
+constant = "0"
+
+[[command]]
+macro = "gSPModifyVertex"
+opcode = 2
+words = 2
+microcode = "f3dex2"
+
+[[command.fields]]
+name = "vertex"
+word = 0
+shift = 0
+bits = 16
+divisor = 2
+
+[[command.fields]]
+name = "where"
+word = 0
+shift = 16
+bits = 8
+
+[command.fields.choices]
+16 = "G_MWO_POINT_RGBA"
+20 = "G_MWO_POINT_ST"
+24 = "G_MWO_POINT_XYSCREEN"
+28 = "G_MWO_POINT_ZSCREEN"
+
+[[command.fields]]
+name = "value"
+word = 1
+shift = 0
+bits = 32
+
+[[command]]
+macro = "gDPHalf1"
+opcode = 225
+words = 2
+microcode = "f3dex2"
+
+[[command.fields]]
+name = "value"
+word = 1
+shift = 0
+bits = 32
+
+[[command]]
+macro = "gDPHalf2"
+opcode = 241
+words = 2
+microcode = "f3dex2"
+
+[[command.fields]]
+name = "value"
+word = 1
+shift = 0
+bits = 32
+
+[[command]]
+macro = "gDPHalf1"
+opcode = 180
+words = 2
+microcode = "f3d"
+
+[[command.fields]]
+name = "value"
+word = 1
+shift = 0
+bits = 32
+
+[[command]]
+macro = "gDPHalf2"
+opcode = 179
+words = 2
+microcode = "f3d"
+
+[[command.fields]]
+name = "value"
+word = 1
+shift = 0
+bits = 32
+
+[[command]]
+macro = "gDPHalf1"
+opcode = 180
+words = 2
+microcode = "f3dex"
+
+[[command.fields]]
+name = "value"
+word = 1
+shift = 0
+bits = 32
+
+[[command]]
+macro = "gDPHalf2"
+opcode = 179
+words = 2
+microcode = "f3dex"
+
+[[command.fields]]
+name = "value"
+word = 1
+shift = 0
+bits = 32
+
+[[command]]
+macro = "gDPSetCombineLERP"
+opcode = 252
+words = 2
+
+[[command.fields]]
+name = "mux0"
+word = 0
+shift = 20
+bits = 4
+strict = true
+
+[command.fields.choices]
+0 = "COMBINED"
+1 = "TEXEL0"
+2 = "TEXEL1"
+3 = "PRIMITIVE"
+4 = "SHADE"
+5 = "ENVIRONMENT"
+6 = "1"
+7 = "NOISE"
+15 = "0"
+
+[[command.fields]]
+name = "mux1"
+word = 1
+shift = 28
+bits = 4
+strict = true
+
+[command.fields.choices]
+0 = "COMBINED"
+1 = "TEXEL0"
+2 = "TEXEL1"
+3 = "PRIMITIVE"
+4 = "SHADE"
+5 = "ENVIRONMENT"
+6 = "CENTER"
+7 = "K4"
+15 = "0"
+
+[[command.fields]]
+name = "mux2"
+word = 0
+shift = 15
+bits = 5
+strict = true
+
+[command.fields.choices]
+0 = "COMBINED"
+1 = "TEXEL0"
+2 = "TEXEL1"
+3 = "PRIMITIVE"
+4 = "SHADE"
+5 = "ENVIRONMENT"
+6 = "SCALE"
+7 = "COMBINED_ALPHA"
+8 = "TEXEL0_ALPHA"
+9 = "TEXEL1_ALPHA"
+10 = "PRIMITIVE_ALPHA"
+11 = "SHADE_ALPHA"
+12 = "ENV_ALPHA"
+13 = "LOD_FRACTION"
+14 = "PRIM_LOD_FRAC"
+15 = "K5"
+31 = "0"
+
+[[command.fields]]
+name = "mux3"
+word = 1
+shift = 15
+bits = 3
+strict = true
+
+[command.fields.choices]
+0 = "COMBINED"
+1 = "TEXEL0"
+2 = "TEXEL1"
+3 = "PRIMITIVE"
+4 = "SHADE"
+5 = "ENVIRONMENT"
+6 = "1"
+7 = "0"
+
+[[command.fields]]
+name = "mux4"
+word = 0
+shift = 12
+bits = 3
+strict = true
+
+[command.fields.choices]
+0 = "COMBINED"
+1 = "TEXEL0"
+2 = "TEXEL1"
+3 = "PRIMITIVE"
+4 = "SHADE"
+5 = "ENVIRONMENT"
+6 = "1"
+7 = "0"
+
+[[command.fields]]
+name = "mux5"
+word = 1
+shift = 12
+bits = 3
+strict = true
+
+[command.fields.choices]
+0 = "COMBINED"
+1 = "TEXEL0"
+2 = "TEXEL1"
+3 = "PRIMITIVE"
+4 = "SHADE"
+5 = "ENVIRONMENT"
+6 = "1"
+7 = "0"
+
+[[command.fields]]
+name = "mux6"
+word = 0
+shift = 9
+bits = 3
+strict = true
+
+[command.fields.choices]
+0 = "LOD_FRACTION"
+1 = "TEXEL0"
+2 = "TEXEL1"
+3 = "PRIMITIVE"
+4 = "SHADE"
+5 = "ENVIRONMENT"
+6 = "PRIM_LOD_FRAC"
+7 = "0"
+
+[[command.fields]]
+name = "mux7"
+word = 1
+shift = 9
+bits = 3
+strict = true
+
+[command.fields.choices]
+0 = "COMBINED"
+1 = "TEXEL0"
+2 = "TEXEL1"
+3 = "PRIMITIVE"
+4 = "SHADE"
+5 = "ENVIRONMENT"
+6 = "1"
+7 = "0"
+
+[[command.fields]]
+name = "mux8"
+word = 0
+shift = 5
+bits = 4
+strict = true
+
+[command.fields.choices]
+0 = "COMBINED"
+1 = "TEXEL0"
+2 = "TEXEL1"
+3 = "PRIMITIVE"
+4 = "SHADE"
+5 = "ENVIRONMENT"
+6 = "1"
+7 = "NOISE"
+15 = "0"
+
+[[command.fields]]
+name = "mux9"
+word = 1
+shift = 24
+bits = 4
+strict = true
+
+[command.fields.choices]
+0 = "COMBINED"
+1 = "TEXEL0"
+2 = "TEXEL1"
+3 = "PRIMITIVE"
+4 = "SHADE"
+5 = "ENVIRONMENT"
+6 = "CENTER"
+7 = "K4"
+15 = "0"
+
+[[command.fields]]
+name = "mux10"
+word = 0
+shift = 0
+bits = 5
+strict = true
+
+[command.fields.choices]
+0 = "COMBINED"
+1 = "TEXEL0"
+2 = "TEXEL1"
+3 = "PRIMITIVE"
+4 = "SHADE"
+5 = "ENVIRONMENT"
+6 = "SCALE"
+7 = "COMBINED_ALPHA"
+8 = "TEXEL0_ALPHA"
+9 = "TEXEL1_ALPHA"
+10 = "PRIMITIVE_ALPHA"
+11 = "SHADE_ALPHA"
+12 = "ENV_ALPHA"
+13 = "LOD_FRACTION"
+14 = "PRIM_LOD_FRAC"
+15 = "K5"
+31 = "0"
+
+[[command.fields]]
+name = "mux11"
+word = 1
+shift = 6
+bits = 3
+strict = true
+
+[command.fields.choices]
+0 = "COMBINED"
+1 = "TEXEL0"
+2 = "TEXEL1"
+3 = "PRIMITIVE"
+4 = "SHADE"
+5 = "ENVIRONMENT"
+6 = "1"
+7 = "0"
+
+[[command.fields]]
+name = "mux12"
+word = 1
+shift = 21
+bits = 3
+strict = true
+
+[command.fields.choices]
+0 = "COMBINED"
+1 = "TEXEL0"
+2 = "TEXEL1"
+3 = "PRIMITIVE"
+4 = "SHADE"
+5 = "ENVIRONMENT"
+6 = "1"
+7 = "0"
+
+[[command.fields]]
+name = "mux13"
+word = 1
+shift = 3
+bits = 3
+strict = true
+
+[command.fields.choices]
+0 = "COMBINED"
+1 = "TEXEL0"
+2 = "TEXEL1"
+3 = "PRIMITIVE"
+4 = "SHADE"
+5 = "ENVIRONMENT"
+6 = "1"
+7 = "0"
+
+[[command.fields]]
+name = "mux14"
+word = 1
+shift = 18
+bits = 3
+strict = true
+
+[command.fields.choices]
+0 = "LOD_FRACTION"
+1 = "TEXEL0"
+2 = "TEXEL1"
+3 = "PRIMITIVE"
+4 = "SHADE"
+5 = "ENVIRONMENT"
+6 = "PRIM_LOD_FRAC"
+7 = "0"
+
+[[command.fields]]
+name = "mux15"
+word = 1
+shift = 0
+bits = 3
+strict = true
+
+[command.fields.choices]
+0 = "COMBINED"
+1 = "TEXEL0"
+2 = "TEXEL1"
+3 = "PRIMITIVE"
+4 = "SHADE"
+5 = "ENVIRONMENT"
+6 = "1"
+7 = "0"
+
+[[command]]
+macro = "gDPSetAlphaDither"
+opcode = 227
+words = 2
+microcode = "f3dex2"
+
+[[command.fields]]
+name = "shift"
+word = 0
+shift = 8
+bits = 8
+match = 26
+
+[[command.fields]]
+name = "length"
+word = 0
+shift = 0
+bits = 8
+match = 1
+
+[[command.fields]]
+name = "mode"
+word = 1
+shift = 0
+bits = 32
+
+[command.fields.choices]
+0 = "G_AD_PATTERN"
+16 = "G_AD_NOTPATTERN"
+32 = "G_AD_NOISE"
+48 = "G_AD_DISABLE"
+
+[[command]]
+macro = "gDPSetColorDither"
+opcode = 227
+words = 2
+microcode = "f3dex2"
+
+[[command.fields]]
+name = "shift"
+word = 0
+shift = 8
+bits = 8
+match = 24
+
+[[command.fields]]
+name = "length"
+word = 0
+shift = 0
+bits = 8
+match = 1
+
+[[command.fields]]
+name = "mode"
+word = 1
+shift = 0
+bits = 32
+
+[command.fields.choices]
+0 = "G_CD_MAGICSQ"
+64 = "G_CD_BAYER"
+128 = "G_CD_NOISE"
+192 = "G_CD_DISABLE"
+
+[[command]]
+macro = "gDPSetCombineKey"
+opcode = 227
+words = 2
+microcode = "f3dex2"
+
+[[command.fields]]
+name = "shift"
+word = 0
+shift = 8
+bits = 8
+match = 23
+
+[[command.fields]]
+name = "length"
+word = 0
+shift = 0
+bits = 8
+match = 0
+
+[[command.fields]]
+name = "mode"
+word = 1
+shift = 0
+bits = 32
+
+[command.fields.choices]
+0 = "G_CK_NONE"
+256 = "G_CK_KEY"
+
+[[command]]
+macro = "gDPSetTextureConvert"
+opcode = 227
+words = 2
+microcode = "f3dex2"
+
+[[command.fields]]
+name = "shift"
+word = 0
+shift = 8
+bits = 8
+match = 20
+
+[[command.fields]]
+name = "length"
+word = 0
+shift = 0
+bits = 8
+match = 2
+
+[[command.fields]]
+name = "mode"
+word = 1
+shift = 0
+bits = 32
+
+[command.fields.choices]
+0 = "G_TC_CONV"
+2560 = "G_TC_FILTCONV"
+3072 = "G_TC_FILT"
+
+[[command]]
+macro = "gDPSetTextureFilter"
+opcode = 227
+words = 2
+microcode = "f3dex2"
+
+[[command.fields]]
+name = "shift"
+word = 0
+shift = 8
+bits = 8
+match = 18
+
+[[command.fields]]
+name = "length"
+word = 0
+shift = 0
+bits = 8
+match = 1
+
+[[command.fields]]
+name = "mode"
+word = 1
+shift = 0
+bits = 32
+
+[command.fields.choices]
+0 = "G_TF_POINT"
+8192 = "G_TF_BILERP"
+12288 = "G_TF_AVERAGE"
+
+[[command]]
+macro = "gDPSetTextureLUT"
+opcode = 227
+words = 2
+microcode = "f3dex2"
+
+[[command.fields]]
+name = "shift"
+word = 0
+shift = 8
+bits = 8
+match = 16
+
+[[command.fields]]
+name = "length"
+word = 0
+shift = 0
+bits = 8
+match = 1
+
+[[command.fields]]
+name = "mode"
+word = 1
+shift = 0
+bits = 32
+
+[command.fields.choices]
+0 = "G_TT_NONE"
+32768 = "G_TT_RGBA16"
+49152 = "G_TT_IA16"
+
+[[command]]
+macro = "gDPSetTextureLOD"
+opcode = 227
+words = 2
+microcode = "f3dex2"
+
+[[command.fields]]
+name = "shift"
+word = 0
+shift = 8
+bits = 8
+match = 15
+
+[[command.fields]]
+name = "length"
+word = 0
+shift = 0
+bits = 8
+match = 0
+
+[[command.fields]]
+name = "mode"
+word = 1
+shift = 0
+bits = 32
+
+[command.fields.choices]
+0 = "G_TL_TILE"
+65536 = "G_TL_LOD"
+
+[[command]]
+macro = "gDPSetTextureDetail"
+opcode = 227
+words = 2
+microcode = "f3dex2"
+
+[[command.fields]]
+name = "shift"
+word = 0
+shift = 8
+bits = 8
+match = 13
+
+[[command.fields]]
+name = "length"
+word = 0
+shift = 0
+bits = 8
+match = 1
+
+[[command.fields]]
+name = "mode"
+word = 1
+shift = 0
+bits = 32
+
+[command.fields.choices]
+0 = "G_TD_CLAMP"
+131072 = "G_TD_SHARPEN"
+262144 = "G_TD_DETAIL"
+
+[[command]]
+macro = "gDPSetTexturePersp"
+opcode = 227
+words = 2
+microcode = "f3dex2"
+
+[[command.fields]]
+name = "shift"
+word = 0
+shift = 8
+bits = 8
+match = 12
+
+[[command.fields]]
+name = "length"
+word = 0
+shift = 0
+bits = 8
+match = 0
+
+[[command.fields]]
+name = "mode"
+word = 1
+shift = 0
+bits = 32
+
+[command.fields.choices]
+0 = "G_TP_NONE"
+524288 = "G_TP_PERSP"
+
+[[command]]
+macro = "gDPSetCycleType"
+opcode = 227
+words = 2
+microcode = "f3dex2"
+
+[[command.fields]]
+name = "shift"
+word = 0
+shift = 8
+bits = 8
+match = 10
+
+[[command.fields]]
+name = "length"
+word = 0
+shift = 0
+bits = 8
+match = 1
+
+[[command.fields]]
+name = "mode"
+word = 1
+shift = 0
+bits = 32
+
+[command.fields.choices]
+0 = "G_CYC_1CYCLE"
+1048576 = "G_CYC_2CYCLE"
+2097152 = "G_CYC_COPY"
+3145728 = "G_CYC_FILL"
+
+[[command]]
+macro = "gDPSetPipelineMode"
+opcode = 227
+words = 2
+microcode = "f3dex2"
+
+[[command.fields]]
+name = "shift"
+word = 0
+shift = 8
+bits = 8
+match = 8
+
+[[command.fields]]
+name = "length"
+word = 0
+shift = 0
+bits = 8
+match = 0
+
+[[command.fields]]
+name = "mode"
+word = 1
+shift = 0
+bits = 32
+
+[command.fields.choices]
+0 = "G_PM_NPRIMITIVE"
+8388608 = "G_PM_1PRIMITIVE"
+
+[[command]]
+macro = "gDPSetRenderMode"
+opcode = 226
+words = 2
+microcode = "f3dex2"
+
+[[command.fields]]
+name = "shift"
+word = 0
+shift = 8
+bits = 8
+match = 0
+
+[[command.fields]]
+name = "length"
+word = 0
+shift = 0
+bits = 8
+match = 28
+
+[[command.fields]]
+name = "mode"
+word = 1
+shift = 0
+bits = 32
+
+[[command.fields]]
+name = "mode2"
+word = 0
+shift = 0
+bits = 1
+constant = "0"
+
+[[command]]
+macro = "gDPSetAlphaCompare"
+opcode = 226
+words = 2
+microcode = "f3dex2"
+
+[[command.fields]]
+name = "shift"
+word = 0
+shift = 8
+bits = 8
+match = 30
+
+[[command.fields]]
+name = "length"
+word = 0
+shift = 0
+bits = 8
+match = 1
+
+[[command.fields]]
+name = "mode"
+word = 1
+shift = 0
+bits = 32
+
+[command.fields.choices]
+0 = "G_AC_NONE"
+1 = "G_AC_THRESHOLD"
+3 = "G_AC_DITHER"
+
+[[command]]
+macro = "gDPSetDepthSource"
+opcode = 226
+words = 2
+microcode = "f3dex2"
+
+[[command.fields]]
+name = "shift"
+word = 0
+shift = 8
+bits = 8
+match = 29
+
+[[command.fields]]
+name = "length"
+word = 0
+shift = 0
+bits = 8
+match = 0
+
+[[command.fields]]
+name = "mode"
+word = 1
+shift = 0
+bits = 32
+
+[command.fields.choices]
+0 = "G_ZS_PIXEL"
+4 = "G_ZS_PRIM"
+
+[[command]]
+macro = "gSPSetOtherMode"
+opcode = 226
+words = 2
+microcode = "f3dex2"
+args = ["command", "shift", "length", "data"]
+
+[[command.fields]]
+name = "command"
+word = 0
+shift = 0
+bits = 1
+constant = "G_SETOTHERMODE_L"
+
+[[command.fields]]
+name = "length"
+word = 0
+shift = 0
+bits = 8
+bias = 1
+
+[[command.fields]]
+name = "shift"
+word = 0
+shift = 8
+bits = 8
+reverse = 32
+subtract = "length"
+
+[[command.fields]]
+name = "data"
+word = 1
+shift = 0
+bits = 32
+
+[[command]]
+macro = "gSPSetOtherMode"
+opcode = 227
+words = 2
+microcode = "f3dex2"
+args = ["command", "shift", "length", "data"]
+
+[[command.fields]]
+name = "command"
+word = 0
+shift = 0
+bits = 1
+constant = "G_SETOTHERMODE_H"
+
+[[command.fields]]
+name = "length"
+word = 0
+shift = 0
+bits = 8
+bias = 1
+
+[[command.fields]]
+name = "shift"
+word = 0
+shift = 8
+bits = 8
+reverse = 32
+subtract = "length"
+
+[[command.fields]]
+name = "data"
+word = 1
+shift = 0
+bits = 32
+
+[[command]]
+macro = "gDPSetAlphaDither"
+opcode = 186
+words = 2
+microcode = "f3d"
+
+[[command.fields]]
+name = "shift"
+word = 0
+shift = 8
+bits = 8
+match = 4
+
+[[command.fields]]
+name = "length"
+word = 0
+shift = 0
+bits = 8
+match = 2
+
+[[command.fields]]
+name = "mode"
+word = 1
+shift = 0
+bits = 32
+
+[command.fields.choices]
+0 = "G_AD_PATTERN"
+16 = "G_AD_NOTPATTERN"
+32 = "G_AD_NOISE"
+48 = "G_AD_DISABLE"
+
+[[command]]
+macro = "gDPSetColorDither"
+opcode = 186
+words = 2
+microcode = "f3d"
+
+[[command.fields]]
+name = "shift"
+word = 0
+shift = 8
+bits = 8
+match = 6
+
+[[command.fields]]
+name = "length"
+word = 0
+shift = 0
+bits = 8
+match = 2
+
+[[command.fields]]
+name = "mode"
+word = 1
+shift = 0
+bits = 32
+
+[command.fields.choices]
+0 = "G_CD_MAGICSQ"
+64 = "G_CD_BAYER"
+128 = "G_CD_NOISE"
+192 = "G_CD_DISABLE"
+
+[[command]]
+macro = "gDPSetCombineKey"
+opcode = 186
+words = 2
+microcode = "f3d"
+
+[[command.fields]]
+name = "shift"
+word = 0
+shift = 8
+bits = 8
+match = 8
+
+[[command.fields]]
+name = "length"
+word = 0
+shift = 0
+bits = 8
+match = 1
+
+[[command.fields]]
+name = "mode"
+word = 1
+shift = 0
+bits = 32
+
+[command.fields.choices]
+0 = "G_CK_NONE"
+256 = "G_CK_KEY"
+
+[[command]]
+macro = "gDPSetTextureConvert"
+opcode = 186
+words = 2
+microcode = "f3d"
+
+[[command.fields]]
+name = "shift"
+word = 0
+shift = 8
+bits = 8
+match = 9
+
+[[command.fields]]
+name = "length"
+word = 0
+shift = 0
+bits = 8
+match = 3
+
+[[command.fields]]
+name = "mode"
+word = 1
+shift = 0
+bits = 32
+
+[command.fields.choices]
+0 = "G_TC_CONV"
+2560 = "G_TC_FILTCONV"
+3072 = "G_TC_FILT"
+
+[[command]]
+macro = "gDPSetTextureFilter"
+opcode = 186
+words = 2
+microcode = "f3d"
+
+[[command.fields]]
+name = "shift"
+word = 0
+shift = 8
+bits = 8
+match = 12
+
+[[command.fields]]
+name = "length"
+word = 0
+shift = 0
+bits = 8
+match = 2
+
+[[command.fields]]
+name = "mode"
+word = 1
+shift = 0
+bits = 32
+
+[command.fields.choices]
+0 = "G_TF_POINT"
+8192 = "G_TF_BILERP"
+12288 = "G_TF_AVERAGE"
+
+[[command]]
+macro = "gDPSetTextureLUT"
+opcode = 186
+words = 2
+microcode = "f3d"
+
+[[command.fields]]
+name = "shift"
+word = 0
+shift = 8
+bits = 8
+match = 14
+
+[[command.fields]]
+name = "length"
+word = 0
+shift = 0
+bits = 8
+match = 2
+
+[[command.fields]]
+name = "mode"
+word = 1
+shift = 0
+bits = 32
+
+[command.fields.choices]
+0 = "G_TT_NONE"
+32768 = "G_TT_RGBA16"
+49152 = "G_TT_IA16"
+
+[[command]]
+macro = "gDPSetTextureLOD"
+opcode = 186
+words = 2
+microcode = "f3d"
+
+[[command.fields]]
+name = "shift"
+word = 0
+shift = 8
+bits = 8
+match = 16
+
+[[command.fields]]
+name = "length"
+word = 0
+shift = 0
+bits = 8
+match = 1
+
+[[command.fields]]
+name = "mode"
+word = 1
+shift = 0
+bits = 32
+
+[command.fields.choices]
+0 = "G_TL_TILE"
+65536 = "G_TL_LOD"
+
+[[command]]
+macro = "gDPSetTextureDetail"
+opcode = 186
+words = 2
+microcode = "f3d"
+
+[[command.fields]]
+name = "shift"
+word = 0
+shift = 8
+bits = 8
+match = 17
+
+[[command.fields]]
+name = "length"
+word = 0
+shift = 0
+bits = 8
+match = 2
+
+[[command.fields]]
+name = "mode"
+word = 1
+shift = 0
+bits = 32
+
+[command.fields.choices]
+0 = "G_TD_CLAMP"
+131072 = "G_TD_SHARPEN"
+262144 = "G_TD_DETAIL"
+
+[[command]]
+macro = "gDPSetTexturePersp"
+opcode = 186
+words = 2
+microcode = "f3d"
+
+[[command.fields]]
+name = "shift"
+word = 0
+shift = 8
+bits = 8
+match = 19
+
+[[command.fields]]
+name = "length"
+word = 0
+shift = 0
+bits = 8
+match = 1
+
+[[command.fields]]
+name = "mode"
+word = 1
+shift = 0
+bits = 32
+
+[command.fields.choices]
+0 = "G_TP_NONE"
+524288 = "G_TP_PERSP"
+
+[[command]]
+macro = "gDPSetCycleType"
+opcode = 186
+words = 2
+microcode = "f3d"
+
+[[command.fields]]
+name = "shift"
+word = 0
+shift = 8
+bits = 8
+match = 20
+
+[[command.fields]]
+name = "length"
+word = 0
+shift = 0
+bits = 8
+match = 2
+
+[[command.fields]]
+name = "mode"
+word = 1
+shift = 0
+bits = 32
+
+[command.fields.choices]
+0 = "G_CYC_1CYCLE"
+1048576 = "G_CYC_2CYCLE"
+2097152 = "G_CYC_COPY"
+3145728 = "G_CYC_FILL"
+
+[[command]]
+macro = "gDPSetPipelineMode"
+opcode = 186
+words = 2
+microcode = "f3d"
+
+[[command.fields]]
+name = "shift"
+word = 0
+shift = 8
+bits = 8
+match = 23
+
+[[command.fields]]
+name = "length"
+word = 0
+shift = 0
+bits = 8
+match = 1
+
+[[command.fields]]
+name = "mode"
+word = 1
+shift = 0
+bits = 32
+
+[command.fields.choices]
+0 = "G_PM_NPRIMITIVE"
+8388608 = "G_PM_1PRIMITIVE"
+
+[[command]]
+macro = "gDPSetRenderMode"
+opcode = 185
+words = 2
+microcode = "f3d"
+
+[[command.fields]]
+name = "shift"
+word = 0
+shift = 8
+bits = 8
+match = 3
+
+[[command.fields]]
+name = "length"
+word = 0
+shift = 0
+bits = 8
+match = 29
+
+[[command.fields]]
+name = "mode"
+word = 1
+shift = 0
+bits = 32
+
+[[command.fields]]
+name = "mode2"
+word = 0
+shift = 0
+bits = 1
+constant = "0"
+
+[[command]]
+macro = "gDPSetAlphaCompare"
+opcode = 185
+words = 2
+microcode = "f3d"
+
+[[command.fields]]
+name = "shift"
+word = 0
+shift = 8
+bits = 8
+match = 0
+
+[[command.fields]]
+name = "length"
+word = 0
+shift = 0
+bits = 8
+match = 2
+
+[[command.fields]]
+name = "mode"
+word = 1
+shift = 0
+bits = 32
+
+[command.fields.choices]
+0 = "G_AC_NONE"
+1 = "G_AC_THRESHOLD"
+3 = "G_AC_DITHER"
+
+[[command]]
+macro = "gDPSetDepthSource"
+opcode = 185
+words = 2
+microcode = "f3d"
+
+[[command.fields]]
+name = "shift"
+word = 0
+shift = 8
+bits = 8
+match = 2
+
+[[command.fields]]
+name = "length"
+word = 0
+shift = 0
+bits = 8
+match = 1
+
+[[command.fields]]
+name = "mode"
+word = 1
+shift = 0
+bits = 32
+
+[command.fields.choices]
+0 = "G_ZS_PIXEL"
+4 = "G_ZS_PRIM"
+
+[[command]]
+macro = "gSPSetOtherMode"
+opcode = 185
+words = 2
+microcode = "f3d"
+args = ["command", "shift", "length", "data"]
+
+[[command.fields]]
+name = "command"
+word = 0
+shift = 0
+bits = 1
+constant = "G_SETOTHERMODE_L"
+
+[[command.fields]]
+name = "length"
+word = 0
+shift = 0
+bits = 8
+
+[[command.fields]]
+name = "shift"
+word = 0
+shift = 8
+bits = 8
+
+[[command.fields]]
+name = "data"
+word = 1
+shift = 0
+bits = 32
+
+[[command]]
+macro = "gSPSetOtherMode"
+opcode = 186
+words = 2
+microcode = "f3d"
+args = ["command", "shift", "length", "data"]
+
+[[command.fields]]
+name = "command"
+word = 0
+shift = 0
+bits = 1
+constant = "G_SETOTHERMODE_H"
+
+[[command.fields]]
+name = "length"
+word = 0
+shift = 0
+bits = 8
+
+[[command.fields]]
+name = "shift"
+word = 0
+shift = 8
+bits = 8
+
+[[command.fields]]
+name = "data"
+word = 1
+shift = 0
+bits = 32
+
+[[command]]
+macro = "gDPSetAlphaDither"
+opcode = 186
+words = 2
+microcode = "f3dex"
+
+[[command.fields]]
+name = "shift"
+word = 0
+shift = 8
+bits = 8
+match = 4
+
+[[command.fields]]
+name = "length"
+word = 0
+shift = 0
+bits = 8
+match = 2
+
+[[command.fields]]
+name = "mode"
+word = 1
+shift = 0
+bits = 32
+
+[command.fields.choices]
+0 = "G_AD_PATTERN"
+16 = "G_AD_NOTPATTERN"
+32 = "G_AD_NOISE"
+48 = "G_AD_DISABLE"
+
+[[command]]
+macro = "gDPSetColorDither"
+opcode = 186
+words = 2
+microcode = "f3dex"
+
+[[command.fields]]
+name = "shift"
+word = 0
+shift = 8
+bits = 8
+match = 6
+
+[[command.fields]]
+name = "length"
+word = 0
+shift = 0
+bits = 8
+match = 2
+
+[[command.fields]]
+name = "mode"
+word = 1
+shift = 0
+bits = 32
+
+[command.fields.choices]
+0 = "G_CD_MAGICSQ"
+64 = "G_CD_BAYER"
+128 = "G_CD_NOISE"
+192 = "G_CD_DISABLE"
+
+[[command]]
+macro = "gDPSetCombineKey"
+opcode = 186
+words = 2
+microcode = "f3dex"
+
+[[command.fields]]
+name = "shift"
+word = 0
+shift = 8
+bits = 8
+match = 8
+
+[[command.fields]]
+name = "length"
+word = 0
+shift = 0
+bits = 8
+match = 1
+
+[[command.fields]]
+name = "mode"
+word = 1
+shift = 0
+bits = 32
+
+[command.fields.choices]
+0 = "G_CK_NONE"
+256 = "G_CK_KEY"
+
+[[command]]
+macro = "gDPSetTextureConvert"
+opcode = 186
+words = 2
+microcode = "f3dex"
+
+[[command.fields]]
+name = "shift"
+word = 0
+shift = 8
+bits = 8
+match = 9
+
+[[command.fields]]
+name = "length"
+word = 0
+shift = 0
+bits = 8
+match = 3
+
+[[command.fields]]
+name = "mode"
+word = 1
+shift = 0
+bits = 32
+
+[command.fields.choices]
+0 = "G_TC_CONV"
+2560 = "G_TC_FILTCONV"
+3072 = "G_TC_FILT"
+
+[[command]]
+macro = "gDPSetTextureFilter"
+opcode = 186
+words = 2
+microcode = "f3dex"
+
+[[command.fields]]
+name = "shift"
+word = 0
+shift = 8
+bits = 8
+match = 12
+
+[[command.fields]]
+name = "length"
+word = 0
+shift = 0
+bits = 8
+match = 2
+
+[[command.fields]]
+name = "mode"
+word = 1
+shift = 0
+bits = 32
+
+[command.fields.choices]
+0 = "G_TF_POINT"
+8192 = "G_TF_BILERP"
+12288 = "G_TF_AVERAGE"
+
+[[command]]
+macro = "gDPSetTextureLUT"
+opcode = 186
+words = 2
+microcode = "f3dex"
+
+[[command.fields]]
+name = "shift"
+word = 0
+shift = 8
+bits = 8
+match = 14
+
+[[command.fields]]
+name = "length"
+word = 0
+shift = 0
+bits = 8
+match = 2
+
+[[command.fields]]
+name = "mode"
+word = 1
+shift = 0
+bits = 32
+
+[command.fields.choices]
+0 = "G_TT_NONE"
+32768 = "G_TT_RGBA16"
+49152 = "G_TT_IA16"
+
+[[command]]
+macro = "gDPSetTextureLOD"
+opcode = 186
+words = 2
+microcode = "f3dex"
+
+[[command.fields]]
+name = "shift"
+word = 0
+shift = 8
+bits = 8
+match = 16
+
+[[command.fields]]
+name = "length"
+word = 0
+shift = 0
+bits = 8
+match = 1
+
+[[command.fields]]
+name = "mode"
+word = 1
+shift = 0
+bits = 32
+
+[command.fields.choices]
+0 = "G_TL_TILE"
+65536 = "G_TL_LOD"
+
+[[command]]
+macro = "gDPSetTextureDetail"
+opcode = 186
+words = 2
+microcode = "f3dex"
+
+[[command.fields]]
+name = "shift"
+word = 0
+shift = 8
+bits = 8
+match = 17
+
+[[command.fields]]
+name = "length"
+word = 0
+shift = 0
+bits = 8
+match = 2
+
+[[command.fields]]
+name = "mode"
+word = 1
+shift = 0
+bits = 32
+
+[command.fields.choices]
+0 = "G_TD_CLAMP"
+131072 = "G_TD_SHARPEN"
+262144 = "G_TD_DETAIL"
+
+[[command]]
+macro = "gDPSetTexturePersp"
+opcode = 186
+words = 2
+microcode = "f3dex"
+
+[[command.fields]]
+name = "shift"
+word = 0
+shift = 8
+bits = 8
+match = 19
+
+[[command.fields]]
+name = "length"
+word = 0
+shift = 0
+bits = 8
+match = 1
+
+[[command.fields]]
+name = "mode"
+word = 1
+shift = 0
+bits = 32
+
+[command.fields.choices]
+0 = "G_TP_NONE"
+524288 = "G_TP_PERSP"
+
+[[command]]
+macro = "gDPSetCycleType"
+opcode = 186
+words = 2
+microcode = "f3dex"
+
+[[command.fields]]
+name = "shift"
+word = 0
+shift = 8
+bits = 8
+match = 20
+
+[[command.fields]]
+name = "length"
+word = 0
+shift = 0
+bits = 8
+match = 2
+
+[[command.fields]]
+name = "mode"
+word = 1
+shift = 0
+bits = 32
+
+[command.fields.choices]
+0 = "G_CYC_1CYCLE"
+1048576 = "G_CYC_2CYCLE"
+2097152 = "G_CYC_COPY"
+3145728 = "G_CYC_FILL"
+
+[[command]]
+macro = "gDPSetPipelineMode"
+opcode = 186
+words = 2
+microcode = "f3dex"
+
+[[command.fields]]
+name = "shift"
+word = 0
+shift = 8
+bits = 8
+match = 23
+
+[[command.fields]]
+name = "length"
+word = 0
+shift = 0
+bits = 8
+match = 1
+
+[[command.fields]]
+name = "mode"
+word = 1
+shift = 0
+bits = 32
+
+[command.fields.choices]
+0 = "G_PM_NPRIMITIVE"
+8388608 = "G_PM_1PRIMITIVE"
+
+[[command]]
+macro = "gDPSetRenderMode"
+opcode = 185
+words = 2
+microcode = "f3dex"
+
+[[command.fields]]
+name = "shift"
+word = 0
+shift = 8
+bits = 8
+match = 3
+
+[[command.fields]]
+name = "length"
+word = 0
+shift = 0
+bits = 8
+match = 29
+
+[[command.fields]]
+name = "mode"
+word = 1
+shift = 0
+bits = 32
+
+[[command.fields]]
+name = "mode2"
+word = 0
+shift = 0
+bits = 1
+constant = "0"
+
+[[command]]
+macro = "gDPSetAlphaCompare"
+opcode = 185
+words = 2
+microcode = "f3dex"
+
+[[command.fields]]
+name = "shift"
+word = 0
+shift = 8
+bits = 8
+match = 0
+
+[[command.fields]]
+name = "length"
+word = 0
+shift = 0
+bits = 8
+match = 2
+
+[[command.fields]]
+name = "mode"
+word = 1
+shift = 0
+bits = 32
+
+[command.fields.choices]
+0 = "G_AC_NONE"
+1 = "G_AC_THRESHOLD"
+3 = "G_AC_DITHER"
+
+[[command]]
+macro = "gDPSetDepthSource"
+opcode = 185
+words = 2
+microcode = "f3dex"
+
+[[command.fields]]
+name = "shift"
+word = 0
+shift = 8
+bits = 8
+match = 2
+
+[[command.fields]]
+name = "length"
+word = 0
+shift = 0
+bits = 8
+match = 1
+
+[[command.fields]]
+name = "mode"
+word = 1
+shift = 0
+bits = 32
+
+[command.fields.choices]
+0 = "G_ZS_PIXEL"
+4 = "G_ZS_PRIM"
+
+[[command]]
+macro = "gSPSetOtherMode"
+opcode = 185
+words = 2
+microcode = "f3dex"
+args = ["command", "shift", "length", "data"]
+
+[[command.fields]]
+name = "command"
+word = 0
+shift = 0
+bits = 1
+constant = "G_SETOTHERMODE_L"
+
+[[command.fields]]
+name = "length"
+word = 0
+shift = 0
+bits = 8
+
+[[command.fields]]
+name = "shift"
+word = 0
+shift = 8
+bits = 8
+
+[[command.fields]]
+name = "data"
+word = 1
+shift = 0
+bits = 32
+
+[[command]]
+macro = "gSPSetOtherMode"
+opcode = 186
+words = 2
+microcode = "f3dex"
+args = ["command", "shift", "length", "data"]
+
+[[command.fields]]
+name = "command"
+word = 0
+shift = 0
+bits = 1
+constant = "G_SETOTHERMODE_H"
+
+[[command.fields]]
+name = "length"
+word = 0
+shift = 0
+bits = 8
+
+[[command.fields]]
+name = "shift"
+word = 0
+shift = 8
+bits = 8
+
+[[command.fields]]
+name = "data"
+word = 1
+shift = 0
+bits = 32

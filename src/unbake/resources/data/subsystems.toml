@@ -1,0 +1,145 @@
+# Subsystems of a generic N64 game. infer.subsystems scores each group: +weight per call to a callee matching a
+# `calls` regex, +weight/4 per instruction whose mnemonic is in `mnemonics`, +weight per `lui` whose immediate is in
+# `lui`. Highest total >= 1.0 wins, else "unknown". `rank` orders cracking work (report --next): low ranks first.
+# idioms/structs/headers/compiler/sources are expected-shape knowledge copied into every creative packet.
+schema = 1
+
+[[subsystem]]
+id = "sdk"
+label = "libultra and libraries"
+rank = 0
+calls = ['^__?os[A-Z]', '^osVi', '^osPi', '^osSi', '^__ll', '^bcopy$', '^bzero$']
+mnemonics = ["mtc0", "mfc0", "cache", "eret", "tlbwi", "tlbp"]
+lui = [0xA400, 0xA404, 0xA408, 0xA410, 0xA430, 0xA440, 0xA450, 0xA460, 0xA470, 0xA480]
+weight = 1.0
+idioms = ["match the reference library source line for line before changing anything", "IO_READ/IO_WRITE for hardware registers", "__osDisableInt/__osRestoreInt around critical sections"]
+structs = ["OSThread", "OSMesgQueue", "OSTimer", "OSPiHandle", "OSIoMesg", "OSContPad", "OSTask"]
+headers = ["ultra64.h"]
+compiler = ["libraries are often built with a different optimisation level than game code: try -O1/-O2 and -g3", "SDK units may use -mips2 and hand assembly; keep .s units as asm"]
+sources = ["ultralib (open reimplementation of libultra) for the matching SDK revision", "libgcc/libc helpers for __ll* and memcpy-family routines"]
+
+[[subsystem]]
+id = "math"
+label = "math helpers and tables"
+rank = 1
+calls = ['^sqrtf$', '^sinf$', '^cosf$', '^guSqrtf$', '^atan2f?$']
+mnemonics = ["sqrt.s", "mul.s", "div.s", "add.s", "sub.s", "cvt.s.w", "cvt.w.s", "neg.s", "abs.s"]
+lui = []
+weight = 0.3
+idioms = ["leaf functions with float arguments in $f12/$f14 and result in $f0", "table lookups indexed by angle >> shift", "keep float constants as literals so they land in .rodata in order"]
+structs = ["Vec3f", "Mtx", "MtxF"]
+headers = []
+compiler = ["float literal pool order follows first use", "single-precision literals need the f suffix"]
+sources = ["libultra gu* routines"]
+
+[[subsystem]]
+id = "graphics"
+label = "graphics and display lists"
+rank = 2
+calls = ['^gSP', '^gDP', '^guMtx', '^guOrtho', '^guPerspective', '^guTranslate', '^guScale', '^guRotate']
+mnemonics = []
+lui = [0xE700, 0xDF00, 0xDE00, 0xD900, 0xDA00, 0xD700, 0xFC00, 0xFD00, 0xF500, 0xF300, 0xE600, 0xE800, 0xF600, 0xED00]
+weight = 0.5
+idioms = ["display-list builders: Gfx *gfx = *gfxp; gSP...(gfx++, ...); *gfxp = gfx;", "use the GBI macros (draft rewrites raw words) instead of raw word stores", "segment addresses through gSPSegment"]
+structs = ["Gfx", "Vtx", "Mtx", "Lights1", "uObjSprite"]
+headers = ["gbi.h", "gfx.h"]
+compiler = ["macro arguments are constant-folded; the order of the two word stores follows the macro"]
+sources = ["libultra gbi.h macro definitions"]
+
+[[subsystem]]
+id = "viewport"
+label = "camera and matrices"
+rank = 3
+calls = ['^guLookAt', '^guPerspective', '^guMtxF2L', '^guMtxCatF', '^guMtxIdentF?$']
+mnemonics = []
+lui = []
+weight = 1.0
+idioms = ["4x4 float matrices filled row by row", "guMtxF2L converts float to fixed-point Mtx"]
+structs = ["Mtx", "MtxF", "Vp", "LookAt"]
+headers = ["gbi.h"]
+compiler = []
+sources = ["libultra gu routines"]
+
+[[subsystem]]
+id = "audio"
+label = "audio"
+rank = 4
+calls = ['^al[A-Z]', '^n_al', '^aClearBuffer', '^aLoadBuffer', '^aSetBuffer', '^osAi']
+mnemonics = []
+lui = []
+weight = 1.0
+idioms = ["Acmd builders: Acmd *ptr = cmdList; aSetBuffer(ptr++, ...)", "synth driver callbacks through function pointers"]
+structs = ["Acmd", "ALHeap", "ALSynth", "ALVoice", "ALBank", "ALSound"]
+headers = ["acmd.h", "abi.h", "audio_callbacks.h"]
+compiler = []
+sources = ["libultra audio library (n_audio)"]
+
+[[subsystem]]
+id = "scheduler"
+label = "game loop and threads"
+rank = 5
+calls = ['^osRecvMesg$', '^osSendMesg$', '^osCreateThread$', '^osStartThread$', '^osViSwapBuffer$', '^osSetEventMesg$']
+mnemonics = []
+lui = []
+weight = 0.5
+idioms = ["infinite message loops: while (1) { osRecvMesg(&q, &msg, OS_MESG_BLOCK); switch ((s32)msg) ... }", "retrace and task-done messages dispatch"]
+structs = ["OSMesgQueue", "OSMesg", "OSThread", "OSScTask"]
+headers = ["ultra64.h"]
+compiler = []
+sources = ["libultra sched.c example scheduler"]
+
+[[subsystem]]
+id = "input"
+label = "controller input"
+rank = 6
+calls = ['^osContStartReadData$', '^osContGetReadData$', '^osContInit$', '^osMotor']
+mnemonics = []
+lui = []
+weight = 1.0
+idioms = ["button edge detection: pressed = cur & ~prev", "stick values clamped to a dead zone"]
+structs = ["OSContPad", "OSContStatus"]
+headers = ["ultra64.h"]
+compiler = []
+sources = []
+
+[[subsystem]]
+id = "menu"
+label = "menus, text and UI"
+rank = 7
+calls = ['^sprintf$', '^_Printf$', '^strlen$', '^strcpy$', '^strcmp$']
+mnemonics = []
+lui = []
+weight = 0.5
+idioms = ["string tables indexed by language or item id", "cursor state machines driven by input edges", "text drawn per character from a font table"]
+structs = []
+headers = []
+compiler = ["string literals land in .rodata in first-use order"]
+sources = []
+
+[[subsystem]]
+id = "gameplay"
+label = "actors and gameplay"
+rank = 8
+calls = []
+mnemonics = ["jalr"]
+lui = []
+weight = 0.25
+idioms = ["per-object update/handler tables indexed by type", "state machines on an object state field", "linked lists of active objects"]
+structs = []
+headers = []
+compiler = ["switch statements compile to .rodata jump tables placed in TU order"]
+sources = []
+
+[[subsystem]]
+id = "unknown"
+label = "not yet classified"
+rank = 9
+calls = []
+mnemonics = []
+lui = []
+weight = 0.0
+idioms = []
+structs = []
+headers = []
+compiler = []
+sources = []

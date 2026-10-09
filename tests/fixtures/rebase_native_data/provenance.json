@@ -1,9 +1,0 @@
-{
-  "first_stage_git_blobs": {
-    "base": "3f97e46836efc2e83dd2c2576afb3705785b2ae5",
-    "ours": "5131bb7b402f54ffa09407e5090fcc7a81401883",
-    "theirs": "7ed8e13ca9011caed0b2a7a12caa952687f4ec97"
-  },
-  "events_sha256": "60684c20c9c54bd468189e5d67cc9447b276bfd8795a9bd56dfddf6fa82e530c",
-  "scope": "Exact unchanged immutable events selected from corrected FIRST preserved Git stage blobs; all fixture events retained by unit merge. Storage repacking preserves payload/event IDs. Full seven original-stage readback audited separately without RW mutations."
-}

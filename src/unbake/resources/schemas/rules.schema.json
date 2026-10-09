@@ -1,0 +1,107 @@
+{
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "$id": "unbake:rules",
+ "type": "object",
+ "properties": {
+  "schema": {
+   "const": 1
+  },
+  "rule": {
+   "type": "array",
+   "items": {
+    "type": "object",
+    "properties": {
+     "id": {
+      "type": "string",
+      "minLength": 1
+     },
+     "scope": {
+      "enum": [
+       "code",
+       "directives",
+       "comments"
+      ]
+     },
+     "waivable": {
+      "type": "boolean"
+     },
+     "sentence": {
+      "type": "string",
+      "minLength": 1
+     },
+     "regex": {
+      "type": "string",
+      "minLength": 1
+     },
+     "check": {
+      "enum": [
+       "volatile",
+       "empty-loop",
+       "shared-declarations",
+       "raw-gfx"
+      ]
+     }
+    },
+    "required": [
+     "id",
+     "scope",
+     "waivable",
+     "sentence"
+    ],
+    "additionalProperties": false
+   }
+  },
+  "hardware": {
+   "type": "object",
+   "properties": {
+    "macros": {
+     "type": "array",
+     "items": {
+      "type": "string",
+      "minLength": 1
+     }
+    },
+    "types": {
+     "type": "array",
+     "items": {
+      "type": "string",
+      "minLength": 1
+     }
+    },
+    "address_ranges": {
+     "type": "array",
+     "items": {
+      "type": "object",
+      "properties": {
+       "start": {
+        "type": "integer",
+        "minimum": 0
+       },
+       "end": {
+        "type": "integer",
+        "minimum": 0
+       }
+      },
+      "required": [
+       "start",
+       "end"
+      ],
+      "additionalProperties": false
+     }
+    }
+   },
+   "required": [
+    "macros",
+    "types",
+    "address_ranges"
+   ],
+   "additionalProperties": false
+  }
+ },
+ "required": [
+  "schema",
+  "rule",
+  "hardware"
+ ],
+ "additionalProperties": false
+}

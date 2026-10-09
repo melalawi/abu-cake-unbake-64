@@ -1,0 +1,95 @@
+# The whole command surface. cli.py builds click commands from this table and calls `handler` (module.function)
+# with (config, params) -- init gets (params) only. Option names map to params keys with "-" replaced by "_".
+# Global options --host (or UNBAKE_HOST) and --project (default: the working directory) are added by cli.py to
+# every command; init gets only --host. Every successful result validates against schemas/result.<command>.schema.json
+# (report --next against result.next).
+schema = 2
+
+[command.init]
+help = "Create a project from one or more ROMs of the same game and an explicit toolchain."
+handler = "repo.init"
+params = [
+  { name = "dir", kind = "argument", type = "path", required = true, multiple = false, help = "new empty project directory" },
+  { name = "rom", kind = "option", type = "str", required = true, multiple = true, help = "VERSION=PATH, once per version" },
+  { name = "names-from", kind = "option", type = "str", required = true, multiple = false, help = "version whose symbol names are canonical" },
+  { name = "toolchain", kind = "option", type = "str", required = true, multiple = false, help = "toolchain id from toolchains.toml" },
+  { name = "name", kind = "option", type = "str", required = true, multiple = false, help = "short project name (file stem)" },
+  { name = "title", kind = "option", type = "str", required = true, multiple = false, help = "game title" },
+]
+
+[command.setup]
+help = "Install toolchains, extract every version, prove the extracted assembly, map the program, render repository files, commit."
+handler = "repo.setup"
+params = []
+
+[command.draft]
+help = "Write a draft of one function or data item to .unbake/work/ITEM.c."
+handler = "draft.run"
+params = [
+  { name = "item", kind = "argument", type = "str", required = true, multiple = false, help = "member name (function or data)" },
+]
+
+[command.compare]
+help = "Measure a source against every version that holds its item; exact submits it for landing."
+handler = "compare.run"
+params = [
+  { name = "file", kind = "argument", type = "path", required = true, multiple = false, help = "C source" },
+  { name = "function", kind = "option", type = "str", required = false, multiple = false, help = "member the file implements when its name does not say" },
+  { name = "toolchain", kind = "option", type = "str", required = false, multiple = false, help = "override the unit toolchain" },
+  { name = "flag", kind = "option", type = "str", required = false, multiple = true, help = "add one compiler option" },
+  { name = "omit-flag", kind = "option", type = "str", required = false, multiple = true, help = "remove one compiler option (with its operand)" },
+  { name = "out", kind = "option", type = "path", required = false, multiple = false, help = "new directory for artifacts" },
+  { name = "note", kind = "option", type = "str", required = false, multiple = false, help = "technique tried, recorded with the attempt" },
+]
+
+[command.crack]
+help = "Run the tool steps of the cracking ladder for one item, then write its creative packet if still not exact."
+handler = "crack.run"
+params = [
+  { name = "item", kind = "argument", type = "str", required = true, multiple = false, help = "member name" },
+  { name = "seconds", kind = "option", type = "int", required = true, multiple = false, help = "permuter wall budget" },
+]
+
+[command.submit]
+help = "Admit sources and put exact (or improved fuzzy) candidates in the landing inbox; landing starts if idle."
+handler = "land.submit_command"
+params = [
+  { name = "files", kind = "argument", type = "path", required = true, multiple = true, help = "C sources" },
+  { name = "function", kind = "option", type = "str", required = false, multiple = false, help = "member, only with exactly one file" },
+  { name = "note", kind = "option", type = "str", required = false, multiple = false, help = "technique that cracked it" },
+]
+
+[command.land]
+help = "Land every inbox submission in order, one commit each; returns at once if a landing is already running."
+handler = "land.land_command"
+params = []
+
+[command.check]
+help = "Census source rules over the whole project; optionally reprove every unit or repair debt through the inbox."
+handler = "land.check_command"
+params = [
+  { name = "repair", kind = "flag", type = "str", required = false, multiple = false, help = "submit a repair or withdrawal for every debt finding" },
+  { name = "reprove", kind = "flag", type = "str", required = false, multiple = false, help = "remeasure every built unit in every holder" },
+  { name = "unit", kind = "option", type = "str", required = false, multiple = true, help = "with --reprove: only this unit path (repeatable)" },
+  { name = "both", kind = "flag", type = "str", required = false, multiple = false, help = "with --reprove: also build the same units through make and compare bytes, link script and sections" },
+  { name = "strict", kind = "flag", type = "str", required = false, multiple = false, help = "exit 1 when any debt exists" },
+  { name = "samples", kind = "option", type = "path", required = false, multiple = false, help = "json of known cross-version pairs and types: report how many resolve" },
+]
+
+[command.rename]
+help = "Give one symbol a new name everywhere it is spelled (table, sources, headers, hints, generated files) in one commit."
+handler = "rename.run"
+params = [
+  { name = "old", kind = "argument", type = "str", required = true, multiple = false, help = "current symbol name" },
+  { name = "new", kind = "argument", type = "str", required = true, multiple = false, help = "new symbol name, a C identifier no symbol has" },
+]
+
+[command.report]
+help = "Progress per version, kind and subsystem; or the ordered work list."
+handler = "report.run"
+params = [
+  { name = "next", kind = "flag", type = "str", required = false, multiple = false, help = "print the ordered work list instead" },
+  { name = "count", kind = "option", type = "int", required = false, multiple = false, help = "work items to list (with --next)" },
+  { name = "shard", kind = "option", type = "str", required = false, multiple = false, help = "I/K: only items whose stable hash mod K is I" },
+  { name = "subsystem", kind = "option", type = "str", required = false, multiple = false, help = "only items of this subsystem id" },
+]

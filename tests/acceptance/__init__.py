@@ -1,1 +1,0 @@
-"""Public command acceptance tools."""

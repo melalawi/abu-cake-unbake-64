@@ -1,0 +1,100 @@
+{
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "$id": "unbake:flow",
+ "type": "object",
+ "properties": {
+  "schema": {
+   "const": 1
+  },
+  "ladder": {
+   "type": "array",
+   "items": {
+    "type": "object",
+    "properties": {
+     "id": {
+      "type": "string",
+      "minLength": 1
+     },
+     "tool": {
+      "type": "boolean"
+     },
+     "help": {
+      "type": "string",
+      "minLength": 1
+     }
+    },
+    "required": [
+     "id",
+     "tool",
+     "help"
+    ],
+    "additionalProperties": false
+   }
+  },
+  "fuzzy": {
+   "type": "object",
+   "properties": {
+    "min_gain": {
+     "type": "number",
+     "minimum": 0,
+     "maximum": 1
+    }
+   },
+   "required": [
+    "min_gain"
+   ],
+   "additionalProperties": false
+  },
+  "packet": {
+   "type": "object",
+   "properties": {
+    "siblings": {
+     "type": "integer",
+     "minimum": 1
+    },
+    "hints": {
+     "type": "integer",
+     "minimum": 1
+    }
+   },
+   "required": [
+    "siblings",
+    "hints"
+   ],
+   "additionalProperties": false
+  },
+  "work": {
+   "type": "object",
+   "properties": {
+    "permuter_seconds": {
+     "type": "integer",
+     "minimum": 1
+    }
+   },
+   "required": [
+    "permuter_seconds"
+   ],
+   "additionalProperties": false
+  },
+  "states": {
+   "type": "array",
+   "items": {
+    "enum": [
+     "open",
+     "tool",
+     "creative",
+     "fuzzy"
+    ]
+   }
+  }
+ },
+ "required": [
+  "schema",
+  "ladder",
+  "fuzzy",
+  "packet",
+  "work",
+  "states"
+ ],
+ "additionalProperties": false
+}

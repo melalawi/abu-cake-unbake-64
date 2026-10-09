@@ -1,1 +1,0 @@
-Real saved per-function closed headers and prior installed owner from the publication duplicate-provider failure. Candidate one matches the owner; candidate two also defines FuncPtr. Preserve payload bytes. Tests supply the scalar type dependency and use temporary project roots.

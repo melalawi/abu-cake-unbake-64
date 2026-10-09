@@ -1,0 +1,431 @@
+{
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "$id": "unbake:hint",
+ "type": "object",
+ "properties": {
+  "id": {
+   "type": "string",
+   "minLength": 1
+  },
+  "subsystem": {
+   "type": "string",
+   "minLength": 1
+  },
+  "detect": {
+   "type": "string"
+  },
+  "match": {
+   "type": "object",
+   "properties": {
+    "size_delta_bytes": {
+     "type": "object",
+     "minProperties": 1,
+     "additionalProperties": false,
+     "properties": {
+      "eq": {
+       "type": [
+        "number",
+        "boolean"
+       ]
+      },
+      "lt": {
+       "type": [
+        "number",
+        "boolean"
+       ]
+      },
+      "gte": {
+       "type": [
+        "number",
+        "boolean"
+       ]
+      }
+     }
+    },
+    "bytes_differ": {
+     "type": "object",
+     "minProperties": 1,
+     "additionalProperties": false,
+     "properties": {
+      "eq": {
+       "type": [
+        "number",
+        "boolean"
+       ]
+      },
+      "lt": {
+       "type": [
+        "number",
+        "boolean"
+       ]
+      },
+      "gte": {
+       "type": [
+        "number",
+        "boolean"
+       ]
+      }
+     }
+    },
+    "unproved": {
+     "type": "object",
+     "minProperties": 1,
+     "additionalProperties": false,
+     "properties": {
+      "eq": {
+       "type": [
+        "number",
+        "boolean"
+       ]
+      },
+      "lt": {
+       "type": [
+        "number",
+        "boolean"
+       ]
+      },
+      "gte": {
+       "type": [
+        "number",
+        "boolean"
+       ]
+      }
+     }
+    },
+    "no_measurement": {
+     "type": "object",
+     "minProperties": 1,
+     "additionalProperties": false,
+     "properties": {
+      "eq": {
+       "type": [
+        "number",
+        "boolean"
+       ]
+      },
+      "lt": {
+       "type": [
+        "number",
+        "boolean"
+       ]
+      },
+      "gte": {
+       "type": [
+        "number",
+        "boolean"
+       ]
+      }
+     }
+    },
+    "compile_failed": {
+     "type": "object",
+     "minProperties": 1,
+     "additionalProperties": false,
+     "properties": {
+      "eq": {
+       "type": [
+        "number",
+        "boolean"
+       ]
+      },
+      "lt": {
+       "type": [
+        "number",
+        "boolean"
+       ]
+      },
+      "gte": {
+       "type": [
+        "number",
+        "boolean"
+       ]
+      }
+     }
+    },
+    "unresolved": {
+     "type": "object",
+     "minProperties": 1,
+     "additionalProperties": false,
+     "properties": {
+      "eq": {
+       "type": [
+        "number",
+        "boolean"
+       ]
+      },
+      "lt": {
+       "type": [
+        "number",
+        "boolean"
+       ]
+      },
+      "gte": {
+       "type": [
+        "number",
+        "boolean"
+       ]
+      }
+     }
+    },
+    "repeated_deleted_runs": {
+     "type": "object",
+     "minProperties": 1,
+     "additionalProperties": false,
+     "properties": {
+      "eq": {
+       "type": [
+        "number",
+        "boolean"
+       ]
+      },
+      "lt": {
+       "type": [
+        "number",
+        "boolean"
+       ]
+      },
+      "gte": {
+       "type": [
+        "number",
+        "boolean"
+       ]
+      }
+     }
+    },
+    "register_dominant": {
+     "type": "object",
+     "minProperties": 1,
+     "additionalProperties": false,
+     "properties": {
+      "eq": {
+       "type": [
+        "number",
+        "boolean"
+       ]
+      },
+      "lt": {
+       "type": [
+        "number",
+        "boolean"
+       ]
+      },
+      "gte": {
+       "type": [
+        "number",
+        "boolean"
+       ]
+      }
+     }
+    },
+    "float_register_differences": {
+     "type": "object",
+     "minProperties": 1,
+     "additionalProperties": false,
+     "properties": {
+      "eq": {
+       "type": [
+        "number",
+        "boolean"
+       ]
+      },
+      "lt": {
+       "type": [
+        "number",
+        "boolean"
+       ]
+      },
+      "gte": {
+       "type": [
+        "number",
+        "boolean"
+       ]
+      }
+     }
+    },
+    "frame_delta_bytes": {
+     "type": "object",
+     "minProperties": 1,
+     "additionalProperties": false,
+     "properties": {
+      "eq": {
+       "type": [
+        "number",
+        "boolean"
+       ]
+      },
+      "lt": {
+       "type": [
+        "number",
+        "boolean"
+       ]
+      },
+      "gte": {
+       "type": [
+        "number",
+        "boolean"
+       ]
+      }
+     }
+    },
+    "sp_offset_only": {
+     "type": "object",
+     "minProperties": 1,
+     "additionalProperties": false,
+     "properties": {
+      "eq": {
+       "type": [
+        "number",
+        "boolean"
+       ]
+      },
+      "lt": {
+       "type": [
+        "number",
+        "boolean"
+       ]
+      },
+      "gte": {
+       "type": [
+        "number",
+        "boolean"
+       ]
+      }
+     }
+    },
+    "literal_immediates_off_four": {
+     "type": "object",
+     "minProperties": 1,
+     "additionalProperties": false,
+     "properties": {
+      "eq": {
+       "type": [
+        "number",
+        "boolean"
+       ]
+      },
+      "lt": {
+       "type": [
+        "number",
+        "boolean"
+       ]
+      },
+      "gte": {
+       "type": [
+        "number",
+        "boolean"
+       ]
+      }
+     }
+    },
+    "missing_struct_member": {
+     "type": "object",
+     "minProperties": 1,
+     "additionalProperties": false,
+     "properties": {
+      "eq": {
+       "type": [
+        "number",
+        "boolean"
+       ]
+      },
+      "lt": {
+       "type": [
+        "number",
+        "boolean"
+       ]
+      },
+      "gte": {
+       "type": [
+        "number",
+        "boolean"
+       ]
+      }
+     }
+    },
+    "plateau_probes": {
+     "type": "object",
+     "minProperties": 1,
+     "additionalProperties": false,
+     "properties": {
+      "eq": {
+       "type": [
+        "number",
+        "boolean"
+       ]
+      },
+      "lt": {
+       "type": [
+        "number",
+        "boolean"
+       ]
+      },
+      "gte": {
+       "type": [
+        "number",
+        "boolean"
+       ]
+      }
+     }
+    },
+    "score": {
+     "type": "object",
+     "minProperties": 1,
+     "additionalProperties": false,
+     "properties": {
+      "eq": {
+       "type": [
+        "number",
+        "boolean"
+       ]
+      },
+      "lt": {
+       "type": [
+        "number",
+        "boolean"
+       ]
+      },
+      "gte": {
+       "type": [
+        "number",
+        "boolean"
+       ]
+      }
+     }
+    }
+   },
+   "required": [],
+   "additionalProperties": false
+  },
+  "technique": {
+   "type": "string",
+   "minLength": 1
+  },
+  "example": {
+   "type": "string"
+  },
+  "scope": {
+   "enum": [
+    "ordinary",
+    "hardware",
+    "sdk"
+   ]
+  },
+  "qualifier_effect": {
+   "enum": [
+    "none",
+    "reference_only"
+   ]
+  }
+ },
+ "required": [
+  "id",
+  "subsystem",
+  "detect",
+  "match",
+  "technique",
+  "example",
+  "scope",
+  "qualifier_effect"
+ ],
+ "additionalProperties": false
+}

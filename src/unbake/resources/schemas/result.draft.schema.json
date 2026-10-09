@@ -1,0 +1,78 @@
+{
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "$id": "unbake:result.draft",
+ "type": "object",
+ "properties": {
+  "member": {
+   "type": "string",
+   "minLength": 1
+  },
+  "kind": {
+   "enum": [
+    "function",
+    "data"
+   ]
+  },
+  "version": {
+   "type": "string",
+   "minLength": 1
+  },
+  "path": {
+   "type": "string",
+   "minLength": 1
+  },
+  "gbi_rewrites": {
+   "type": "integer",
+   "minimum": 0
+  },
+  "subsystem": {
+   "type": "string",
+   "minLength": 1
+  },
+  "hints": {
+   "type": "array",
+   "items": {
+    "type": "object",
+    "properties": {
+     "id": {
+      "type": "string",
+      "minLength": 1
+     },
+     "technique": {
+      "type": "string",
+      "minLength": 1
+     },
+     "example": {
+      "type": "string"
+     },
+     "because": {
+      "type": "object",
+      "additionalProperties": {}
+     }
+    },
+    "required": [
+     "id",
+     "technique",
+     "example",
+     "because"
+    ],
+    "additionalProperties": false
+   }
+  },
+  "declarations": {
+   "type": "integer",
+   "minimum": 0
+  }
+ },
+ "required": [
+  "member",
+  "kind",
+  "version",
+  "path",
+  "gbi_rewrites",
+  "subsystem",
+  "hints",
+  "declarations"
+ ],
+ "additionalProperties": false
+}

@@ -1,0 +1,10 @@
+check:
+  image: ${image}
+  before_script:
+    - apt-get update
+    - apt-get install -y --no-install-recommends ${packages}
+  script:
+    - make check CHECK=tree
+  artifacts:
+    paths:
+      - versions/*/report.json

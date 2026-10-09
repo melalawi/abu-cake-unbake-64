@@ -1,543 +1,143 @@
-"""Run one external tool and name its failure; read text inputs and name their failure."""
+"""Native execution with per-child accounting and process-group timeouts."""
 
-from __future__ import annotations
-
-import contextlib
-import hashlib
-import json
 import os
-import resource
-import select
+import selectors
 import signal
 import subprocess
-import sys
-import time
-import traceback
-from collections.abc import Iterator, Mapping, Sequence
-from contextlib import contextmanager
-from contextvars import ContextVar
-from dataclasses import asdict, dataclass, field, replace
+from collections.abc import Mapping, Sequence
+from contextlib import ExitStack, suppress
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
+from time import perf_counter_ns
 
-if TYPE_CHECKING:
-    from unbake.inputs import DependencySet
-
-from unbake.config import Held
+from unbake import effort
+from unbake.contracts import Config, Finding, NativeResult, Refusal
 
 
-@dataclass(frozen=True)
-class SourceLocation:
-    path: str
-    line: int | None = None
-    column: int | None = None
+def _kill(pid: int) -> None:
+    with suppress(ProcessLookupError):
+        os.killpg(pid, signal.SIGKILL)
 
 
-@dataclass(frozen=True)
-class Action:
-    kind: Literal["command", "edit", "stop"]
-    argv: tuple[str, ...] = ()
-    paths: tuple[str, ...] = ()
-    reason: str = ""
-
-    def render(self, context: Any) -> str:
-        if self.kind == "command":
-            words = tuple(
-                str(context.root / word.removeprefix("project:")) if word.startswith("project:") else word
-                for word in self.argv
-            )
-            return str(context.cmd(*words))
-        reason = self.reason.removeprefix("stop: ")
-        return "stop: " + reason
+def scratch(root: Path) -> Path:
+    """The temporary directory every child of a project gets (TMPDIR), created when first needed."""
+    path = root / ".unbake" / "tmp"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
 
 
-@dataclass(frozen=True)
-class RetryRule:
-    kind: Literal["dependencies", "worker-generation", "never"]
-    watch: tuple[str, ...] = ()
-
-
-@dataclass(frozen=True)
-class Cause:
-    key: str
-    owner: str
-    stage: str
-    subject: str
-    reason: str
-    location: SourceLocation | None
-    dependency_set: DependencySet
-    retry: RetryRule
-    action: Action
-    evidence: Mapping[str, Any] = field(default_factory=dict)
-
-    @property
-    def id(self) -> str:
-        stable = {
-            "owner": self.owner,
-            "key": self.key,
-            "stage": self.stage,
-            "subject": self.subject,
-            "location": asdict(self.location) if self.location else None,
-            "signature": self.evidence.get("signature"),
-        }
-        return hashlib.sha256(
-            json.dumps(stable, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
-        ).hexdigest()
-
-    @property
-    def blocked_key(self) -> str:
-        from unbake.cache import key
-
-        return key(self.id, self.dependency_set.digest)
-
-    @property
-    def retryability(self) -> str:
-        return "unknown" if self.dependency_set.values.get("dependencies_unknown") else self.retry.kind
-
-    def document(self) -> dict[str, Any]:
-        return {
-            "key": self.key,
-            "owner": self.owner,
-            "stage": self.stage,
-            "subject": self.subject,
-            "reason": self.reason,
-            "location": asdict(self.location) if self.location else None,
-            "dependency_set": self.dependency_set.document(),
-            "retry": asdict(self.retry),
-            "action": asdict(self.action),
-            "evidence": dict(self.evidence),
-            "cause_id": self.id,
-            "blocked_key": self.blocked_key,
-            "retryability": self.retryability,
-        }
-
-    @classmethod
-    def read(cls, value: Mapping[str, Any]) -> Cause:
-        from unbake.inputs import DependencySet, FilePin, LogicalPath
-
-        required = {
-            "key",
-            "owner",
-            "stage",
-            "subject",
-            "reason",
-            "location",
-            "dependency_set",
-            "retry",
-            "action",
-            "evidence",
-        }
-        if required - value.keys():
-            raise ValueError("fault.cause: incomplete explicit cause")
-        for name in ("key", "owner", "stage", "subject", "reason"):
-            if not isinstance(value[name], str) or not value[name]:
-                raise ValueError("fault.cause: explicit nonempty " + name + " required")
-        if (
-            value["retry"]["kind"] not in ("dependencies", "worker-generation", "never")
-            or not isinstance(value["retry"]["watch"], (tuple, list))
-            or any(not isinstance(k, str) for k in value["retry"]["watch"])
-        ):
-            raise ValueError("fault.retry: explicit rule required")
-        if value["action"]["kind"] not in ("command", "edit", "stop") or not isinstance(value["evidence"], Mapping):
-            raise ValueError("fault.action: typed action and evidence required")
-        dependencies = value["dependency_set"]
-        pins = tuple(
-            FilePin(
-                LogicalPath(row["path"]["root"], tuple(row["path"]["parts"])),
-                row["state"],
-                row["sha256"],
-                LogicalPath(row["link_target"]["root"], tuple(row["link_target"]["parts"]))
-                if row["link_target"]
-                else None,
-            )
-            for row in dependencies["files"]
+def _execute(name, argv, cwd, stdin, stdout_path, timeout, outputs, tmp):
+    start = perf_counter_ns()
+    deadline = None if timeout is None else start + timeout * 1_000_000_000
+    streams = {"stdout": bytearray(), "stderr": bytearray()}
+    with ExitStack() as stack:
+        destination = subprocess.PIPE
+        if stdout_path is not None:
+            destination = stack.enter_context(stdout_path.open("wb"))
+        proc = subprocess.Popen(
+            argv, cwd=cwd, stdin=subprocess.PIPE, stdout=destination,
+            stderr=subprocess.PIPE, start_new_session=True, env={**os.environ, "TMPDIR": str(tmp)},
         )
-        return cls(
-            value["key"],
-            value["owner"],
-            value["stage"],
-            value["subject"],
-            value["reason"],
-            SourceLocation(**value["location"]) if value["location"] else None,
-            DependencySet(pins, dependencies["values"], dependencies["recipes"]),
-            RetryRule(value["retry"]["kind"], tuple(value["retry"]["watch"])),
-            Action(
-                value["action"]["kind"],
-                tuple(value["action"]["argv"]),
-                tuple(value["action"]["paths"]),
-                value["action"]["reason"],
-            ),
-            value["evidence"],
-        )
-
-
-@dataclass(frozen=True)
-class Frame:
-    kind: Literal["context", "python", "native"]
-    owner: str
-    stage: str
-    reason: str
-    evidence: Mapping[str, Any] = field(default_factory=dict)
-
-    def document(self) -> dict[str, Any]:
-        return {
-            "kind": self.kind,
-            "owner": self.owner,
-            "stage": self.stage,
-            "reason": self.reason,
-            "evidence": dict(self.evidence),
-        }
-
-
-@dataclass(frozen=True)
-class Fault:
-    cause: Cause
-    chain: tuple[Frame | NativeResult | Cause, ...] = ()
-
-    def document(self) -> dict[str, Any]:
-        frames = []
-        for item in self.chain:
-            if isinstance(item, NativeResult):
-                frames.append({"kind": "native", "result": asdict(item)})
-            elif isinstance(item, Cause):
-                frames.append({"kind": "cause", "cause": item.document()})
+        try:
+            selector = stack.enter_context(selectors.DefaultSelector())
+            for role, pipe in (("stdout", proc.stdout), ("stderr", proc.stderr)):
+                if pipe is not None:
+                    stack.enter_context(pipe)
+                    os.set_blocking(pipe.fileno(), False)
+                    selector.register(pipe, selectors.EVENT_READ, role)
+            stack.enter_context(proc.stdin)
+            pending = memoryview(stdin)
+            if pending:
+                os.set_blocking(proc.stdin.fileno(), False)
+                selector.register(proc.stdin, selectors.EVENT_WRITE, "stdin")
             else:
-                frames.append(item.document())
-        return {"schema": 2, "cause": self.cause.document(), "chain": frames}
-
-    def framed(self, owner: str, stage: str, reason: str, evidence: Mapping[str, Any] | None = None) -> Fault:
-        return replace(self, chain=(*self.chain, Frame("context", owner, stage, reason, evidence or {})))
-
-    @classmethod
-    def read(cls, value: Mapping[str, Any]) -> Fault:
-        if (
-            set(value) != {"schema", "cause", "chain"}
-            or type(value.get("schema")) is not int
-            or value.get("schema") != 2
-        ):
-            raise ValueError("fault.schema: schema=2 required; use offline state migration")
-        frames: list[Frame | NativeResult | Cause] = []
-        for row in value["chain"]:
-            if row["kind"] == "native":
-                data = dict(row["result"])
-                data["args"] = tuple(data["args"])
-                frames.append(NativeResult(**data))
-            elif row["kind"] == "cause":
-                frames.append(Cause.read(row["cause"]))
-            else:
-                frames.append(Frame(row["kind"], row["owner"], row["stage"], row["reason"], row["evidence"]))
-        return cls(Cause.read(value["cause"]), tuple(frames))
-
-
-@dataclass(frozen=True)
-class CauseScope:
-    subject: str
-    dependencies: DependencySet
-    complete: bool
-
-
-_scope: ContextVar[CauseScope | None] = ContextVar("unbake_cause_scope", default=None)
-
-
-@contextmanager
-def cause_scope(subject: str, dependencies: DependencySet, *, complete: bool = True) -> Any:
-    token = _scope.set(CauseScope(subject, dependencies, complete))
-    try:
-        yield
-    finally:
-        _scope.reset(token)
-
-
-def named(
-    key: str,
-    reason: str,
-    *,
-    owner: str,
-    stage: str,
-    subject: str | None = None,
-    dependencies: DependencySet | None = None,
-    action: Action | None = None,
-    retry: RetryRule | None = None,
-    evidence: Mapping[str, Any] | None = None,
-    location: SourceLocation | None = None,
-) -> Cause:
-    """Owner supplies the explicit key; request scope supplies only proven dependency context."""
-    from unbake.inputs import DependencySet
-
-    scope = _scope.get()
-    deps = dependencies or (
-        scope.dependencies if scope and scope.complete else DependencySet((), {"dependencies_unknown": True}, {})
-    )
-    return Cause(
-        key,
-        owner,
-        stage,
-        subject or (scope.subject if scope else owner),
-        reason,
-        location,
-        deps,
-        retry
-        or RetryRule(
-            "dependencies",
-            (
-                *tuple(p.path.name for p in deps.files),
-                *tuple("value:" + k for k in deps.values),
-                *tuple("recipe:" + k for k in deps.recipes),
-            ),
-        ),
-        action or Action("stop", reason=reason),
-        evidence or {},
-    )
-
-
-def capture(error: BaseException, *, cause: Cause) -> Fault:
-    """Preserve the first owning cause and add typed context, never search nested dicts for a cause."""
-    if isinstance(error, Held):
-        return error.fault if error.fault.cause == cause else error.fault.framed(cause.owner, cause.stage, cause.reason)
-    frames = tuple(
-        {"file": Path(f.filename).name, "line": f.lineno, "function": f.name}
-        for f in traceback.extract_tb(error.__traceback__)
-    )
-    evidence = {"type": type(error).__name__, "frames": frames, "reason": str(error)}
-    if isinstance(error.__cause__, Held):
-        return error.__cause__.fault.framed(cause.owner, cause.stage, cause.reason, evidence)
-    return Fault(cause, (Frame("python", cause.owner, cause.stage, str(error), evidence),))
-
-
-def attached(cause: Cause, fault: Fault | Mapping[str, Any] | None) -> Fault:
-    if fault is None:
-        return Fault(cause)
-    current = Fault.read(fault) if isinstance(fault, Mapping) else fault
-    return current.framed(cause.owner, cause.stage, cause.reason)
-
-
-def native_results(fault: Fault) -> tuple[NativeResult, ...]:
-    return tuple(frame for frame in fault.chain if isinstance(frame, NativeResult))
-
-
-def temporary_environment(work: Path, env: Mapping[str, str] | None = None) -> dict[str, str]:
-    """Pin child scratch, including SQLite spill files, to the caller's explicit storage."""
-    directory = work.resolve()
-    directory.mkdir(parents=True, exist_ok=True)
-    return dict(
-        os.environ if env is None else env,
-        TMPDIR=str(directory),
-        TMP=str(directory),
-        TEMP=str(directory),
-        SQLITE_TMPDIR=str(directory),
-    )
-
-
-@dataclass(frozen=True)
-class NativeResult:
-    args: tuple[str, ...]
-    cwd: str
-    exit: int | None
-    signal: int | None
-    stdout: str
-    stderr: str
-    category: str
-    errno: int | None
-    encoding: str
-    errors: str
-    context: dict[str, Any]
-
-
-def run_native(
-    argv: list[str],
-    work: Path,
-    phase: str,
-    *,
-    context: dict[str, Any] | None = None,
-    env: dict[str, str] | None = None,
-    temporary_root: Path | None = None,
-    stdin: str | None = None,
-) -> NativeResult:
-    """The one native result/fault boundary, retaining both streams and exact invocation."""
-    from unbake import effort
-
-    began, spent = time.monotonic(), _children_cpu()
-    try:
-        return _run_native(argv, work, phase, context, env, temporary_root, stdin)
-    finally:
-        effort.native_call(time.monotonic() - began, _children_cpu() - spent)
-
-
-def _children_cpu() -> float:
-    usage = resource.getrusage(resource.RUSAGE_CHILDREN)
-    return usage.ru_utime + usage.ru_stime
-
-
-def _run_native(
-    argv: list[str],
-    work: Path,
-    phase: str,
-    context: dict[str, Any] | None,
-    env: dict[str, str] | None,
-    temporary_root: Path | None,
-    stdin: str | None,
-) -> NativeResult:
-    environment = dict(temporary_environment(work if temporary_root is None else temporary_root, env), LC_ALL="C")
-    key = f"{phase}.{Path(argv[0]).name}"
-    native_input: dict[str, Any] = {"input": stdin} if stdin is not None else {}
-    try:
-        completed = subprocess.run(
-            argv,
-            cwd=work,
-            env=environment,
-            **native_input,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="surrogateescape",
-        )
-    except OSError as error:
-        result = NativeResult(
-            tuple(argv),
-            str(work),
-            None,
-            None,
-            "",
-            str(error),
-            "native-os",
-            error.errno,
-            "utf-8",
-            "surrogateescape",
-            context or {},
-        )
-        raise Held(
-            Fault(
-                named(f"{key}", f"{key}: {Path(argv[0]).name}: {error.strerror}", owner="process", stage=phase),
-                (result,),
-            )
-        ) from error
-    status = completed.returncode
+                proc.stdin.close()
+            while selector.get_map():
+                remaining = None
+                if deadline is not None:
+                    remaining = (deadline - perf_counter_ns()) / 1_000_000_000
+                    if remaining <= 0:
+                        _kill(proc.pid)
+                        deadline = None
+                        remaining = None
+                for key, _ in selector.select(remaining):
+                    pipe = key.fileobj
+                    if key.data == "stdin":
+                        try:
+                            pending = pending[os.write(pipe.fileno(), pending[:65536]):]
+                        except BrokenPipeError:
+                            pending = pending[:0]
+                        except BlockingIOError:
+                            continue
+                        if not pending:
+                            selector.unregister(pipe)
+                            pipe.close()
+                    else:
+                        try:
+                            chunk = os.read(pipe.fileno(), 65536)
+                        except BlockingIOError:
+                            continue
+                        if chunk:
+                            streams[key.data].extend(chunk)
+                        else:
+                            selector.unregister(pipe)
+                            pipe.close()
+            _, status, usage = os.wait4(proc.pid, 0)
+            proc.returncode = os.waitstatus_to_exitcode(status)
+        finally:
+            if proc.returncode is None:
+                _kill(proc.pid)
+                _, status, _ = os.wait4(proc.pid, 0)
+                proc.returncode = os.waitstatus_to_exitcode(status)
+    code = proc.returncode
     result = NativeResult(
-        tuple(argv),
-        str(work),
-        status if status >= 0 else None,
-        -status if status < 0 else None,
-        completed.stdout,
-        completed.stderr,
-        "success" if status == 0 else "native-signal" if status < 0 else "native-exit",
-        None,
-        "utf-8",
-        "surrogateescape",
-        context or {},
+        tuple(str(arg) for arg in argv), str(cwd),
+        code if code >= 0 else None, -code if code < 0 else None,
+        bytes(streams["stdout"]), bytes(streams["stderr"]),
+        (perf_counter_ns() - start) / 1_000_000_000,
+        usage.ru_utime + usage.ru_stime, usage.ru_maxrss * 1024, dict(outputs),
     )
-    if status:
-        detail = next(iter((completed.stderr or completed.stdout).strip().splitlines()), "no diagnostic")
-        cause = f"signal {-status}" if status < 0 else f"exit {status}"
-        raise Held(
-            Fault(
-                named(
-                    f"{key}", f"{key}: {Path(argv[0]).name} failed ({cause}): {detail}", owner="process", stage=phase
-                ),
-                (result,),
-            )
-        )
+    effort.record_native(name, result, start)
     return result
 
 
-def git_pathspec(argv: list[str]) -> tuple[list[str], str | None]:
-    """Keep large add/commit path sets off argv, preserving one atomic Git operation."""
-    if "--" not in argv or not ({"add", "commit"} & set(argv[: argv.index("--")])):
-        return argv, None
-    offset = argv.index("--")
-    paths = argv[offset + 1 :]
-    # Leave ample room for the environment and pointer table on small ARG_MAX hosts.
-    if sum(len(os.fsencode(value)) + 9 for value in argv) <= 32768:
-        return argv, None
-    return [*argv[:offset], "--pathspec-from-file=-", "--pathspec-file-nul"], "\0".join(paths) + "\0"
-
-
-def path_batches(paths: Sequence[str]) -> Iterator[list[str]]:
-    """Bound path argv for read-only Git commands without pathspec-file support."""
-    batch: list[str] = []
-    size = 0
-    for path in paths:
-        cost = len(os.fsencode(path)) + 9
-        if batch and size + cost > 32768:
-            yield batch
-            batch, size = [], 0
-        batch.append(path)
-        size += cost
-    if batch:
-        yield batch
-
-
-def run_tool(
-    argv: list[str],
-    work: Path,
-    phase: str,
-    *,
-    context: dict[str, Any] | None = None,
-    temporary_root: Path | None = None,
-    stdin: str | None = None,
-) -> str:
-    return run_native(argv, work, phase, context=context, temporary_root=temporary_root, stdin=stdin).stdout
-
-
-def read_text(path: Path, phase: str) -> str:
-    try:
-        return Path(path).read_text(encoding="utf-8")
-    except (OSError, UnicodeError) as error:
-        raise Held(named(f"{path}", f"{path}: {error}", owner="process", stage=phase)) from error
-
-
-def owner(server: int) -> int:
-    """The process that started the fork server `server`: the one that owns the pool."""
-    stat = Path(f"/proc/{server}/stat").read_text()
-    return int(stat.rsplit(")", 1)[1].split()[1])
-
-
-def orphaned(descriptor: int | None, server: int) -> None:
-    """When the owner exits, kill the fork server and this worker's group. A stopped owner often takes the server
-    down first: its absence must never spare the group (orphan workers kept running and holding memory)."""
-    if descriptor is not None:
-        select.select([descriptor], [], [])
-    with contextlib.suppress(ProcessLookupError):
-        os.kill(server, signal.SIGKILL)
-    with contextlib.suppress(ProcessLookupError):
-        os.killpg(0, signal.SIGKILL)
-
-
-def kill_groups(pids: Sequence[int]) -> None:
-    """SIGKILL each worker's process group (the worker itself when its group does not exist yet)."""
-    for pid in pids:
+def run(
+    name: str, argv: Sequence[str], cwd: Path, *, tmp: Path, stdin: bytes = b"",
+    stdout_path: Path | None = None, timeout: float | None = None,
+    outputs: Mapping[str, Path] = {},
+) -> NativeResult:
+    with effort.stage("process.run"):
+        executable = str(argv[0]) if argv else ""
+        if not executable or not Path(executable).is_file() or not os.access(executable, os.X_OK):
+            raise Refusal(Finding(
+                "native.missing_tool", reason="the tool is not an executable file", path=executable,
+            ))
+        if Path(executable).name in ("make", "permuter") and "-j" not in [a[:2] for a in argv[1:]]:
+            raise Refusal(Finding("native.exit", reason=f"{Path(executable).name} runs only with -j from host.workers"))
         try:
-            os.killpg(pid, signal.SIGKILL)
-        except (ProcessLookupError, PermissionError):
-            with contextlib.suppress(ProcessLookupError):
-                os.kill(pid, signal.SIGKILL)
+            tmp.mkdir(parents=True, exist_ok=True)
+            return _execute(name, argv, cwd, stdin, stdout_path, timeout, outputs, tmp)
+        except OSError as error:
+            raise Refusal(Finding("native.exit", reason=str(error))) from error
 
 
-# Runs outside the permuter's group: when the owner (argv 1) exits, even by SIGKILL, the group (argv 2) dies.
-_WATCH = (
-    "import os, select, signal, sys\n"
-    "select.select([os.pidfd_open(int(sys.argv[1]))], [], [])\n"
-    "try:\n"
-    "    os.killpg(int(sys.argv[2]), signal.SIGKILL)\n"
-    "except ProcessLookupError:\n"
-    "    pass\n"
-)
-
-
-@contextmanager
-def managed_group(
-    argv: Sequence[str], *, cwd: Path, env: Mapping[str, str], stdout: Any, stderr: Any
-) -> Iterator[subprocess.Popen[Any]]:
-    """One owner-death watcher and teardown for a native process tree."""
-    child = subprocess.Popen(argv, cwd=cwd, env=dict(env), stdout=stdout, stderr=stderr, start_new_session=True)
-    watcher = None
+def tool(config: Config, name: str, *, kind: str | None = None) -> Path:
     try:
-        watcher = subprocess.Popen(
-            [sys.executable, "-c", _WATCH, str(os.getpid()), str(child.pid)], env=dict(env), start_new_session=True
-        )
-        yield child
-    finally:
-        kill_groups([child.pid])
-        child.wait()
-        if watcher is not None:
-            watcher.kill()
-            watcher.wait()
+        return config.host.tools[name]
+    except KeyError:
+        raise Refusal(Finding(
+            "native.missing_tool", reason=f"host tools.{name} is not configured"
+            + (f" for unit kind {kind}" if kind else ""),
+        )) from None
+
+
+def git(config: Config, *args: str) -> NativeResult:
+    with effort.stage("process.git"):
+        result = run("git " + args[0], [tool(config, "git"), *args], config.project.root,
+                     tmp=scratch(config.project.root))
+        if result.exit != 0:
+            lines = result.stderr.decode("utf-8", errors="replace").splitlines()
+            raise Refusal(Finding(
+                "native.exit", reason=lines[-1] if lines else "git exited with an error",
+                missing=(f"git {' '.join(args)} exit {result.exit}",),
+            ))
+        return result

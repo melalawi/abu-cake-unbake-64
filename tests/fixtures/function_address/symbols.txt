@@ -1,2 +1,0 @@
-func_8011F810 = 0x8011F810; // type:func
-func_8011FEBC = 0x8011FEBC; // type:func

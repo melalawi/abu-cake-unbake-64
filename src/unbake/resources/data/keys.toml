@@ -1,0 +1,324 @@
+# Every Finding key. config.sentence(key) gives the human sentence; tests assert every key used in src exists here.
+schema = 1
+
+[key."adapter.unknown"]
+owner = "adapters"
+sentence = "the toolchain id is not in toolchains.toml"
+
+[key."assemble.error"]
+owner = "adapters"
+sentence = "the assembler reported an error"
+
+[key."budget.single_core"]
+owner = "effort"
+sentence = "a stage ran long on fewer cores than the budget"
+
+[key."budget.pool_underused"]
+owner = "effort"
+sentence = "a pool with many jobs kept too few workers busy"
+
+[key."budget.warm_dispatch"]
+owner = "effort"
+sentence = "a pool dispatched work although every cache lookup was warm"
+
+[key."budget.repeated"]
+owner = "effort"
+sentence = "the same long stage closed twice in one command"
+
+[key."check.both"]
+owner = "land"
+sentence = "--both needs --reprove"
+
+[key."check.unit"]
+owner = "land"
+sentence = "the named unit is not a decompiled unit of the project"
+
+[key."check.debt"]
+owner = "land"
+sentence = "the project has rule debt"
+
+
+[key."compare.out"]
+owner = "compare"
+sentence = "the artifact directory already exists"
+
+[key."compile.error"]
+owner = "adapters"
+sentence = "the compiler reported an error"
+
+[key."config.file"]
+owner = "config"
+sentence = "a configured file or tool path is wrong"
+
+[key."config.missing"]
+owner = "config"
+sentence = "a required configuration file is missing"
+
+[key."config.resource"]
+owner = "config"
+sentence = "a bundled resource is missing or unreadable"
+
+[key."config.retired"]
+owner = "config"
+sentence = "a configuration key was retired at the cutover"
+
+[key."config.schema"]
+owner = "config"
+sentence = "a configuration or data file does not match its schema"
+
+[key."draft.context"]
+owner = "headers"
+sentence = "the header context for m2c cannot be built"
+
+[key."draft.m2c"]
+owner = "draft"
+sentence = "m2c produced no draft"
+
+[key."effort.log"]
+owner = "effort"
+sentence = "stage records could not be written to build/stages.jsonl"
+
+[key."headers.conflict"]
+owner = "headers"
+sentence = "a local declaration disagrees with a header"
+
+[key."headers.parse"]
+owner = "headers"
+sentence = "the preprocessed source cannot be parsed"
+
+[key."types.conflict"]
+owner = "headers"
+sentence = "a name is declared with different types and no source defines it"
+
+[key."internal.error"]
+owner = "cli"
+sentence = "unbake failed unexpectedly"
+
+[key."internal.no-cause"]
+owner = "cli"
+sentence = "a command failed without naming why"
+
+[key."journal.changed"]
+owner = "journal"
+sentence = "the project changed under a planned write"
+
+[key."journal.readback"]
+owner = "journal"
+sentence = "committed files differ from the plan"
+
+[key."land.not_exact"]
+owner = "compare"
+sentence = "the build does not match the ROM in every holding version"
+
+[key."land.request"]
+owner = "compare"
+sentence = "the request does not name a publishable function"
+
+[key."layout.map"]
+owner = "layout"
+sentence = "layout.toml names a member that the splits do not hold"
+
+[key."layout.ownership"]
+owner = "layout"
+sentence = "a unit's compiled data could not be placed exactly in the ROM"
+
+[key."layout.member"]
+owner = "layout"
+sentence = "the member is not an assembly row"
+
+[key."layout.nonconvergent"]
+owner = "layout"
+sentence = "applying the boundary plan produced another plan"
+
+[key."link.error"]
+owner = "adapters"
+sentence = "n64link or ld failed"
+
+[key."tool.version"]
+owner = "adapters"
+sentence = "abucache is not the version this unbake is written for"
+
+[key."native.exit"]
+owner = "process"
+sentence = "a native tool exited with an error"
+
+[key."native.missing_tool"]
+owner = "process"
+sentence = "a configured tool is not an executable file"
+
+[key."preprocess.error"]
+owner = "adapters"
+sentence = "the preprocessor reported an error"
+
+
+[key."recipe.conflict"]
+owner = "recipes"
+sentence = "the same option is added and omitted"
+
+[key."recipe.option"]
+owner = "recipes"
+sentence = "a compiler option is unknown or absent"
+
+[key."repair.not_exact"]
+owner = "publish"
+sentence = "the repaired header does not keep every consumer exact"
+
+[key."setup.splat"]
+owner = "build"
+sentence = "splat failed"
+
+[key."source.decompiler-placeholder"]
+owner = "policy"
+sentence = "an unresolved decompiler placeholder is left in the source"
+
+[key."source.empty-loop"]
+owner = "policy"
+sentence = "an empty loop needs a FAKEMATCH reason"
+
+[key."source.file-version-guard"]
+owner = "policy"
+sentence = "a version guard is not allowed in a source file"
+
+[key."source.inline-asm"]
+owner = "policy"
+sentence = "inline assembly is never allowed"
+
+[key."source.local-define"]
+owner = "policy"
+sentence = "a file-local macro belongs in a shared header"
+
+[key."source.local-include"]
+owner = "policy"
+sentence = "a source file may include only headers under include/"
+
+[key."source.raw-gfx"]
+owner = "policy"
+sentence = "a raw display list word is used instead of a GBI macro"
+
+[key."source.raw-offset"]
+owner = "policy"
+sentence = "a raw byte offset is used instead of a typed field"
+
+[key."source.shared-declarations"]
+owner = "policy"
+sentence = "a declaration that a header already provides is repeated in the source"
+
+[key."source.tool-comment"]
+owner = "policy"
+sentence = "a tool comment is left in the source"
+
+[key."source.volatile-storage"]
+owner = "policy"
+sentence = "volatile is allowed only for SDK hardware access or inside SDK library units"
+
+[key."store.corrupt"]
+owner = "store"
+sentence = "a ledger line cannot be read"
+
+[key."symbols.conflict"]
+owner = "versions"
+sentence = "a symbol has two addresses in one version"
+
+[key."symbols.exists"]
+owner = "symbols"
+sentence = "the new name already names a symbol"
+
+[key."symbols.name"]
+owner = "symbols"
+sentence = "a symbol name is not a C identifier"
+
+[key."symbols.table"]
+owner = "symbols"
+sentence = "symbols.toml is malformed or names a version the project does not have"
+
+[key."symbols.unknown"]
+owner = "symbols"
+sentence = "a name is not in the symbol table and has no address in this version"
+
+[key."toolchain.download"]
+owner = "build"
+sentence = "a toolchain download does not match its pin"
+
+[key."toolchain.pin"]
+owner = "build"
+sentence = "an installed toolchain file does not match its pin"
+
+[key."version.rom"]
+owner = "versions"
+sentence = "a ROM range is outside the ROM"
+
+[key."version.split"]
+owner = "versions"
+sentence = "the splat split or its assembly is incomplete"
+
+[key."view.include"]
+owner = "view"
+sentence = "an active include cannot be found"
+
+[key."worker.crash"]
+owner = "pool"
+sentence = "a pool worker failed"
+
+[key."worker.memory"]
+owner = "pool"
+sentence = "a pool worker hit its memory limit"
+
+[key."draft.data"]
+owner = "draft"
+sentence = "the data item cannot be drafted from its placements"
+
+[key."fuzzy.no_gain"]
+owner = "land"
+sentence = "the candidate does not raise the item's best score by the fuzzy minimum gain"
+
+[key."inbox.corrupt"]
+owner = "land"
+sentence = "an inbox entry does not validate against its schema"
+
+[key."init.request"]
+owner = "repo"
+sentence = "the init request is invalid"
+
+[key."init.rom_duplicate"]
+owner = "repo"
+sentence = "two versions name byte-identical ROMs"
+
+[key."init.rom_mismatch"]
+owner = "repo"
+sentence = "the ROM does not look like the same game as the names_from ROM"
+
+[key."init.rom_order"]
+owner = "repo"
+sentence = "the ROM is not in big-endian z64 byte order"
+
+[key."land.duplicate"]
+owner = "land"
+sentence = "the item is already landed with these bytes"
+
+[key."layout.busy"]
+owner = "layout"
+sentence = "the project changed three times while being read"
+
+[key."repo.readme_markers"]
+owner = "repo"
+sentence = "README.md lacks the progress markers"
+
+[key."report.request"]
+owner = "report"
+sentence = "the work-list request is invalid"
+
+[key."setup.busy"]
+owner = "repo"
+sentence = "a landing or another setup holds the project write lock"
+
+[key."setup.make"]
+owner = "build"
+sentence = "make check failed on the rendered build"
+
+[key."setup.not_exact"]
+owner = "repo"
+sentence = "the extracted assembly does not rebuild the ROM bytes"
+
+[key."types.m2c"]
+owner = "types"
+sentence = "m2c produced no signature for a function"

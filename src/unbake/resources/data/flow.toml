@@ -1,0 +1,35 @@
+# Cracking flow. The ladder runs in this order (crack.py); a step whose tool is false is done by a person or an AI
+# lane from the packet. fuzzy.min_gain: a fuzzy landing must raise the member's minimum holder score by this much.
+schema = 1
+states = ["open", "tool", "creative", "fuzzy"]
+
+[[ladder]]
+id = "draft"
+tool = true
+help = "m2c draft with the project type map, GBI rewrite and subsystem headers"
+
+[[ladder]]
+id = "options"
+tool = true
+help = "every compiler option proposal of the unit toolchain, measured in all holders"
+
+[[ladder]]
+id = "permuter"
+tool = true
+help = "decomp-permuter on the best candidate for the given seconds"
+
+[[ladder]]
+id = "creative"
+tool = false
+help = "edit the best candidate guided by the packet: matched hints, subsystem idioms, sibling sources, types"
+
+[fuzzy]
+min_gain = 0.01
+
+[packet]
+siblings = 6
+hints = 8
+
+# The --seconds value report --next writes into each suggested crack command.
+[work]
+permuter_seconds = 120

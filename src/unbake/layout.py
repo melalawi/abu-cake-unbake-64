@@ -1,0 +1,441 @@
+"""Immutable layouts, source placement options, and conservative boundary repair."""
+from __future__ import annotations
+
+import bisect
+import hashlib
+import os
+import pickle
+import re
+import struct
+import sys
+import tomllib
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import asdict, replace
+from functools import cache, partial
+from itertools import chain, pairwise
+from pathlib import Path
+
+import tomlkit
+
+from unbake import config as configuration
+from unbake import contracts, effort, process, store, symbols
+from unbake import versions as version_data
+from unbake.contracts import (
+    Claim,
+    Config,
+    Finding,
+    Group,
+    Json,
+    LayoutMap,
+    Member,
+    Plan,
+    Refusal,
+    Snapshot,
+    UnitSpec,
+    Version,
+    digest,
+)
+
+_LINE = re.compile(
+    r"^(\s*-\s*\[\s*)(0[xX][0-9a-fA-F]+|\d+)(\s*,\s*)([\w]+)(\s*,\s*)(['\"]?)([^,\]\s'\"]+)(['\"]?)(.*)$" )
+_AUTO = re.compile(r"^(func|D)_([0-9A-F]{8})(_\w+)?$")
+def _kinds() -> tuple[str, str, str]:
+    rows = configuration.load_resource("units.toml")["kind"]
+    compiled = next(k for k, r in rows.items() if r["credit"] == "code" and "compile" in r["phases"])
+    assembly = next(k for k, r in rows.items() if r["credit"] == "code" and "compile" not in r["phases"])
+    datum = next(k for k, r in rows.items() if r["credit"] != "code" and "compile" in r["phases"])
+    return compiled, assembly, datum
+@cache
+def _code() -> str:  # the capture is pickled objects of these modules, so their source is part of its key
+    return digest([Path(m.__file__).read_bytes() for m in (contracts, sys.modules[__name__], version_data)])
+def _content(config: Config, layout: LayoutMap, vers: Mapping[str, Version], read: Callable[[str], bytes]) -> str:
+    """What a snapshot is: the map, the version files, the symbol table and the facts read from extraction. Two
+    snapshots with equal content are equal, whichever way they were made (read from disk or proposed by a plan)."""
+    return digest((layout.digest, config.digest, _code(), read(symbols.path()),
+                   [(v.id, v.rom_sha256, read(v.split), read(v.symbols_file), version_data.facts_digest(v))
+                    for v in sorted(vers.values(), key=lambda v: v.id)]))
+def _load(config: Config, key: str, produce: Callable[[], bytes]) -> tuple:
+    return pickle.loads(store.cached(config, "capture", key, produce))
+def capture(config: Config) -> Snapshot:
+    with effort.stage("layout.capture"):
+        def reader(p: str) -> bytes:
+            return (config.project.root / p).read_bytes()
+        for _ in range(3):
+            commit = process.git(config, "rev-parse", "HEAD").stdout.decode().strip()
+            paths = {"layout.toml", symbols.path()}
+            for vid, vf in config.project.version_files.items():
+                paths.update((vf.split, vf.symbols, vf.baserom))
+                paths.update(chain.from_iterable(version_data.fact_files(config, vid)))
+            paths.update(p.relative_to(config.project.root).as_posix()
+                         for p in config.project.root.glob(".unbake/symbols/*/*.csv"))
+            base = str(config.project.root)
+            pins = [(p, st.st_mtime_ns, st.st_size) for p in sorted(paths) for st in (os.stat(f"{base}/{p}"),)]
+            # the root keeps copies of one project apart; not the commit: caches stay warm across setup's own
+            key = digest((str(config.project.root), config.digest, pins, _code()))
+            def produce():
+                vers = version_data.read(config, reader)
+                return pickle.dumps((vers, load_map(config, vers, reader("layout.toml"), reader)))
+            vers, layout = effort.memo(("capture", key), partial(_load, config, key, produce))
+            if commit == process.git(config, "rev-parse", "HEAD").stdout.decode().strip():
+                return Snapshot(config, commit, layout, vers, {}, _content(config, layout, vers, reader))
+        raise Refusal(Finding("layout.busy", "HEAD moved while reading the project three times",
+                              action="retry the command"))
+def overlay(snapshot: Snapshot, writes: Mapping[str, bytes | None]) -> Snapshot:
+    """The snapshot with the writes laid over it, built once per command however many stages ask for it."""
+    return effort.memo(("overlay", snapshot.digest, digest(writes)), lambda: _overlay(snapshot, writes))
+def _overlay(snapshot: Snapshot, writes: Mapping[str, bytes | None]) -> Snapshot:
+    with effort.stage("layout.overlay"):
+        overlays = dict(snapshot.overlays)
+        overlays.update(writes)
+        files = (p for v in snapshot.versions.values() for p in (v.split, v.symbols_file))
+        watched = {"layout.toml", symbols.path(), *files}
+        others = sorted((p, hashlib.sha256(b).hexdigest() if b is not None else None)
+                        for p, b in overlays.items() if p not in watched)
+        new = replace(snapshot, overlays=overlays, digest=digest((snapshot.digest, others)))
+        if watched.intersection(writes):
+            changed = {v.id for v in snapshot.versions.values() if {v.split, v.symbols_file} & writes.keys()
+                       or symbols.path() in writes}
+            vers = {**snapshot.versions, **version_data.read(snapshot.config, new.read, changed)}
+            layout = load_map(snapshot.config, vers, new.read("layout.toml"), new.read)
+            new = replace(new, versions=vers, layout=layout,
+                          digest=digest((_content(snapshot.config, layout, vers, new.read), others)))
+        return new
+def load_map(config: Config, versions: Mapping[str, Version], text: bytes, reader: Callable[[str], bytes]) -> LayoutMap:
+    with effort.stage("layout.load_map"):
+        try:
+            doc = tomllib.loads(text.decode())
+        except (tomllib.TOMLDecodeError, UnicodeDecodeError) as exc:
+            raise Refusal(Finding("layout.map", reason=str(exc), path="layout.toml")) from exc
+        configuration.validate("layout", doc, "layout.toml")
+        groups = {r["name"]: Group(**{**r, "members": tuple(r["members"]), "signals": tuple(r["signals"])})
+                  for r in doc["group"]}
+        collected = {}
+        for key in sorted(versions):
+            for name, state, placement in version_data.rows(versions[key], reader):
+                collected.setdefault(name, []).append((state, placement))
+        datum = _kinds()[2]
+        members = {}
+        group_of = {m: g.name for g in groups.values() for m in g.members}
+        for name, rows in collected.items():
+            state = next((s for s, p in rows if p.version == config.project.names_from), rows[0][0])
+            group = group_of.get(name, "")
+            placements = tuple(sorted((p for _, p in rows), key=lambda p: (p.version, p.section)))
+            members[name] = Member(name, "function" if any(p.section == ".text" for _, p in rows) else datum,
+                                   state, group, placements)
+        units = {}
+        for row in doc["unit"]:
+            unit = UnitSpec(**{**row, "members": tuple(row["members"])})
+            missing = tuple(n for n in unit.members if n not in members)
+            if missing:
+                raise Refusal(Finding("layout.map", reason="unit members are absent from split files",
+                                      unit=unit.path, missing=missing))
+            units[unit.path] = unit
+        fuzzy = {row["member"]: {"path": row["path"], "scores": dict(row["scores"])}
+                 for row in doc.get("fuzzy", ())}
+        missing = tuple(sorted(set(fuzzy) - members.keys()))
+        if missing:
+            raise Refusal(Finding("layout.map", reason="fuzzy members are absent from split files", missing=missing))
+        return LayoutMap(doc["cap"], groups, members, units, digest(doc), tuple(doc.get("authored", ())), fuzzy)
+def dump_map(layout: LayoutMap) -> bytes:
+    doc = tomlkit.document()
+    doc["schema"], doc["cap"] = 3, layout.cap
+    for key, rows in (("group", sorted(layout.groups.values(), key=lambda g: g.name)),
+                      ("unit", sorted(layout.units.values(), key=lambda u: u.path)), ("authored", layout.authored)):
+        tables = tomlkit.aot()
+        for row in rows:
+            table = tomlkit.table()
+            values = {k: row[k] for k in ("version", "rom", "kind", "name")} if key == "authored" else asdict(row)
+            for name, value in values.items():
+                if name == "withheld" and not value:
+                    continue
+                if name == "options":
+                    value = {k: list(value[k]) for k in ("add", "omit")}
+                table[name] = list(value) if isinstance(value, tuple) else value
+            tables.append(table)
+        if rows or key != "authored":
+            doc[key] = tables if rows else []
+    if layout.fuzzy:
+        tables = tomlkit.aot()
+        for member, row in sorted(layout.fuzzy.items()):
+            table, scores = tomlkit.table(), tomlkit.inline_table()
+            for version, score in sorted(row["scores"].items()):
+                scores[version] = score
+            table["member"], table["path"], table["scores"] = member, row["path"], scores
+            tables.append(table)
+        doc["fuzzy"] = tables
+    return tomlkit.dumps(doc).encode()
+def unit_of(snapshot: Snapshot, member: str) -> UnitSpec | None:
+    units = snapshot.layout.units  # the unit holding each member first, indexed once per mapping
+    return effort.memo(("owners", id(units)), lambda: (units, {m: u for u in reversed(units.values())
+                                                              for m in reversed(u.members)}))[1].get(member)
+def asm_unit(snapshot: Snapshot, member: str, version: str) -> UnitSpec:
+    with effort.stage("layout.asm_unit"):
+        item = snapshot.layout.members.get(member)
+        if item is None or not any(p.version == version and p.section == ".text" for p in item.placements):
+            raise Refusal(Finding("layout.member", reason="member has no text placement in this version",
+                                  unit=member, versions=(version,)))
+        config = snapshot.config
+        path = version_data.asm_path(config, version, member).relative_to(config.project.root).as_posix()
+        return UnitSpec(path, _kinds()[1], item.group, (member,), config.project.toolchain, {"add": [], "omit": []})
+def _edit(text: bytes, name: str, *, state: str | None = None, start: int | None = None,
+          rename: str | None = None, additions: tuple[tuple[int, str], ...] = (), drop: bool = False) -> bytes:
+    lines = text.decode().splitlines(keepends=True)
+    for index, line in enumerate(lines):
+        match = _LINE.match(line.rstrip("\r\n"))
+        if not match or match[7] != name:
+            continue
+        ending = line[len(line.rstrip("\r\n")):]
+        parts = list(match.groups())
+        if state is not None and parts[3] not in configuration.load_resource("units.toml")["section"]["text"]["types"]:
+            continue
+        if state is not None:
+            parts[3] = state
+        if start is not None:
+            parts[1] = f"0x{start:X}" if parts[1].lower().startswith("0x") else str(start)
+        if rename is not None:
+            parts[6] = rename
+        replacement = [] if drop else ["".join(parts) + ending]
+        for address, new_name in additions:
+            added = parts.copy()
+            added[1], added[6] = f"0x{address:X}", new_name
+            added[8] = re.sub(r"(\].*?)\s*#.*", r"\1", added[8])
+            if replacement and not replacement[-1].endswith("\n"):
+                replacement[-1] += "\n"
+            replacement.append("".join(added) + ending)
+        lines[index:index + 1] = replacement
+        return "".join(lines).encode()
+    raise Refusal(Finding("layout.member", reason="member has no editable subsegment line", unit=name))
+def _claim_row(version: Version, rows: list[list], names: set[str], c: Claim) -> bool:
+    """Make the claim's bytes one row named by the claim: the rows it covers are replaced, the row it starts inside
+    ends where it starts, and what it leaves of the row it ends inside is a row named by its address. A row is
+    [start, end, vram, name, type, name of the line it is written at, whether it takes that line or follows it]."""
+    start, end, name = c.start, c.end, c.rows[0]
+    at = bisect.bisect_right(rows, start, key=lambda r: r[0]) - 1
+    after = bisect.bisect_left(rows, end, key=lambda r: r[0])
+    if at < 0 or rows[at][1] <= start:
+        raise Refusal(Finding("layout.map", f"claim 0x{start:X}-0x{end:X} of {c.unit} starts outside the data rows",
+                              unit=c.unit, versions=(c.version,), path=version.split))
+    first, last = rows[at], rows[after - 1]
+    kind = first[4] if version_data.section_of(version, first[4], name) == c.section else c.section[1:]
+    if after - at == 1 and (first[0], first[1], first[3], first[4]) == (start, end, name, kind):
+        return False
+    if name in names and name not in {r[3] for r in rows[at:after]}:
+        raise Refusal(Finding("layout.map", f"{name} names another row of {version.id}", unit=c.unit,
+                              versions=(c.version,), path=version.split))
+    new = [start, end, first[2] + start - first[0], name, kind, first[5], first[6] and first[0] == start]
+    out = [new]
+    if last[1] > end:
+        vram = last[2] + end - last[0]
+        section = version_data.section_of(version, last[4], name)[1:]
+        out.append([end, last[1], vram, f"{section}/unresolved/{vram:08X}", last[4], first[5], False])
+    if first[0] < start:
+        first[1], at = start, at + 1
+    names.difference_update(r[3] for r in rows[at:after])
+    names.update(r[3] for r in out)
+    rows[at:after] = out
+    return True
+def _claim_text(text: str, rows: list[list], origin: dict[str, tuple]) -> str:
+    """The split file with its data rows as rows has them; the lines of the rows are written the way their own are."""
+    lines, group = text.splitlines(keepends=True), {}
+    for row in rows:
+        group.setdefault(row[5], []).append(row)
+    out, found = [], set()
+    for line in lines:
+        match = _LINE.match(line.rstrip("\r\n"))
+        if not match or match[7] not in origin:
+            out.append(line)
+            continue
+        found.add(match[7])
+        if out and not out[-1].endswith("\n"):
+            out[-1] += "\n"
+        for row in group.get(match[7], ()):
+            if row[6] and (row[0], row[4], row[3]) == (*origin[match[7]],):
+                out.append(line)
+                continue
+            parts = list(match.groups())
+            parts[1] = f"0x{row[0]:X}" if parts[1].lower().startswith("0x") else str(row[0])
+            parts[3], parts[6] = row[4], row[3]
+            parts[8] = re.sub(r"(\].*?)\s*#.*", r"\1", parts[8])
+            out.append("".join(parts) + (line[len(line.rstrip("\r\n")):] or "\n"))
+    for name in origin.keys() - found:  # a row written as a mapping has no line to change
+        same = [r for r in group.get(name, ()) if r[6] and (r[0], r[4], r[3]) == origin[name]]
+        if len(group.get(name, ())) != 1 or not same:
+            raise Refusal(Finding("layout.map", "row has no editable subsegment line", unit=name))
+    return "".join(out)
+def claim_rows(snapshot: Snapshot, claims: Sequence[Claim]) -> dict[str, bytes]:
+    """The split files with every claim made one row named by it, whatever rows its bytes were before: the rows of
+    the data a unit owns are generated from the claims alone. Nothing changes where the rows are already the claims."""
+    with effort.stage("layout.claim_rows"):
+        writes = {}
+        for vid in sorted({c.version for c in claims}):
+            version, text = snapshot.versions[vid], snapshot.read(snapshot.versions[vid].split).decode()
+            rows = [[p.rom_start, p.rom_end, p.vram, n, k, n, True] for n, k, p in version_data.rows(
+                version, snapshot.read) if p.section in (".rodata", ".data")]
+            origin, names = {r[3]: (r[0], r[4], r[3]) for r in rows}, {r[3] for r in rows}
+            changed = [_claim_row(version, rows, names, c) for c in sorted(
+                (c for c in claims if c.version == vid), key=lambda c: c.start)]
+            if any(changed):
+                writes[version.split] = _claim_text(text, rows, origin).encode()
+        return writes
+def unit_options(snapshot: Snapshot, member: str, source: bytes) -> list[tuple[UnitSpec, dict[str, bytes | None]]]:
+    return effort.memo(("unit_options", snapshot.digest, member, digest(source)),
+                       lambda: _options(snapshot, member, source))
+def _options(snapshot: Snapshot, member: str, source: bytes) -> list[tuple[UnitSpec, dict[str, bytes | None]]]:
+    with effort.stage("layout.unit_options"):
+        if member not in snapshot.layout.members:
+            raise Refusal(Finding("layout.member", reason="member is absent from layout", unit=member))
+        item = snapshot.layout.members[member]
+        compiled, assembly, _ = _kinds()
+        split_writes = {}
+        holder_rows = {}
+        for holder in item.holders():
+            version = snapshot.versions[holder]
+            rows = version_data.rows(version, snapshot.read)
+            state = next((s for n, s, p in rows if n == member and p.section == ".text"), item.state)
+            if state != assembly:
+                raise Refusal(Finding("layout.member", reason=f"{member} is {state}, not {assembly}", unit=member))
+            holder_rows[holder] = [n for n, _, p in sorted(rows, key=lambda r: r[2].rom_start)]
+            split_writes[version.split] = _edit(snapshot.read(version.split), member, state=compiled)
+        group_units = sorted((u for u in snapshot.layout.units.values() if u.group == item.group), key=lambda u: u.path)
+        options = []
+        for unit in group_units:
+            if unit.kind != compiled or not unit.members:
+                continue
+            if all(names.index(member) > 0 and names[names.index(member) - 1] == unit.members[-1]
+                   for names in holder_rows.values()):
+                options.append((replace(unit, members=(*unit.members, member)),
+                                snapshot.read(unit.path) + b"\n" + source))
+        group = snapshot.layout.groups.get(item.group)
+        stem = item.group if not group_units and group and group.members and group.members[0] == member else member
+        standalone = UnitSpec(f"src/{stem}.c", compiled, item.group, (member,),
+                              group_units[0].toolchain if group_units else snapshot.config.project.toolchain,
+                              {"add": [], "omit": []})
+        options.append((standalone, source))
+        result = []
+        for unit, content in options:
+            units = dict(snapshot.layout.units)
+            units[unit.path] = unit
+            result.append((unit, {**split_writes, unit.path: content,
+                                  "layout.toml": dump_map(replace(snapshot.layout, units=units))}))
+        return result
+def _decoded(snapshot: Snapshot, version: Version, rows: list) -> tuple[dict[str, tuple[int, ...]], frozenset[int]]:
+    def decode() -> tuple[dict[str, tuple[int, ...]], frozenset[int]]:
+        addresses = {p.vram for _, _, p in rows if p.section == ".text"}
+        words, references = {}, set()
+        for name, _, placement in rows:
+            if placement.section not in (".text", ".data", ".rodata"):
+                continue
+            blob = version_data.rom_bytes(version, placement.rom_start, placement.rom_end)
+            values = struct.unpack(f">{len(blob) // 4}I", blob[:len(blob) // 4 * 4])
+            if placement.section == ".text":
+                words[name] = values
+                references.update(((placement.vram + 4 * i + 4) & 0xF0000000) | ((word & 0x3FFFFFF) << 2)
+                                  for i, word in enumerate(values) if word >> 26 == 3)
+            else:
+                references.update(addresses.intersection(values))
+        return words, frozenset(references)
+    split = hashlib.sha256(snapshot.read(version.split)).hexdigest()
+    return effort.memo(("decoded", version.rom_sha256, split), decode)
+def _rename(name: str, old: int, new: int) -> str:
+    match = _AUTO.fullmatch(name)
+    return f"{match[1]}_{new:08X}{match[3] or ''}" if match and int(match[2], 16) == old else name
+def boundary_plan(snapshot: Snapshot) -> tuple[Plan, Json]:
+    """The plan is a function of the snapshot and this code, so one computation serves every later command."""
+    with effort.stage("layout.boundary_plan"):
+        return pickle.loads(store.cached(snapshot.config, "boundary", digest((snapshot.digest, _code())),
+                                         lambda: pickle.dumps(_boundary(snapshot))))
+def _boundary(snapshot: Snapshot) -> tuple[Plan, Json]:
+    assembly = _kinds()[1]
+    counts = {rule: {"proposed": 0, "applied": 0, "withheld": 0} for rule in ("prelude", "split", "merge")}
+    counts["withheld_reasons"] = {}
+    protected = {row["name"] for row in snapshot.layout.authored}
+    candidates, placements = {}, {}
+    for holder, version in sorted(snapshot.versions.items()):
+        rows = version_data.rows(version, snapshot.read)
+        words, references = _decoded(snapshot, version, rows)
+        text_rows = sorted((r for r in rows if r[2].section == ".text"), key=lambda r: r[2].rom_start)
+        segment_starts = {start for _, start, _, _ in version.segments}
+        linked = [b[2].rom_start == a[2].rom_end and b[2].rom_start not in segment_starts  # b follows a in the ROM
+                  for a, b in pairwise(text_rows)]
+        for index, (name, state, p) in enumerate(text_rows):
+            placements[holder, name] = p
+            decisions = []
+            previous = text_rows[index - 1] if index and linked[index - 1] else None
+            following = text_rows[index + 1] if index < len(linked) and linked[index] else None
+            if (state == assembly and name not in protected
+                    and all(r is None or r[1] == assembly for r in (previous, following))):
+                code = words[name]
+                k = next((i for i, word in enumerate(code) if word != 0), len(code))
+                if previous and k and k < len(code) and p.vram + 4 * k in references and p.vram not in references:
+                    decisions.append(("prelude", (4 * k,)))
+                splits = tuple(4 * i for i in range(2, len(code))
+                               if p.vram + 4 * i in references and code[i - 2] == 0x03E00008)
+                if splits:
+                    decisions.append(("split", splits))
+                prior = words[previous[0]] if previous else ()
+                if (previous and p.vram not in references
+                        and (len(prior) < 2 or (prior[-2] != 0x03E00008 and prior[-2] >> 26 != 2))
+                        and not any(rule == "prelude" for rule, _ in decisions)):
+                    decisions.append(("merge", (0,)))
+            candidates.setdefault(name, {})[holder] = tuple(decisions)
+    writes, replacements = {}, {}
+    table = symbols.edit(snapshot)
+    applied = 0
+    for name, by_version in candidates.items():
+        proposed = {rule for decisions in by_version.values() for rule, _ in decisions}
+        if not proposed:
+            continue
+        decisions = next(iter(by_version.values()))
+        agrees = (set(by_version) == set(snapshot.layout.members[name].holders())
+                  and all(d == decisions for d in by_version.values()))
+        for rule in proposed:
+            total = max(len(offsets) for ds in by_version.values() for r, offsets in ds if r == rule)
+            counts[rule]["proposed"] += total
+            counts[rule]["applied" if agrees else "withheld"] += total
+        if not agrees:
+            reasons = counts["withheld_reasons"]
+            reasons["versions disagree"] = reasons.get("versions disagree", 0) + 1
+            continue
+        preferred = snapshot.config.project.names_from
+        reference = preferred if preferred in by_version else sorted(by_version)[0]
+        base = placements[reference, name].vram
+        shift = next((offsets[0] for rule, offsets in decisions if rule == "prelude"), 0)
+        splits = next((offsets for rule, offsets in decisions if rule == "split"), ())
+        drop = any(rule == "merge" for rule, _ in decisions)
+        renamed = _rename(name, base, base + shift)
+        split_names = tuple(_rename(name, base, base + offset) if _AUTO.fullmatch(name)
+                            else f"func_{base + offset:08X}" for offset in splits)
+        names = split_names if drop else (renamed, *split_names)
+        if names != (name,):
+            replacements[name] = names
+        applied += sum(len(offsets) for _, offsets in decisions)
+        if not drop and renamed != name and name in table:
+            table[renamed] = {**table.get(renamed, {}), **table.pop(name)}
+        for holder in sorted(by_version):
+            version, p = snapshot.versions[holder], placements[holder, name]
+            cuts = tuple(zip(splits, split_names, strict=True))
+            writes[version.split] = _edit(writes.get(version.split, snapshot.read(version.split)), name,
+                                          start=p.rom_start + shift if shift else None,
+                                          rename=renamed, drop=drop,
+                                          additions=tuple((p.rom_start + o, new) for o, new in cuts))
+            if drop:
+                table.get(name, {}).pop(holder, None)
+            else:
+                table.setdefault(renamed, {"kind": "function"})[holder] = p.vram + shift
+            for offset, new in cuts:
+                table.setdefault(new, {"kind": "function"})[holder] = p.vram + offset
+        if name in table and drop and table[name].keys() <= {"kind"}:
+            del table[name]
+    # the symbol files follow the table
+    wanted = symbols.files(table, {v.id: v.symbols_file for v in snapshot.versions.values()})
+    writes.update({path: text for path, text in wanted.items() if text != snapshot.read(path)})
+    if replacements:
+        def expanded(names):
+            return tuple(new for name in names for new in replacements.get(name, (name,)))
+        groups = {k: replace(g, members=expanded(g.members)) for k, g in snapshot.layout.groups.items()}
+        units = {k: replace(u, members=expanded(u.members))
+                 for k, u in snapshot.layout.units.items() if expanded(u.members)}
+        writes["layout.toml"] = dump_map(replace(snapshot.layout, groups=groups, units=units))
+    message = f"layout: {applied} boundary edits"
+    return Plan("layout", snapshot.digest, writes, (), (), (), message,
+                digest(("layout", snapshot.digest, writes, message))), counts

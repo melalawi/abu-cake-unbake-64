@@ -1,1 +1,0 @@
-BattleTanx us saved solver split-route payloads: three minimal width reproductions and the complete local-stack shared-type reproduction. The halfword C draft was emitted from the saved assembly and context, without a project solve. Files are retained verbatim.
