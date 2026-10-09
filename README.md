@@ -12,13 +12,9 @@ On Debian or Ubuntu install make, a C compiler and preprocessor, MIPS binutils, 
 sudo apt install build-essential binutils-mips-linux-gnu git python3 python3-venv
 ```
 
-Build `n64link` and put it on your PATH.
-
-```sh
-git clone https://github.com/melalawi/abu-mas-n64
-make -C abu-mas-n64
-sudo install abu-mas-n64/build/n64link /usr/local/bin/
-```
+Only toolchains that assemble with `n64link` need it. Download it from the
+[abu-mas-n64 releases](https://github.com/melalawi/abu-mas-n64/releases) and set `tools.n64link` in the config.
+A project that needs it and lacks it is refused by name.
 
 Install unbake with splat and m2c in a virtual environment.
 

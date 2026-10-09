@@ -114,7 +114,7 @@ class TemplateToolchain:
         values = self.values(**given)
         for word in self.row[phase]:
             for key in re.findall(r"{(\w+)}", word):
-                if not values.get(key) and (key == "as" or key in self.config.host.tools):
+                if key not in values or (key == "as" and not values[key]):
                     values[key] = [str(process.tool(self.config, self.row.get("as_host", key) if key == "as" else key))]
         return render(self.row[phase], values)
     def preprocess(

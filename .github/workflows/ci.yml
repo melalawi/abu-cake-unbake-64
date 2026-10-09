@@ -1,6 +1,7 @@
 name: CI
 on:
   push:
+    branches: [main, trunk]
   pull_request:
   workflow_dispatch:
 permissions:
@@ -13,9 +14,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - run: sudo apt-get update && sudo apt-get install -y binutils-mips-linux-gnu build-essential ripgrep
-      - run: ci/setup "$RUNNER_TEMP/unbake-ci"
-      - run: ci/check
-        env:
-          TMPDIR: ${{ runner.temp }}/unbake-ci/tmp
-          UNBAKE_CONFIG: ${{ runner.temp }}/unbake-ci/unbake.toml
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends make git binutils-mips-linux-gnu
+      - run: pip install git+https://github.com/melalawi/abu-cache-64
+      - run: pip install -e '.[dev]'
+      - run: ruff check src tests
+      - run: pytest -q -n auto

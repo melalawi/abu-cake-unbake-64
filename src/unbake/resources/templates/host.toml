@@ -22,6 +22,7 @@ mips_as = "${mips_as}"
 mips_ld = "${mips_ld}"
 mips_objcopy = "${mips_objcopy}"
 mips_objdump = "${mips_objdump}"
+# n64link and armips are optional: configure one only when a toolchain or unit kind needs it.
 n64link = "${n64link}"
 splat = "${splat}"
 m2c = "${m2c}"

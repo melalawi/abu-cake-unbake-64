@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "unbake"
-version = "0.2.0"
+version = "0.1.0"
 description = "Standalone N64 decompilation builds and matching"
 readme = "README.md"
 license = { file = "LICENSE" }

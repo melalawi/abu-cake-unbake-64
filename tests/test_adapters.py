@@ -10,7 +10,7 @@ import pytest
 
 from unbake import adapters, process
 from unbake import config as configuration
-from unbake.contracts import Config, Host, Placement, Project, Recipe, Refusal
+from unbake.contracts import Config, Finding, Host, Placement, Project, Recipe, Refusal
 
 
 @pytest.fixture(autouse=True)
@@ -342,6 +342,23 @@ def test_unused_tools_not_resolved(adapter_config, toolchains):
     chain = adapters.toolchain(cfg, "gcc-test")
     assert chain.argv("compile", codegen=(), source=("in.i",), out=("out.o",))[0].endswith("/cc")
     assert adapters.host_tools(cfg) == {}
+
+
+def test_n64link_required_only_when_the_row_names_it(adapter_config, chains, monkeypatch):
+    without = replace(adapter_config, host=replace(adapter_config.host, tools={
+        k: v for k, v in adapter_config.host.tools.items() if k != "n64link"}))
+    assert adapters.toolchain(without, "gcc-test").argv("compile", codegen=(), source=("a",), out=("b",))
+    def real(config, name, **kw):
+        if name not in config.host.tools:
+            raise Refusal(Finding("native.missing_tool", reason=f"host tools.{name} is not configured"))
+        return config.host.tools[name]
+    monkeypatch.setattr(process, "tool", real)
+    parts = {"asflags": (), "includes": (), "source": ("a",), "out": ("b",)}
+    with pytest.raises(Refusal) as caught:
+        adapters.toolchain(without, "fake-9").argv("assemble", **parts)
+    finding, = caught.value.findings
+    assert finding.key == "native.missing_tool" and "n64link" in finding.reason
+    assert adapters.toolchain(adapter_config, "fake-9").argv("assemble", **parts)[0].endswith("n64link")
 
 
 def test_armips_missing_names_resource(adapter_config, native_mock, tmp_path, monkeypatch):
