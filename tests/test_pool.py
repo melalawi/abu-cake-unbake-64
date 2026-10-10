@@ -43,7 +43,6 @@ def _square(value):
 def _state(monkeypatch):
     monkeypatch.setattr(effort, "_listeners", [])
     monkeypatch.setattr(pool, "_in_worker", False)
-    monkeypatch.setattr(pool, "_STORED", set())
     yield
     pool._drop_executor()
 
@@ -348,3 +347,20 @@ def _record_key_chunk(item):
     items = item[1]
     _KEY_CHUNKS.append(len(items))
     return [str(value) for value in items]
+
+
+def test_snapshot_transport_restores_an_evicted_entry(tmp_path, monkeypatch):
+    config = _config(tmp_path)
+    from unbake.contracts import LayoutMap, Snapshot
+    snapshot = Snapshot(config, "commit", LayoutMap(1, {}, {}, {}, "layout", (), {}), {}, {}, "snapshot")
+    kept, writes = {}, []
+    monkeypatch.setattr(pool.store, "get", lambda cfg, kind, key: kept.get((kind, key)))
+    def put(cfg, kind, key, value):
+        writes.append(key)
+        kept[kind, key] = value
+    monkeypatch.setattr(pool.store, "put", put)
+    pickler = pool._Pickler(io.BytesIO(), protocol=5)
+    first = pickler.persistent_id(snapshot)
+    kept.clear()
+    assert pickler.persistent_id(snapshot) == first
+    assert writes == [first[1], first[1]]

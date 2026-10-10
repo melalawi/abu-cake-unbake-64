@@ -630,3 +630,16 @@ def test_boundary_types_an_unowned_data_row_holding_a_jump_table_as_read_only_da
     plan, counts = layout.boundary_plan(snapshot)
     rows = [r[:3] for r in yaml.safe_load(plan.writes["versions/a/Game.yaml"])["segments"][0]["subsegments"][:-1]]
     assert counts["retype"] == 2 and rows[1] == [0x1008, "rodata", "rodata/unresolved/80000408"]
+
+
+def test_edit_parses_only_rows_containing_the_member_name(monkeypatch):
+    text = "segments:\n  - type: code\n    subsegments:\n"
+    text += "".join(f"      - [0x{i * 4:X}, asm, f{i}]\n" for i in range(1000))
+    actual, parsed = layout._LINE, []
+    class Pattern:
+        def match(self, line):
+            parsed.append(line)
+            return actual.match(line)
+    monkeypatch.setattr(layout, "_LINE", Pattern())
+    changed = layout._edit(text.encode(), "f999", rename="renamed")
+    assert len(parsed) == 1 and b", asm, renamed]" in changed and b", asm, f998]" in changed

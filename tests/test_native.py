@@ -514,3 +514,13 @@ def test_recorded_reads_the_builds_compile_err_and_never_compiles(tmp_path, monk
     snapshot = SimpleNamespace(config=cfg)
     recipe = SimpleNamespace(toolchain="gcc-test")
     assert native.recorded(snapshot, unit, "a", recipe) == ("a.c:3: warning: makes pointer from integer",)
+
+
+def test_every_native_refusal_boundary_uses_diagnostic_query(case, monkeypatch):
+    snapshot, unit, recipe, *_ = case
+    calls = []
+    monkeypatch.setattr(native.view, "diagnostic", lambda *args: calls.append(args[-1]) or "include/type.h:2: error")
+    with pytest.raises(Refusal) as caught, native._tools(unit, snapshot, unit, "a", recipe):
+        raise Refusal(Finding("compile.error", "unit.i:330: error"))
+    assert caught.value.findings[0].reason == "include/type.h:2: error"
+    assert calls == ["unit.i:330: error"]

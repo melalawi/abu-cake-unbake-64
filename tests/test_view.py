@@ -325,3 +325,15 @@ def test_two_creators_of_the_same_overlay_link_both_succeed(tmp_path, monkeypatc
     link = overlay / "include/a.h"
     assert link.is_symlink() and link.resolve() == (root / "include/a.h").resolve()
     assert [p.name for p in (overlay / "include").iterdir()] == ["a.h"]
+
+
+def test_diagnostic_maps_view_and_out_of_file_lines_through_markers(lane):
+    header = lane.root / "include/type.h"
+    header.parent.mkdir(parents=True, exist_ok=True)
+    header.write_text("int first;\nint previous;\n")
+    lane.text = (f'# 1 "{header}"\nint first;\n# 1 "{lane.root / lane.unit.path}"\n'
+                 f'int value;\n# 2 "{header}"\nint previous;\n')
+    (lane.root / "unit.i").write_text("\n" * 10)
+    text = "span_1000/type.h:6: previous declaration; unit.i:4: conflict; include/type.h:1: real"
+    assert view.diagnostic(lane.snapshot, lane.unit, "a", lane.recipe, text) == (
+        f"include/type.h:2: previous declaration; {lane.unit.path}:1: conflict; include/type.h:1: real")

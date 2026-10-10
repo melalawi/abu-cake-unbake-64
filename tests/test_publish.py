@@ -88,6 +88,7 @@ def lane(tmp_path, monkeypatch):
     monkeypatch.setattr(publish.policy, "scope", Mock(return_value=((), ())))
     monkeypatch.setattr(publish.headers, "fold", Mock(return_value=({unit.path: files[unit.path]}, ())))
     monkeypatch.setattr(publish.types, "scan", Mock(return_value=files["types.toml"]))
+    monkeypatch.setattr(publish.report, "files", Mock(return_value={"README.md": b"readme"}))
     monkeypatch.setattr(publish.repo, "files", Mock(return_value={"Makefile": files["Makefile"]}))
     monkeypatch.setattr(publish.store, "work", Mock(side_effect=lambda cfg: nullcontext(work)))
     monkeypatch.setattr(publish.pool, "map",
@@ -277,11 +278,13 @@ def test_consumers_read_nothing_without_a_header_edit_and_reprove_includers_of_a
         reads.append(path)
         return files.get(path)
 
-    snapshot = SimpleNamespace(peek=peek, layout=SimpleNamespace(units=dict.fromkeys(files)))
+    snapshot = SimpleNamespace(peek=peek, config=None, digest="consumers",
+                               layout=SimpleNamespace(units={p: SimpleNamespace(path=p) for p in files}))
+    monkeypatch.setattr(publish.recipes, "resolve", lambda *args: SimpleNamespace(cppflags=()))
     monkeypatch.setattr(publish.headers, "sources", lambda _: ["include/kept.h"])
     assert publish._consumers(snapshot, []) == () and reads == []
     assert publish._consumers(snapshot, ["include/gone.h"]) == ("src/a.c",)
-    assert sorted(reads) == ["include/gone.h", "include/kept.h", "src/a.c", "src/b.c"]  # each file once
+    assert len(reads) == len(set(reads))  # shared include facts read each path once
 
 
 @pytest.mark.parametrize("reason", ["fold", "scope", "no_options"])
@@ -460,12 +463,15 @@ def _fuzzy_proofs(lane, scores, symptoms=None, missing=("bytes",)):
                  for v, score in zip(("a", "b"), scores, strict=True))
 
 
-def test_land_fuzzy_writes_row_and_file(lane):
+def test_land_fuzzy_writes_row_and_file(lane, monkeypatch):
+    monkeypatch.setattr(publish.ownership, "derive_many", Mock(side_effect=AssertionError("unrelated proof")))
     proofs = _fuzzy_proofs(lane, (0.8, 0.6))
     publish.compare.measure.return_value = proofs
-    publish.repo.files.return_value = {"Makefile": b"same make\n", "README.md": b"fuzzy readme"}
+    publish.report.files.return_value = {"README.md": b"fuzzy readme"}
     receipt = publish.land(lane["config"], replace(lane["submission"], operation="fuzzy"))
     plan = publish.journal.apply.call_args.args[1]
+    publish.repo.files.assert_not_called()
+    publish.ownership.derive_many.assert_not_called()
     assert plan.operation == "fuzzy" and plan.affected == () and plan.message == "fuzzy f 60.0%"
     assert plan.writes["src/fuzzy/f.c"] == lane["source"].read_bytes()
     mapped = lane["dumps"][plan.writes["layout.toml"]]

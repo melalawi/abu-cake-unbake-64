@@ -191,8 +191,8 @@ def diagnostic(snapshot: Snapshot, unit: UnitSpec, version: str, recipe: Recipe,
     """Map physical view lines and out-of-file coordinates; valid source coordinates stay source coordinates."""
     def fix(match: re.Match[str]) -> str:
         path, _ = _path(match[1], snapshot.config.project.root.resolve(), None)
-        line, raw = int(match[2]), snapshot.peek(path)
-        if not path.endswith(".i") and (raw is None or line <= len(raw.splitlines())):
+        line, raw = int(match[2]), None if path.endswith(".i") else snapshot.peek(path)
+        if not path.endswith((".i", ".h")) or (raw is not None and line <= len(raw.splitlines())):
             return f"{path}:{line}"
         source = get(snapshot, unit, version, recipe)
         path, line = next(((p, n) for output, p, n in source.lines if output == line), (path, line))

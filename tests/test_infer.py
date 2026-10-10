@@ -48,7 +48,11 @@ def both(offset: int, code: bytes) -> dict[str, tuple[int, bytes]]:
 
 def snap(tmp: Path, **kw: Any) -> Snapshot:
     kw.setdefault("groups", [EMPTY])
-    return layout.capture(fixture.config(tmp, units=[UNIT], **kw))
+    cfg = fixture.config(tmp, units=[UNIT], **kw)
+    for name, placed in kw.get("functions", {}).items():
+        for version in placed:
+            fixture._write(cfg.project.root / "asm" / version / f"{name}.s", f"glabel {name}\n")
+    return layout.capture(cfg)
 
 
 def chain(tmp: Path, bodies: list[tuple[int, ...]], **kw: Any) -> Snapshot:
@@ -324,3 +328,60 @@ def test_scan_records_accesses_calls_argument_accesses_and_steps(tmp_path: Path)
     assert use["calls"] == [("f1", ((0, 0x80110040), (2, 0x100)))]
     assert use["args"] == [(1, 4, 4)]
     assert sorted(use["steps"], key=repr) == [("a1", 12), (0x80100100, 12)]
+
+
+@pytest.mark.usefixtures("toolchains")
+def test_correspondence_votes_survive_unrelated_landing_and_recompute_one_pair(tmp_path, monkeypatch):
+    snapshot = corresponding(tmp_path, [("x_a", "x_b"), ("y_a", "y_b")])
+    real, ran = pool.map, []
+    monkeypatch.setattr(pool, "_in_worker", True)
+    def mapped(cfg, name, fn, items, key=None):
+        def counted(item):
+            if name == "infer.votes":
+                ran.append(item[3])
+            return fn(item)
+        return real(cfg, name, counted, items, key)
+    monkeypatch.setattr(pool, "map", mapped)
+    assert infer.correspondences(snapshot) == (("x_a", "a", "x_b", "b"), ("y_a", "a", "y_b", "b"))
+    assert len(ran) == 4
+    ran.clear()
+    assert infer.correspondences(replace(snapshot, digest="other landing", commit="other commit"))
+    assert ran == []
+    path = snapshot.config.project.root / "asm/a/f0.s"
+    path.write_text(path.read_text().replace("x_a", "z_a"))
+    updated = replace(snapshot, digest="changed assembly")
+    assert ("z_a", "a", "x_b", "b") in infer.correspondences(updated)
+    assert len(ran) == 2 and all(rows == [("f0", "f0")] for rows in ran)
+
+
+@pytest.mark.usefixtures("toolchains")
+def test_correspondence_query_submits_only_member_pairs(tmp_path, monkeypatch):
+    snapshot = corresponding(tmp_path, [("x_a", "x_b"), ("y_a", "y_b")])
+    seen = []
+    def mapped(cfg, name, fn, items, key=None):
+        if name == "infer.votes":
+            seen.extend(items)
+        return [fn(item) for item in items]
+    monkeypatch.setattr(pool, "map", mapped)
+    assert infer.correspondence(snapshot, "f0") == (("x_a", "a", "x_b", "b"),)
+    assert len(seen) == 2 and all(job[3] == [("f0", "f0")] for job in seen)
+
+
+def test_shape_matches_mnemonics_calls_reference_order_and_literal_immediates():
+    text = "/* 0 0 0 */ lui $a0, %hi(first)\n/* 4 4 4 */ lw $a0, %lo(first)($a0)\n"
+    text += "/* 8 8 8 */ jal callee\n/* C C C */ addiu $a1, $zero, 8\n"
+    shape = infer._shape(text)
+    assert shape == infer._shape(text.replace("first", "other"))
+    assert shape != infer._shape(text.replace("callee", "different"))
+    assert shape != infer._shape(text.replace(", 8", ", 12"))
+    assert shape != infer._shape(text.replace(" lw ", " sw "))
+    assert infer._shape("/* 0 0 0 */ nop\n") == ""
+
+
+@pytest.mark.usefixtures("toolchains")
+def test_scan_retains_mask_and_shape(tmp_path, monkeypatch):
+    monkeypatch.setattr(pool, "map", lambda cfg, name, fn, items, key=None: [fn(i) for i in items])
+    snapshot = corresponding(tmp_path, [("x_a", "x_b")])
+    for version, rows in infer.scan(snapshot).items():
+        assert rows[0][4]["shape"] == infer._shape(infer._asm(snapshot, version, "f0").decode())
+        assert isinstance(rows[0][4]["mask"], bytes)

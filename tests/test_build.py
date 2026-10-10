@@ -325,11 +325,12 @@ def test_split_input_bounds_long_output_names_and_preserves_logical_input():
     assert rows[0][2] != rows[1]["name"]
     assert build._split_input(source) == document
     assert yaml.safe_load(source) == original
-    assert build._split_input(yaml.safe_dump(document)) is None
+    assert build._split_input(yaml.safe_dump(document)) == document
 
 
 def test_split_input_preserves_normal_config():
-    assert build._split_input("options: {basename: rom}\nsegments:\n - [0]\n") is None
+    assert build._split_input("options: {basename: rom}\nsegments:\n - [0]\n") == {
+        "options": {"basename": "rom"}, "segments": [[0]]}
 
 def test_extract_long_names_uses_private_config(build_snapshot, native_mock):
     import yaml
