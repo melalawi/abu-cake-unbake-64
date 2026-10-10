@@ -64,13 +64,12 @@ def _reads_before_writing(words: Sequence[int], vram: int) -> bool:
     return False
 def _writes_zero(words: Sequence[int], vram: int) -> bool:
     """Whether some word other than the canonical nop is a non-jump instruction writing $zero: no compiler emits one,
-    so the bytes are data."""
+    so the bytes are data. Reading $zero as a source is ordinary and never counts."""
     for index, word in enumerate(words):
         instruction = rabbitizer.Instruction(word, vram + 4 * index)
         if word and instruction.isValid() and not instruction.hasDelaySlot() and any(
                 int(getattr(instruction, name).value) == 0
-                for name, writing in (("rt", instruction.modifiesRt()), ("rd", instruction.modifiesRd()),
-                                      ("rs", instruction.modifiesRs())) if writing):
+                for name, writing in (("rt", instruction.modifiesRt()), ("rd", instruction.modifiesRd())) if writing):
             return True
     return False
 def split_slot(snapshot: Snapshot, member: str) -> str | None:

@@ -442,3 +442,21 @@ def test_a_function_whose_words_write_zero_is_data_misclassified_as_code(snapsho
     assert [report.split_slot(snapshot, n) for n in ("real", "load", "shift")] == [
         None, "data misclassified as code", "data misclassified as code"]
     assert [r["member"] for r in report.items(snapshot, {})] == ["real"]
+
+
+def test_reading_zero_as_a_source_keeps_the_function(snapshot_factory, monkeypatch):
+    jr, nop = 0x03E00008, 0
+    li = 0x24040005
+    store = 0xAFA00010  # sw zero, 0x10(sp)
+    move = 0x00001025  # or v0, zero, zero
+    sltu = 0x0004102B  # sltu v0, zero, a0
+    beq = 0x10000001  # b: both operands $zero
+    body = [li, store, move, sltu, beq, nop, jr, nop]
+    words = {0x1000 + 4 * i: w for i, w in enumerate(body)}
+    snapshot = snapshot_factory([Member("reader", "function", "asm", "g", (
+        Placement("a", ".text", 0x1000, 0x1000 + 4 * len(body), 0x80001000),))], versions=("a",))
+    monkeypatch.setattr(versions, "rom_bytes", lambda v, lo, hi: b"".join(words[a].to_bytes(4, "big")
+                                                                        for a in range(lo, hi, 4)))
+    monkeypatch.setattr(report, "split_slot", _REAL_SPLIT_SLOT)
+    assert report.split_slot(snapshot, "reader") is None
+    assert [r["member"] for r in report.items(snapshot, {})] == ["reader"]
