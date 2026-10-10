@@ -11,6 +11,11 @@ NAME := ${name}
 VERSIONS := ${versions}
 CHECK ?= rom
 -include local.mk
+ifneq ($$(JOBS),)
+ifeq ($$(filter -j% --jobserver%,$$(MAKEFLAGS)),)
+MAKEFLAGS += -j$$(JOBS)
+endif
+endif
 ${tool_defaults}
 .PHONY: all check
 all: check

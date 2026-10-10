@@ -244,8 +244,8 @@ def makefile(snapshot: Snapshot) -> bytes:
             rom_checks="\n".join(checks), rom_rules="\n".join(rom_rules)).encode()
 def local_mk(config: Config) -> bytes:
     with effort.stage("build.local_mk"):
-        assignments = [f"{var} := {config.host.tools.get(row['host'], '')}"
-                       for var, row in sorted(_REPO["make"]["tools"].items())]
+        assignments = [f"JOBS := {config.host.workers}", *(f"{var} := {config.host.tools.get(row['host'], '')}"
+                                                           for var, row in sorted(_REPO["make"]["tools"].items()))]
         for id, row in sorted(configuration.load_resource("toolchains.toml")["toolchain"].items()):
             key, base = id.replace("-", "_").replace(".", "_"), config.host.toolchain_root / id
             assignments.append(f"CC_{key} := {base / row['cc']}")

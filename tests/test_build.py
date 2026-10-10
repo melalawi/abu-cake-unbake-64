@@ -1,6 +1,7 @@
 """Portable build rendering and mocked native checks; no ROMs or builds."""
 
 import re
+import subprocess
 from copy import deepcopy
 from dataclasses import replace
 from pathlib import Path
@@ -404,3 +405,25 @@ def test_make_check_reports_every_failed_target(build_snapshot, native_mock):
     assert caught.value.findings[0].reason == "\n".join([lines[0], lines[2]])
 
 
+
+
+def test_local_mk_carries_the_hosts_worker_count(build_snapshot):
+    cfg = build_snapshot.config
+    assert f"JOBS := {cfg.host.workers}\n" in build.local_mk(cfg).decode()
+
+
+def test_makefile_runs_parallel_from_jobs_and_a_given_j_wins(build_snapshot):
+    text = build.makefile(build_snapshot).decode()
+    assert ("-include local.mk\nifneq ($(JOBS),)\nifeq ($(filter -j% --jobserver%,$(MAKEFLAGS)),)\n"
+            "MAKEFLAGS += -j$(JOBS)\nendif\nendif\n") in text
+
+
+def test_make_uses_jobs_unless_j_is_given(tmp_path):
+    head = configuration.template("Makefile.in").split("${tool_defaults}")[0]
+    head = head.replace("${title}", "t").replace("${name}", "n").replace("${versions}", "a").replace("$$", "$")
+    (tmp_path / "Makefile").write_text(head + "\nshow:\n\t@echo $(filter -j%,$(MAKEFLAGS))\n")
+    (tmp_path / "local.mk").write_text("JOBS := 3\n")
+
+    def flags(*args):
+        return subprocess.run(["make", "-s", *args], cwd=tmp_path, capture_output=True, text=True).stdout.split()
+    assert flags() == ["-j3"] and flags("-j2") == ["-j2"]
