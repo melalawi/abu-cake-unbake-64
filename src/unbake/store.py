@@ -35,7 +35,7 @@ def write(path: Path, content: bytes) -> bool:
     part = path.with_name(f".{uuid.uuid4().hex}.part")  # the name alone may already sit near the 255-byte limit
     part.write_bytes(content)
     part.replace(path)
-    effort.forget("pin", "includes", "edges", "closure", "listing")  # the memoised reads of project files are stale now
+    effort.forget("pin", "includes", "closure", "listing")  # the memoised reads of project files are stale now
     return True
 def content(config: Config) -> ContentCache:
     """The project's content cache, in .unbake/cache, limited by the host's cache.max_bytes."""

@@ -39,41 +39,20 @@ def _path(marker: str, root: Path, overlay: Path | None, real: bool = True) -> t
         if base is not None and path.is_relative_to(base):
             return path.relative_to(base).as_posix(), True
     return str(path), False
-_INCLUDE = re.compile(rb'^[ \t]*(?:#[ \t]*include|\.include)[ \t]*[<"]([^>"\n]+)[>"]', re.M)
-def _included(path: str) -> tuple[bytes, ...]:
-    return effort.memo(("includes", path), lambda: tuple(_INCLUDE.findall(Path(path).read_bytes())))
+_DIRECTIVE = re.compile(rb'^[ \t]*(?:#[ \t]*include|\.include)[ \t]*([<"])([^>"\n]+)[>"]', re.M)
+def _directives(content: bytes) -> tuple[tuple[bytes, bytes], ...]:
+    """The (delimiter, name) pairs a file includes, parsed once per distinct content."""
+    return cast(tuple[tuple[bytes, bytes], ...],
+                effort.memo(("directives", _sha(content)), lambda: tuple(_DIRECTIVE.findall(content))))
 def _link_relative(overlay: Path, root: Path, path: str, content: bytes) -> None:
     """A quoted include is found beside the file naming it: link such files of the real tree into the overlay."""
-    for name in _INCLUDE.findall(content):
+    for _, name in _directives(content):
         relative = os.path.normpath(Path(path).parent / name.decode())
         real, target = root / relative, overlay / relative
         if not relative.startswith("..") and real.is_file() and not (target.exists() or target.is_symlink()):
             target.parent.mkdir(parents=True, exist_ok=True)
             target.symlink_to(real)
             _link_relative(overlay, root, relative, real.read_bytes())
-def _edges(path: str, include: tuple[str, ...]) -> tuple[str, ...]:
-    """The files one file names, found beside it or in the include directories: resolved once per command."""
-    def resolve() -> tuple[str, ...]:
-        found = []
-        for name in _included(path):
-            for base in (os.path.dirname(path), *include):
-                candidate = os.path.join(base, name.decode())
-                if os.path.isfile(candidate):
-                    found.append(candidate)
-                    break
-        return tuple(found)
-    return cast(tuple[str, ...], effort.memo(("edges", path, include), resolve))
-def _reached(source: str, include: Sequence[str]) -> set[str]:
-    """Every file the source can include. The preprocessor's line markers are what dependencies were read from, and
-    a flag such as -P removes them, so the include graph is read from the sources instead (a superset is safe)."""
-    found, pending = set(), [source]
-    while pending:
-        for candidate in _edges(pending.pop(), tuple(include)):
-            if candidate not in found:
-                found.add(candidate)
-                pending.append(candidate)
-    return found
-_DIRECTIVE = re.compile(rb'^[ \t]*(?:#[ \t]*include|\.include)[ \t]*([<"])([^>"\n]+)[>"]', re.M)
 def headers(snapshot: Snapshot, unit: UnitSpec, argv: Sequence[str]) -> tuple[tuple[str, ...], tuple[str, ...]]:
     """(the project files the unit can include, the paths a quoted or forced name found nowhere would be read from)
     under the search flags of the command that reads the source (-iquote, -I, -isystem, -include, -imacros), read
@@ -107,24 +86,19 @@ def headers(snapshot: Snapshot, unit: UnitSpec, argv: Sequence[str]) -> tuple[tu
         reach(name, (".", os.path.dirname(unit.path), *dirs["-iquote"], *angle), True)
     while pending:
         path = pending.pop()
-        for delimiter, raw in _DIRECTIVE.findall(text(path) or b""):
+        for delimiter, raw in _directives(text(path) or b""):
             quoted = delimiter == b'"'
             reach(raw.decode(), (os.path.dirname(path), *dirs["-iquote"], *angle) if quoted else angle, quoted)
     return tuple(sorted(found - {unit.path})), tuple(sorted(missing))
 def closure(snapshot: Snapshot, unit: UnitSpec, version: str) -> tuple[tuple[str, str], ...] | None:
     """(path, pin) of the unit's source and every project file it can reach. None when an overlay holds one of them."""
     return effort.memo(("closure", snapshot.digest, unit.path, version), lambda: _closure(snapshot, unit, version))
-def _closure(snapshot: Snapshot, unit: UnitSpec, version: str) -> tuple[tuple[str, str], ...] | None:
+def _search(snapshot: Snapshot, version: str) -> list[str]:
     cfg = snapshot.config
-    root = cfg.project.root.resolve()
     macros = configuration.load_resource("repo.toml")["splat"]["options"]["generated_asm_macros_directory"]
-    include = [f"{root}/include", f"{root}/src", f"{root}/" + macros.format(version=version, name=cfg.project.name)]
-    try:
-        base = f"{root}/"
-        names = [unit.path, *sorted(n[len(base):] if n.startswith(base) else n for n in
-                                    {os.path.normpath(p) for p in _reached(base + unit.path, include)})]
-    except FileNotFoundError:
-        return None
+    return ["-Iinclude", "-Isrc", "-I" + macros.format(version=version, name=cfg.project.name)]
+def _closure(snapshot: Snapshot, unit: UnitSpec, version: str) -> tuple[tuple[str, str], ...] | None:
+    names = [unit.path, *headers(snapshot, unit, _search(snapshot, version))[0]]
     return None if snapshot.overlays.keys() & set(names) else tuple((n, _pin(snapshot, n)) for n in names)
 def _lines(text: str, root: Path, overlay: Path | None, source: str):
     lines, files = [], {source}
@@ -187,10 +161,7 @@ def get(snapshot: Snapshot, unit: UnitSpec, version: str, recipe: Recipe, *, lin
                 raise Refusal(*findings)
             text = out.read_text()
             _, files = _lines(text, root, overlay, unit.path)
-            for reached in sorted(_reached(str(source), [str(i) for i in include])):
-                name, project_file = _path(reached, root, overlay)
-                if project_file and name not in files:
-                    files.append(name)
+            files += [name for name in headers(snapshot, unit, _search(snapshot, version))[0] if name not in files]
             deps = [(path, _pin(snapshot, path)) for path in files]
             return json.dumps({"text": text, "deps": deps}).encode()
         value = json.loads(store.cached(config, "view", key, produce))

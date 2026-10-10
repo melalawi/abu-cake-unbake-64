@@ -15,18 +15,18 @@ def test_digest_keeps_its_canonical_text() -> None:
     assert digest({"s": {3, 1, 2}}) == digest({"s": [1, 2, 3]})
 
 
-def test_a_header_shared_by_two_units_is_read_and_resolved_once(tmp_path, monkeypatch) -> None:
+def test_a_header_shared_by_two_units_is_read_and_parsed_once(tmp_path, monkeypatch) -> None:
     (tmp_path / "include").mkdir()
     (tmp_path / "include/shared.h").write_text("int x;\n")
     for name in ("a.c", "b.c"):
-        (tmp_path / name).write_text('#include "shared.h"\n')
-    include = (str(tmp_path / "include"),)
-    reads = []
-    real = view._INCLUDE.findall
-    monkeypatch.setattr(view, "_INCLUDE", Mock(findall=lambda data: reads.append(data) or real(data)))
-    first, second = (view._reached(str(tmp_path / n), include) for n in ("a.c", "b.c"))
-    assert first == second == {str(tmp_path / "include/shared.h")}
-    assert len(reads) == 3  # a.c, b.c and shared.h, each once
+        (tmp_path / name).write_text(f'#include "shared.h"\nint {name[0]};\n')
+    snapshot = Mock(digest="s", peek=lambda p: (tmp_path / p).read_bytes() if (tmp_path / p).is_file() else None)
+    parsed = []
+    real = view._DIRECTIVE.findall
+    monkeypatch.setattr(view, "_DIRECTIVE", Mock(findall=lambda data: parsed.append(data) or real(data)))
+    first, second = (view.headers(snapshot, Mock(path=n), ["-Iinclude"])[0] for n in ("a.c", "b.c"))
+    assert first == second == ("include/shared.h",)
+    assert len(parsed) == 3  # a.c, b.c and shared.h, each once
 
 
 def test_a_pin_is_hashed_once_until_store_write_replaces_the_file(cfg) -> None:

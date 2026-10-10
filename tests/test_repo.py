@@ -404,7 +404,7 @@ def test_setup_busy_when_land_held(setup_case, monkeypatch):
 
 @pytest.mark.parametrize("options", [{}, {"create_c_files": True}])
 def test_setup_refuses_a_split_yaml_that_would_let_splat_write_c_files(setup_case, options):
-    snapshot, stages, events, *_ = setup_case
+    snapshot, _, events, *_ = setup_case
     root, vf = snapshot.config.project.root, snapshot.config.project.version_files["a"]
     document = yaml.safe_load((root / vf.split).read_text())
     document["options"].pop("create_c_files")
