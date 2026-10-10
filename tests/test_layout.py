@@ -553,3 +553,18 @@ def test_unit_options_keeps_the_signature_recipe_calls() -> None:
     import inspect
     assert str(inspect.signature(layout.unit_options)) == (
         "(snapshot: 'Snapshot', member: 'str', source: 'bytes') -> 'list[tuple[UnitSpec, dict[str, bytes | None]]]'")
+
+
+def test_boundary_joins_the_data_rows_one_symbol_names_in_two_versions(scene):
+    data = (0x11111111, 0x22222222)
+    snapshot = scene((("func_80000400", "asm", RETURN), ("rodata_a", "data", data)),
+                     other=(("func_80000400", "asm", RETURN), ("rodata_b", "data", data)))
+    shared = {"shared": BASE + 8}
+    snapshot = replace(snapshot, versions={k: replace(v, symbols=shared) for k, v in snapshot.versions.items()})
+    plan, counts = layout.boundary_plan(snapshot)
+    assert counts["join"] == 1
+    names = {k: [r[2] for r in yaml.safe_load(plan.writes[v.split])["segments"][0]["subsegments"][:-1]]
+             for k, v in snapshot.versions.items() if v.split in plan.writes}
+    assert names == {"b": ["func_80000400", "rodata_a"]}
+    again = layout.overlay(snapshot, {"versions/b/Game.yaml": plan.writes["versions/b/Game.yaml"]})
+    assert layout.boundary_plan(again)[1]["join"] == 0

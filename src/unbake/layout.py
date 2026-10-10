@@ -10,6 +10,7 @@ import re
 import struct
 import sys
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import suppress
 from dataclasses import asdict, replace
 from functools import cache, partial
 from itertools import chain, pairwise
@@ -413,8 +414,8 @@ def boundary_plan(snapshot: Snapshot) -> tuple[Plan, Json]:
                                          lambda: pickle.dumps(_boundary(snapshot))))
 def _boundary(snapshot: Snapshot) -> tuple[Plan, Json]:
     assembly = _kinds()[1]
-    counts = {rule: {"proposed": 0, "applied": 0, "withheld": 0} for rule in ("prelude", "split", "merge")}
-    counts["withheld_reasons"] = {}
+    counts: Json = {rule: {"proposed": 0, "applied": 0, "withheld": 0} for rule in ("prelude", "split", "merge")}
+    counts["withheld_reasons"], counts["join"] = {}, 0
     protected = {row["name"] for row in snapshot.layout.authored}
     candidates, placements = {}, {}
     for holder, version in sorted(snapshot.versions.items()):
@@ -492,6 +493,25 @@ def _boundary(snapshot: Snapshot) -> tuple[Plan, Json]:
                 table.setdefault(new, {"kind": "function"})[holder] = p.vram + offset
         if name in table and drop and table[name].keys() <= {"kind"}:
             del table[name]
+    taken: dict[str, str] = {}
+    reference, moves = snapshot.config.project.names_from, {}  # one symbol names one data member
+    for holder in sorted(snapshot.versions, key=lambda v: (v != reference, v)):
+        at = {a: n for n, a in snapshot.versions[holder].symbols.items()}
+        for name, _, p in _rows(snapshot, snapshot.versions[holder]):
+            if p.section in (".data", ".rodata") and (symbol := at.get(p.vram)) and (
+                    keep := taken.setdefault(symbol, name)) != name:
+                moves[holder, name] = keep
+    held = {h: {n for n, _, _ in _rows(snapshot, snapshot.versions[h])} for h in snapshot.versions}
+    while step := [(h, n, k) for (h, n), k in moves.items() if k not in held[h]]:  # a row takes only a free name
+        for holder, name, keep in step:
+            held[holder] -= {name}
+            held[holder] |= {keep}
+            del moves[holder, name]
+            split = snapshot.versions[holder].split
+            with suppress(Refusal):  # a row written as a mapping has no line to rename
+                writes[split] = _edit(writes.get(split, snapshot.read(split)), name, rename=keep)
+                replacements[name] = (keep,)
+                counts["join"] += 1
     # the symbol files follow the table
     wanted = symbols.files(table, {v.id: v.symbols_file for v in snapshot.versions.values()})
     writes.update({path: text for path, text in wanted.items() if text != snapshot.read(path)})
@@ -501,7 +521,10 @@ def _boundary(snapshot: Snapshot) -> tuple[Plan, Json]:
         groups = {k: replace(g, members=expanded(g.members)) for k, g in snapshot.layout.groups.items()}
         units = {k: replace(u, members=expanded(u.members))
                  for k, u in snapshot.layout.units.items() if expanded(u.members)}
-        writes["layout.toml"] = dump_map(replace(snapshot.layout, groups=groups, units=units))
-    message = f"layout: {applied} boundary edits"
+        fuzzy: dict[str, Json] = {}
+        for old, row in snapshot.layout.fuzzy.items():
+            fuzzy.setdefault(expanded((old,))[0], {**row, "scores": {}})["scores"].update(row["scores"])
+        writes["layout.toml"] = dump_map(replace(snapshot.layout, groups=groups, units=units, fuzzy=fuzzy))
+    message = f"layout: {applied + counts['join']} boundary edits"
     return Plan("layout", snapshot.digest, writes, (), (), (), message,
                 digest(("layout", snapshot.digest, writes, message))), counts

@@ -78,7 +78,16 @@ def test_catalog_names(tmp_path):
     ({"src/a.c": "int f(void) { if (1) { return 1; } return 0; }\nextern f32 D_8;\nextern float D_8;\n"},
      {"D_8": "f32 @"}, {}),
     # a name some source defines has its type from that definition
-    ({"src/a.c": "extern u32 D_6;\n", "src/b.c": "const float D_6 = 1.0f;\n"}, {}, {}),
+    ({"src/a.c": "extern u32 D_6;\n", "src/b.c": "const float D_6 = 1.0f;\n"}, {},
+     {"D_6": ["D_6: src/b.c:1 const float D_6", "D_6: src/a.c:1 extern u32 D_6;"]}),
+    # a definition and an extern that spell one type (an array length aside) agree; a local of the name is no definition
+    ({"src/a.c": "extern const f32 D_7[];\n", "src/b.c": "const f32 D_7[4] = {1};\nvoid f(void) {\n    s32 D_7;\n}\n"},
+     {}, {}),
+    # two definitions of one name with other types, and a definition against a struct extern
+    ({"src/a.c": "const float D_9[4] = {1};\n", "src/b.c": "s32 D_9;\n"}, {},
+     {"D_9": ["D_9: src/a.c:1 const float D_9[4]", "D_9: src/b.c:1 s32 D_9"]}),
+    ({"src/a.c": "extern Shared D_10;\n", "src/b.c": "const float D_10[] = {1};\n"}, {},
+     {"D_10": ["D_10: src/b.c:1 const float D_10[]", "D_10: src/a.c:1 extern Shared D_10;"]}),
 ])
 def test_disagreements_give_one_type_per_name_where_the_declarations_agree(tmp_path, files, agreed, conflicts):
     got, findings = headers.disagreements(snap(tmp_path, files))

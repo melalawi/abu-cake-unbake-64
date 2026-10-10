@@ -71,7 +71,7 @@ _DECLARATOR = re.compile(r'\(\s*\*\s*(\w+)\s*\)|\b(\w+)\s*(?:\[[^]]*\]\s*)*(?:\(
 
 # the names a source gives a value or storage: a declaration line without extern, whatever it sits in
 _DEFINITION = re.compile(
-    r'^[ \t]*(?!extern\b|typedef\b|return\b)(?:[\w]+[ \t*]+)+(\w+)[ \t]*(?:\[[^\]]*\][ \t]*)*[=;]', re.M)
+    r'^([ \t]*)(?!extern\b|typedef\b|return\b)((?:[\w]+[ \t*]+)+)(\w+)[ \t]*((?:\[[^\]]*\][ \t]*)*)[=;]', re.M)
 _EXTERN = re.compile(r'^[ \t]*extern\b[^;{}]*;', re.M)
 _SYNONYMS = {'f32': 'float', 'f64': 'double', 's8': 'signed char', 'u8': 'unsigned char', 's16': 'short',
              'u16': 'unsigned short', 's32': 'int', 'u32': 'unsigned int', 's64': 'long long',
@@ -94,8 +94,10 @@ def _functions(text: str) -> list[tuple[str, int, str]]:
 def _file_job(item) -> dict:
     text, source = item
     code = text.decode(errors='replace')
-    defined = _DEFINITION.findall(_blank(code)) if source else []
-    return {'declared': (_externs if source else _declared)(code), 'defined': defined,
+    clean = _blank(code)
+    found = list(_DEFINITION.finditer(clean)) if source else []
+    defs = [(f[3], clean.count('\n', 0, f.start()) + 1, f'{f[2]} @{f[4]}') for f in found if not f[1]]  # file scope
+    return {'declared': (_externs if source else _declared)(code), 'defined': [f[3] for f in found], 'defs': defs,
             'functions': _functions(code) if source else [], 'words': frozenset(re.findall(r'\w+', code))}
 def _file_key(item) -> str:
     return digest(item)  # the file bytes and how it is read
@@ -146,6 +148,9 @@ def _type_of(statement: str, name: str) -> str:
 _TYPE_WORDS = {'const', 'volatile', 'unsigned', 'signed', 'struct', 'union', 'enum', 'int', 'char', 'short', 'long',
                'void', 'float', 'double'}
 
+def _shape(spelled: str) -> str:
+    return re.sub(r'\[[^\]]*\]', '[]', _normal(spelled)).replace('static ', '').strip()
+
 def _unnamed(spelled: str) -> str:
     """A function type without its parameter names: `@(s32 a, s32 *b)` and `@(s32, s32*)` are one type."""
     head, found, rest = spelled.partition('@(')
@@ -172,17 +177,27 @@ def disagreements(snapshot: Snapshot, defined: Collection[str] = ()) -> tuple[di
     with effort.stage('headers.disagreements'):
         paths = [*sources(snapshot), *sources(snapshot, 'src', '.c')]
         found: dict[str, list[tuple[str, int, str]]] = {}
-        owned, definitions = set(defined), {}
+        owned, definitions, variables = set(defined), {}, defaultdict(list)
         scans = _scanned(snapshot, paths)
         words = [scanned['words'] for scanned in scans]
         for path, scanned in zip(paths, scans, strict=True):
             owned.update(scanned['defined'])
             if not path.startswith('src/fuzzy/'):  # a fuzzy candidate is not landed
                 definitions.update({name: (path, line, text) for name, line, text in scanned['functions']})
+                for name, line, text in scanned['defs']:
+                    variables[name].append((path, line, text))
             for name, line, text in scanned['declared']:
                 if not text.startswith('typedef') and not re.match(r'(?:struct|union|enum)\b[^;(]*\{', text):
                     found.setdefault(name, []).append((path, line, text))
         agreed, findings = {}, []
+        for name, rows in sorted(variables.items()):  # a definition spells one type, as every landed declaration does
+            spelled = {_shape(t) for _, _, t in rows} | {_shape(_type_of(t, name)) for _, _, t in found.get(name, ())}
+            if len(spelled) > 1:
+                shown = (*(f"{name}: {p}:{n} {' '.join(t.replace('@', name).split())}" for p, n, t in rows),
+                         *(f"{name}: {p}:{n} {t}" for p, n, t in found.get(name, ())))
+                findings.append(Finding('types.conflict', f"{name} is defined or declared {len(spelled)} ways",
+                                        path=rows[0][0], line=rows[0][1], unit=name, missing=shown, blocking=False,
+                                        action='declare and define it with one type'))
         for name, rows in sorted(found.items()):
             if name in definitions:
                 path, line, text = definitions[name]
