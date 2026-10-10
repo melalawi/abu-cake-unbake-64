@@ -51,7 +51,7 @@ def test_cached_counts_and_put_overwrites(cfg: Config) -> None:
 def test_all_content_entry_points_key_the_installed_code(cfg: Config, monkeypatch) -> None:
     cache = store.content(cfg)
     for code in ("code-a", "code-b"):
-        monkeypatch.setattr(store, "_CODE", code)
+        monkeypatch.setattr(store, "CODE", code)
         assert cache.get("externs", "same") is None
         assert ("externs", "same") not in cache
         assert cache.cached("externs", "same", lambda value=code: value.encode()) == code.encode()
@@ -59,7 +59,7 @@ def test_all_content_entry_points_key_the_installed_code(cfg: Config, monkeypatc
         assert cache.get("externs", "same") == code.encode()
         cache.put("single", "same", code.encode())
         cache.put_many([("batch", "same", code.encode())])
-    monkeypatch.setattr(store, "_CODE", "code-a")
+    monkeypatch.setattr(store, "CODE", "code-a")
     assert cache.cached("externs", "same", lambda: pytest.fail("code-a must hit")) == b"code-a"
     assert store.get(cfg, "single", "same") == b"code-a"
     assert store.get(cfg, "batch", "same") == b"code-a"
@@ -237,3 +237,27 @@ def test_nested_budget_uses_existing_slot_and_failure_releases(cfg):
         raise ValueError("failed")
     with store.slots(cfg, cfg.host.workers) as width:
         assert width == cfg.host.workers
+
+
+def test_budget_capacity_is_checked_once_per_process_without_serializing_jobs(cfg, monkeypatch):
+    from dataclasses import replace
+
+    locks = []
+    actual = store._flock
+    def flock(path, *args, **kwargs):
+        locks.append(path.name)
+        return actual(path, *args, **kwargs)
+    monkeypatch.setattr(store, "_flock", flock)
+    for _ in range(20):
+        with store.slots(cfg, 1) as width:
+            assert width == 1
+    assert locks.count("allocate.lock") == 1 and locks.count("0") == 20
+    changed = replace(cfg, host=replace(cfg.host, workers=cfg.host.workers + 1))
+    with pytest.raises(Refusal, match=r"resources\.workers"), store.slots(changed, 1):
+        pass
+    assert locks.count("allocate.lock") == 2
+    # A fork inherits the memo but must validate independently, before leasing.
+    monkeypatch.setattr(store.os, "getpid", lambda: -1)
+    with store.slots(cfg, 1):
+        pass
+    assert locks.count("allocate.lock") == 3

@@ -40,19 +40,19 @@ def write(path: Path, content: bytes) -> bool:
     effort.forget("pin", "includes", "closure", "listing")  # the memoised reads of project files are stale now
     return True
 _PACKAGE = Path(__file__).parent
-_CODE = digest([(p.relative_to(_PACKAGE).as_posix(), p.read_bytes()) for p in sorted(_PACKAGE.rglob('*'))
+CODE = digest([(p.relative_to(_PACKAGE).as_posix(), p.read_bytes()) for p in sorted(_PACKAGE.rglob('*'))
                 if p.is_file() and '__pycache__' not in p.parts])
 class _Content(ContentCache):
     def cached(self, kind: str, key: str, produce: Callable[[], bytes]) -> bytes:
-        return super().cached(kind, f"{_CODE}:{key}", produce)
+        return super().cached(kind, f"{CODE}:{key}", produce)
     def get(self, kind: str, key: str) -> bytes | None:
-        return super().get(kind, f"{_CODE}:{key}")
+        return super().get(kind, f"{CODE}:{key}")
     def put(self, kind: str, key: str, value: bytes) -> None:
-        super().put(kind, f"{_CODE}:{key}", value)
+        super().put(kind, f"{CODE}:{key}", value)
     def put_many(self, items: Iterable[tuple[str, str, bytes]]) -> None:
-        super().put_many((kind, f"{_CODE}:{key}", value) for kind, key, value in items)
+        super().put_many((kind, f"{CODE}:{key}", value) for kind, key, value in items)
     def __contains__(self, item: tuple[str, str]) -> bool:
-        return f"{item[0]}:{_CODE}:{item[1]}" in self._cache
+        return f"{item[0]}:{CODE}:{item[1]}" in self._cache
 @cache
 def _content(directory: Path, limit: int) -> _Content:
     return _Content(directory, limit, effort.count)
@@ -143,29 +143,32 @@ def exclusive(config: Config, name: str, *, wait: bool) -> Iterator[bool]:
             os.write(fd, f"{os.getpid()} {effort.invocation()}\n".encode())
         yield fd is not None
 _held: ContextVar[tuple[int, str, int] | None] = ContextVar("slots", default=None)
+@cache
+def _capacity(home: Path, workers: int, pid: int) -> None:
+    with _flock(home / "allocate.lock", fcntl.LOCK_EX):
+        capacity = home / "workers"
+        if capacity.exists() and capacity.read_text() != str(workers):
+            raise Refusal(Finding("config.schema", "resources.workers differs from the shared budget",
+                                  path="host:resources.workers"))
+        if not capacity.exists():
+            capacity.write_text(str(workers))
 @contextmanager
 def slots(config: Config, want: int) -> Iterator[int]:
-    """Lease available host tokens atomically; nested work uses its caller's lease. Closing releases every token."""
+    """Lease host tokens with independent flocks; nested work uses its caller's lease. Closing releases all tokens."""
     host, held = config.host, _held.get()
     home = str(host.budget_dir.resolve())
     if held and held[:2] == (os.getpid(), home):
         yield min(want, held[2])
         return
+    _capacity(host.budget_dir, host.workers, os.getpid())
     start, count = None, 0
     with ExitStack() as stack:
         while not count:
-            with _flock(host.budget_dir / "allocate.lock", fcntl.LOCK_EX):
-                capacity = host.budget_dir / "workers"
-                if capacity.exists() and capacity.read_text() != str(host.workers):
-                    raise Refusal(Finding("config.schema", "resources.workers differs from the shared budget",
-                                          path="host:resources.workers"))
-                if not capacity.exists():
-                    capacity.write_text(str(host.workers))
-                for index in range(host.workers):
-                    if stack.enter_context(_flock(host.budget_dir / str(index), fcntl.LOCK_EX, wait=False)) is not None:
-                        count += 1
-                        if count == want:
-                            break
+            for index in range(host.workers):
+                if stack.enter_context(_flock(host.budget_dir / str(index), fcntl.LOCK_EX, wait=False)) is not None:
+                    count += 1
+                    if count == want:
+                        break
             if not count:
                 start = start or time.perf_counter()
                 time.sleep(0.01)

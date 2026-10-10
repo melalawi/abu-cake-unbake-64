@@ -15,7 +15,7 @@ SRC = Path(__file__).resolve().parents[1] / "src" / "unbake"
 FILES = sorted(p for p in SRC.glob("*.py") if p.name != "contracts.py")
 CONTRACT_TEXT = (SRC / "resources" / "CONTRACTS.md").read_text(encoding="utf-8")
 BUDGETS = {name: int(budget) for name, budget in re.findall(r"^- (\w+): (\d+)$", CONTRACT_TEXT, re.M)}
-API = {module: " ".join(re.findall(r"`(\w+)\(", row))
+API = {module: " ".join(re.findall(r"`(\w+)(?:\(|:)", row))
        for module, row in re.findall(r"^\| (\w+) \| (.+) \|$", CONTRACT_TEXT, re.M) if module in BUDGETS}
 _DOCUMENTED = (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)
 CONTRACTS = "unbake.contracts"

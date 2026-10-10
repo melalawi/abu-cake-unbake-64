@@ -616,6 +616,22 @@ def test_setup_returns_at_once_when_nothing_it_reads_or_writes_changed(setup_cas
     assert len(plans) == made and not any(isinstance(e, tuple) for e in events)  # no pool, no plan, no make
 
 
+def test_setup_captures_the_published_files_after_make_to_warm_the_next_command(setup_case, monkeypatch):
+    snapshot, _, events, *_ = setup_case
+    captures = []
+    def capture(config):
+        captures.append(tuple(events))
+        return snapshot
+    def make(config):
+        events.append("make finished")
+        return {"exit": 0}
+    monkeypatch.setattr(repo.layout, "capture", capture)
+    monkeypatch.setattr(repo.build, "make_check", make)
+    repo.setup(snapshot.config, {})
+    assert captures[-1][-1] == "make finished"
+    assert "setup: repository files" in captures[-1]
+
+
 def test_the_manifest_lists_every_generated_file_sorted_and_not_the_starter_files(snapshot, monkeypatch):
     monkeypatch.setattr(repo.build, "makefile", lambda s: b"makefile")
     monkeypatch.setattr(repo.build, "symbols_ld", lambda s, v: v.encode())

@@ -273,10 +273,8 @@ def _state(config: Config) -> str:
     """Everything setup reads or writes: the tool, the repository, the ROMs and what was built. Unchanged means done."""
     root = config.project.root
     head = process.git(config, "rev-parse", "HEAD").stdout.decode().strip()
-    tool = digest([p.read_bytes() for p in sorted(Path(__file__).parent.rglob("*"))
-                   if p.is_file() and p.suffix != ".pyc"])  # the tool's content, not when it was touched
     top = [(p.name, p.stat().st_mtime_ns, p.stat().st_size) for p in sorted(root.iterdir()) if p.is_file()]
-    return digest((head, config.digest, tool, top, build.inputs(config), _stamps(config)))
+    return digest((head, config.digest, store.CODE, top, build.inputs(config), _stamps(config)))
 def _drop_stale_facts(config: Config) -> None:
     """What extraction emitted (splat's undefined symbol lists, the disassembler context) is only true for the inputs
     it ran on. A version whose stamp no longer matches the split file, the ROM or the symbol file the table will
@@ -410,6 +408,7 @@ def setup(config: Config, params: Json) -> Json:
                 written.add("local.mk")
         with effort.stage("repo.setup.make"):
             make = build.make_check(config)
+        snapshot = layout.capture(config)
         type_map, conflicts = types.load(snapshot), types.conflicts(snapshot)
         result = {"toolchains": toolchains, "extracted": sorted(extracted), "proof": proof,
                 "groups": len(snapshot.layout.groups),
