@@ -139,7 +139,8 @@ def run(config: Config, params: Json) -> Json:
                                   unit=unit.path, action="pass --function NAME"))
         note = params["note"] or ""
         request = {"file": str(params["file"]), "function": member, "overrides": overrides, "note": note}
-        submission = land.submit(config, request, unit, proofs, Path(params["file"]).read_bytes(), "compare")
+        submission = land.submit(config, request, unit, proofs, Path(params["file"]).read_bytes(), "compare",
+                                 withhold=bool(params["withhold"]))
         drain = land.drain(config) if submission else None
         score = {v: min(p.score for p in proofs if p.version == v) for v in sorted({p.version for p in proofs})}
         return {"unit": unit.path, "members": list(unit.members),

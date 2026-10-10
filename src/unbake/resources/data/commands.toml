@@ -33,6 +33,7 @@ params = [
   { name = "omit-flag", kind = "option", type = "str", required = false, multiple = true, help = "remove one compiler option (with its operand)" },
   { name = "out", kind = "option", type = "path", required = false, multiple = false, help = "new directory for artifacts" },
   { name = "note", kind = "option", type = "str", required = false, multiple = false, help = "a free-text note recorded with the submission" },
+  { name = "withhold", kind = "flag", type = "str", required = false, multiple = false, help = "land the versions that are byte-exact and withhold the others; refused when none is exact" },
 ]
 
 [command.submit]

@@ -184,8 +184,9 @@ def mock_run(monkeypatch: pytest.MonkeyPatch, cfg: Config, u: UnitSpec, exact: b
     monkeypatch.setattr(compare.layout, "capture", lambda config: s)
     monkeypatch.setattr(compare, "bind", lambda snapshot, file, function: (u, snapshot))
     def fake_submit(config: Config, request: dict[str, Any], spec: UnitSpec, proofs: Any,
-                    source: bytes, origin: str) -> Any:
+                    source: bytes, origin: str, withhold: bool = False) -> Any:
         calls["submit"] = (request, origin, source)
+        calls["withhold"] = withhold
         return submitted
 
     def fake_drain(config: Config) -> dict[str, Any]:
@@ -202,6 +203,7 @@ def params(tmp_path: Path, **over: Any) -> dict[str, Any]:
     file.write_bytes(b"int f;")
     base = {"file": file, "function": None, "toolchain": None, "flag": ["-g"], "omit_flag": [], "out": None}
     base["note"] = None
+    base["withhold"] = False
     return base | over
 
 
@@ -222,6 +224,14 @@ def test_run_exact_submits_and_drains(cfg: Config, tmp_path: Path, monkeypatch: 
     assert origin == "compare" and source == b"int f;"
     assert request["function"] == "f" and request["note"] == "trick"
     assert request["overrides"] == {"add": ["-g"], "omit": []}
+
+
+def test_run_withhold_goes_through_submit_and_the_same_drain(cfg: Config, tmp_path: Path,
+                                                             monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: dict[str, Any] = {}
+    mock_run(monkeypatch, cfg, unit("f"), False, fixture.submission(id="sub2"), calls)
+    result = compare.run(cfg, params(tmp_path, withhold=True))
+    assert calls["withhold"] is True and calls["drain"] == 1 and result["submitted"] == "sub2"
 
 
 def test_run_not_exact_submits_nothing(cfg: Config, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
