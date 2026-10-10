@@ -512,7 +512,7 @@ def _boundary(snapshot: Snapshot) -> tuple[Plan, Json]:
     for holder in sorted(snapshot.versions, key=lambda v: (v != reference, v)):
         at = {a: n for n, a in snapshot.versions[holder].symbols.items()}
         for name, _, p in data[holder]:
-            if p.section in (".data", ".rodata") and (symbol := at.get(p.vram)):
+            if p.section in (".data", ".rodata") and (symbol := at.get(p.vram)) in table:  # declared names only
                 spelled[symbol].append((holder, name))
     moves = {}
     for names in spelled.values():  # a landed name is authoritative: it is kept, never renamed, never given a version

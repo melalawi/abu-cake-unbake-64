@@ -555,12 +555,20 @@ def test_unit_options_keeps_the_signature_recipe_calls() -> None:
         "(snapshot: 'Snapshot', member: 'str', source: 'bytes') -> 'list[tuple[UnitSpec, dict[str, bytes | None]]]'")
 
 
+def _share(snapshot):
+    """One symbol both versions declare at the data row's address."""
+    table = layout.symbols.parse(snapshot.read("symbols.toml"), ("a", "b"))
+    (snapshot.config.project.root / "symbols.toml").write_bytes(
+        layout.symbols.dump({**table, "shared": {"kind": "data", "a": BASE + 8, "b": BASE + 8}}))
+    shared = {"shared": BASE + 8}
+    return replace(snapshot, versions={k: replace(v, symbols=shared) for k, v in snapshot.versions.items()})
+
+
 def test_boundary_joins_the_data_rows_one_symbol_names_in_two_versions(scene):
     data = (0x11111111, 0x22222222)
     snapshot = scene((("func_80000400", "asm", RETURN), ("rodata_a", "data", data)),
                      other=(("func_80000400", "asm", RETURN), ("rodata_b", "data", data)))
-    shared = {"shared": BASE + 8}
-    snapshot = replace(snapshot, versions={k: replace(v, symbols=shared) for k, v in snapshot.versions.items()})
+    snapshot = _share(snapshot)
     plan, counts = layout.boundary_plan(snapshot)
     assert counts["join"] == 1
     names = {k: [r[2] for r in yaml.safe_load(plan.writes[v.split])["segments"][0]["subsegments"][:-1]]
@@ -575,8 +583,7 @@ def _joined(scene, landed_names):
     units = tuple(_unit((n,), f"src/{n}.c", "data") for n in landed_names)
     snapshot = scene((("func_80000400", "asm", RETURN), ("rodata_a", "data", data)),
                      other=(("func_80000400", "asm", RETURN), ("rodata_b", "data", data)), units=units)
-    shared = {"shared": BASE + 8}
-    snapshot = replace(snapshot, versions={k: replace(v, symbols=shared) for k, v in snapshot.versions.items()})
+    snapshot = _share(snapshot)
     plan, counts = layout.boundary_plan(snapshot)
     return {k: [r[2] for r in yaml.safe_load(plan.writes[v.split])["segments"][0]["subsegments"][:-1]]
             for k, v in snapshot.versions.items() if v.split in plan.writes}, counts
@@ -603,3 +610,12 @@ def test_boundary_splits_an_unowned_data_row_that_starts_between_words(scene, mo
     rows = [r[:3] for r in yaml.safe_load(plan.writes["versions/a/Game.yaml"])["segments"][0]["subsegments"][:-1]]
     assert counts["align"] == 2 and rows[1:] == [[0x1009, "data", "rodata/unresolved/80000408"],
                                                  [0x100C, "data", "data/unresolved/8000040C"]]
+
+
+def test_boundary_does_not_join_rows_on_a_name_only_the_versions_generated(scene):
+    data = (0x11111111, 0x22222222)
+    snapshot = scene((("func_80000400", "asm", RETURN), ("rodata_a", "data", data)),
+                     other=(("func_80000400", "asm", RETURN), ("rodata_b", "data", data)))
+    generated = {"D_auto_80000408": BASE + 8}
+    snapshot = replace(snapshot, versions={k: replace(v, symbols=generated) for k, v in snapshot.versions.items()})
+    assert layout.boundary_plan(snapshot)[1]["join"] == 0
