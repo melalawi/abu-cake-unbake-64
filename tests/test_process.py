@@ -184,7 +184,8 @@ def test_a_grandchild_the_child_leaves_behind_is_killed_and_reaped_by_us(tmp_pat
         return found
 
     monkeypatch.setattr(process.os, "wait4", wait4)
-    result = process.run("orphan", ("/bin/sh", "-c", "sleep 300 >/dev/null 2>&1 & exit 0"), tmp_path, tmp=tmp_path / "tmp")
+    argv = ("/bin/sh", "-c", "sleep 300 >/dev/null 2>&1 & exit 0")
+    result = process.run("orphan", argv, tmp_path, tmp=tmp_path / "tmp")
     child = reaped[0][0]
     assert result.exit == 0 and [pid for pid, _ in reaped] == [child, -child]
 
