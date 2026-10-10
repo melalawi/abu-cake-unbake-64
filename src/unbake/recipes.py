@@ -7,7 +7,6 @@ from unbake import config as config_module
 from unbake.contracts import Config, Finding, Json, Recipe, Refusal, UnitSpec, digest
 
 _KNOWN = frozenset({"toolchain", "add", "omit"})
-_LEVELS = ("-O1", "-O2", "-O3")
 def _row(toolchain: str) -> Json:
     rows = config_module.load_resource("toolchains.toml")["toolchain"]
     if toolchain not in rows:
@@ -59,28 +58,3 @@ def resolve(config: Config, unit: UnitSpec, overrides: Json) -> Recipe:
             raise Refusal(Finding("recipe.option", f"cannot add {text}: not supported by {toolchain}", unit=unit.path))
         groups.extend(_groups(words, paired))
     return _make(toolchain, config, [word for g in groups for word in g])
-def proposals(config: Config, recipe: Recipe) -> list[Recipe]:
-    row = _row(recipe.toolchain)
-    paired = tuple(row["paired"])
-    supported = _words(row["supported_options"])
-    flags = list(recipe.cflags)
-    groups = _groups(flags, paired)
-    seen = {recipe.digest}
-    out: list[Recipe] = []
-    def offer(candidate: Sequence[str]) -> None:
-        proposal = _make(recipe.toolchain, config, candidate)
-        if proposal.digest not in seen:
-            seen.add(proposal.digest)
-            out.append(proposal)
-    for token in supported:
-        if token not in flags:
-            offer([*flags, token])
-    for index, group in enumerate(groups):
-        if group[0] in supported:
-            offer([w for other in groups[:index] + groups[index + 1 :] for w in other])
-    for index, group in enumerate(groups):
-        if group[0] in _LEVELS:
-            for level in _LEVELS:
-                if level != group[0]:
-                    offer([w for i, g in enumerate(groups) for w in ((level,) if i == index else g)])
-    return out
