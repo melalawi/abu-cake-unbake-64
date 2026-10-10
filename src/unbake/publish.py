@@ -84,7 +84,9 @@ def _consumers(snapshot: Snapshot, changed: Sequence[str]) -> tuple[str, ...]:
     """Every unit, of any group, that includes a changed header directly or through other headers. A quote include
     names a file beside the including one, else under include/ or src/; taking every one that exists
     over-approximates."""
-    known = set(headers.sources(snapshot)) | set(snapshot.layout.units)
+    if not changed:
+        return ()
+    known = {*headers.sources(snapshot), *snapshot.layout.units, *changed}
     included_by = defaultdict(set)
     for path in known:
         for name in re.findall(rb'^\s*#\s*include\s*"([^"]+)"', snapshot.peek(path) or b"", re.M):
@@ -192,7 +194,7 @@ def plans(snapshot: Snapshot, unit: UnitSpec, proposed: Snapshot) -> list[Plan]:
                 overlay = layout.overlay(snapshot, writes)
                 group = proposed.layout.groups[unit.group]
                 affected = {option.path}
-                edited = [p for p, data in writes.items() if p.endswith(".h") and data not in (None, snapshot.peek(p))]
+                edited = [p for p, data in writes.items() if p.endswith(".h") and data != snapshot.peek(p)]
                 affected.update(_consumers(overlay, edited))
                 before, after = [], []
                 for path, data in writes.items():

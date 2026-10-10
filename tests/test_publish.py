@@ -1,8 +1,10 @@
+
 """Publish lane: real contract records, mocked native/pool/journal boundaries."""
 
 import json
 from contextlib import nullcontext
 from dataclasses import replace
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import fixture
@@ -266,6 +268,21 @@ def test_plan_appends_and_reproves_every_unit_that_includes_the_edited_header_th
     assert plan.affected == tuple(sorted((unit.path, consumer.path, outsider.path)))  # not the bystander
     assert plan.debt == (debt,)
     assert publish.policy.scope.call_args.args[2] == plan.writes
+
+
+def test_consumers_read_nothing_without_a_header_edit_and_reprove_includers_of_a_deleted_header(monkeypatch):
+    reads = []
+    files = {"src/a.c": b'#include "gone.h"\n', "src/b.c": b'#include "kept.h"\n'}
+
+    def peek(path):
+        reads.append(path)
+        return files.get(path)
+
+    snapshot = SimpleNamespace(peek=peek, layout=SimpleNamespace(units=dict.fromkeys(files)))
+    monkeypatch.setattr(publish.headers, "sources", lambda _: ["include/kept.h"])
+    assert publish._consumers(snapshot, []) == () and reads == []
+    assert publish._consumers(snapshot, ["include/gone.h"]) == ("src/a.c",)
+    assert sorted(reads) == ["include/gone.h", "include/kept.h", "src/a.c", "src/b.c"]  # each file once
 
 
 @pytest.mark.parametrize("reason", ["fold", "scope", "no_options"])
