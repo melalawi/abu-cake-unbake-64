@@ -11,6 +11,7 @@ import shutil
 import signal
 import tempfile
 import time
+import traceback
 from collections.abc import Callable, Sequence
 from concurrent.futures import FIRST_COMPLETED, Future, ProcessPoolExecutor, wait
 from concurrent.futures.process import BrokenProcessPool
@@ -74,6 +75,9 @@ def _job(function: Callable[[Any], Any], item: Any, floor: float) -> tuple[bool,
         try:
             value, ok = function(item), True
         except Exception as exc:
+            here = [f for f in traceback.extract_tb(exc.__traceback__) if "/unbake/" in f.filename]
+            if here:  # the traceback does not cross the process boundary, a note does
+                exc.add_note(f"at {Path(here[-1].filename).stem}:{here[-1].name}:{here[-1].lineno}")
             value, ok = exc, False
     after = resource.getrusage(resource.RUSAGE_SELF)
     return ok, value, {
@@ -125,7 +129,8 @@ def _raise_failure(config: Config, name: str, index: int, exc: Any) -> None:
     memory = isinstance(exc, MemoryError)
     raise Refusal(Finding(
         "worker.memory" if memory else "worker.crash",
-        reason=f"Stage {name} item {index} " + (f"exceeded worker memory: {exc!r}" if memory else f"failed: {exc!r}"),
+        reason=f"Stage {name} item {index} " + (f"exceeded worker memory: {exc!r}" if memory else f"failed: {exc!r}")
+        + "".join(f" {note}" for note in getattr(exc, "__notes__", ())),
         origin=config.host.origins["resources.memory_worker_bytes"] if memory else None,
     )) from exc
 class _Run:

@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 from test_effort import _config
 
-from unbake import effort, pool
+from unbake import effort, pool, view
 from unbake.contracts import Finding, Refusal
 
 _RAISED = ValueError("unset")
@@ -276,3 +276,11 @@ def test_whoever_ran_a_keyed_chunk_stores_its_results(tmp_path):
     failed = pool._chunk(_fail, [1], 0.0, (config, "units", ["f"]))
     assert failed[0][0] is False and pool.store.get(config, "units", "f") is None
     assert [o[1] for o in pool._chunk(_square, [5], 0.0, None)] == [25]
+
+
+def test_a_worker_crash_names_the_type_and_the_innermost_unbake_frame(tmp_path):
+    ok, error, _ = pool._job(view._sha, "not bytes", 0.0)  # hashlib refuses inside unbake.view._sha
+    assert not ok and error.__notes__[0].startswith("at view:_sha:")
+    with pytest.raises(Refusal) as raised:
+        pool._raise_failure(_config(tmp_path), "stage", 3, error)
+    assert "TypeError" in raised.value.findings[0].reason and "at view:_sha:" in raised.value.findings[0].reason
