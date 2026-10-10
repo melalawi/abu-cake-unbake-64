@@ -107,7 +107,26 @@ def _compiled(snapshot: Snapshot, unit: UnitSpec, version: str, recipe: Recipe, 
     value, results = _replayed(cfg, key, lambda: compile.build(store.content(cfg), run, steps, source, tools, work,
                                                               after=adapters.toolchain(cfg, recipe.toolchain).check))
     obj.write_bytes(value)
+    if results:  # the compile that ran keeps its refused warnings, so nothing compiles again to count them
+        found = adapters.toolchain(cfg, recipe.toolchain).refused(results[0].stderr.decode(errors="replace"))
+        store.put(cfg, "warnings", _warning_key(key), json.dumps(found).encode())
     return obj, tuple(results)
+def _warning_key(key: str) -> str:
+    return digest((key, "warnings"))
+def recorded(snapshot: Snapshot, unit: UnitSpec, version: str, recipe: Recipe) -> tuple[str, ...] | None:
+    """The refused warnings the build or a proof kept for this unit; None when none was kept; never compiles."""
+    cfg = snapshot.config
+    if not config.load_resource("units.toml")["kind"][unit.kind]["cacheable"]:
+        return ()
+    home = cfg.project.root / "build" / version / Path(unit.path).with_suffix("")
+    for kept in sorted(home.glob("*/compile.err")):
+        return tuple(adapters.toolchain(cfg, recipe.toolchain).refused(kept.read_text(errors="replace")))
+    stem = Path(unit.path).stem
+    steps = adapters.chain_steps(cfg, recipe.toolchain, recipe, _include(snapshot, unit, version), stem)
+    tools = effort.memo(("tool-identity", recipe.toolchain), lambda: adapters.tool_identity(cfg, recipe.toolchain))
+    text = view.get(snapshot, unit, version, recipe, lines=False).text
+    kept_json = store.get(cfg, "warnings", _warning_key(compile.key(text.encode(), f"{stem}.i", steps, str(tools))))
+    return None if kept_json is None else tuple(json.loads(kept_json))
 def warnings(snapshot: Snapshot, unit: UnitSpec, version: str, recipe: Recipe, work: Path) -> tuple[str, ...]:
     """The refused-view warnings of the unit's own compile, kept by the text compiled."""
     with effort.stage("native.warnings"), _tools(unit):
@@ -115,9 +134,10 @@ def warnings(snapshot: Snapshot, unit: UnitSpec, version: str, recipe: Recipe, w
         if not config.load_resource("units.toml")["kind"][unit.kind]["cacheable"]:
             return ()
         work.mkdir(parents=True, exist_ok=True)
-        stem, text = Path(unit.path).stem, view.get(snapshot, unit, version, recipe).text
+        stem, text = Path(unit.path).stem, view.get(snapshot, unit, version, recipe, lines=False).text
         steps = adapters.chain_steps(cfg, recipe.toolchain, recipe, _include(snapshot, unit, version), stem)
-        key = compile.key(text.encode(), f"{stem}.i", steps, adapters.tool_identity(cfg, recipe.toolchain) + "warnings")
+        tools = adapters.tool_identity(cfg, recipe.toolchain)
+        key = _warning_key(compile.key(text.encode(), f"{stem}.i", steps, tools))
         def _produce() -> bytes:
             (work / f"{stem}.i").write_text(text, encoding="utf-8")
             argv = [w.replace("{in}", f"{stem}.i").replace("{out}", steps[0].out) for w in steps[0].argv]

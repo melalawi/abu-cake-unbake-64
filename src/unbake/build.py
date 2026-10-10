@@ -140,7 +140,7 @@ def _unit_rules(snapshot: Snapshot, unit: UnitSpec, version: str) -> str:
         elif phase == "compile":
             out = work / ("source.s" if row["emits_asm"] else "source.o")
             argv = adapters.render(row[phase], {**values, "source": [str(current)], "out": [str(out)]})
-            commands.append(_shell(argv))
+            commands.append(_shell(argv) + f" 2> {work}/compile.err || {{ cat {work}/compile.err >&2; exit 1; }}")
         elif phase == "assemble":
             if "compile" in phases and not row["emits_asm"]:
                 continue

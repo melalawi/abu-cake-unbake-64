@@ -189,11 +189,9 @@ def _census_unit(item: tuple[Snapshot, UnitSpec]) -> tuple[Finding, ...]:
     return pickle.loads(store.cached(snapshot.config, "census", key,
                                      lambda: pickle.dumps(evaluate(snapshot, unit.path, text, source, sdk))))
 def _census_warnings(item: tuple[Snapshot, UnitSpec]) -> tuple[Finding, ...]:
-    """The unit's landed view conversions, debt by count: they are never a refusal."""
+    """The unit's landed view conversions as debt by count, read from what the build kept and never compiled here."""
     snapshot, unit = item
-    with store.work(snapshot.config) as work:
-        found = native.warnings(snapshot, unit, _census_version(snapshot, unit),
-                                recipes.resolve(snapshot.config, unit, {}), work)
+    found = native.recorded(snapshot, unit, _census_version(snapshot, unit), recipes.resolve(snapshot.config, unit, {}))
     if not found:
         return ()
     return (Finding("land.view-conversion", f"{len(found)} integer-pointer conversions the compiler reports",
@@ -226,9 +224,9 @@ def census(snapshot: Snapshot) -> tuple[Finding, ...]:
         found = pool.gather(snapshot.config, [
             ("policy.census", _census_unit, items, _census_key),
             ("policy.census.headers", _census_header, [(snapshot, path, sdk) for path, sdk in sorted(headers.items())],
-             _header_key),
-            ("policy.census.warnings", _census_warnings, items, _census_key)])
-        for findings in (*found[0], *found[1], *found[2], types.conflicts(snapshot)):
+             _header_key)])
+        # read in the parent after the views are warm: what a build kept changes without the unit's inputs changing
+        for findings in (*found[0], *found[1], *map(_census_warnings, items), types.conflicts(snapshot)):
             for finding in findings:
                 unique[(finding.key, finding.path, finding.line, finding.unit)] = replace(finding, blocking=False)
         return tuple(unique.values())

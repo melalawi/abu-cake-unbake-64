@@ -267,6 +267,7 @@ def _tools(case, monkeypatch, toolchains, *, kind="c", emits_asm=False, custom_a
 
     toolchain.compile.side_effect = compile
     toolchain.diagnose.return_value = ()
+    toolchain.refused.return_value = []
     toolchain.check.side_effect = check
     chain = [step("compile", "source.s" if emits_asm else "source.o")]
     chain += [step("assemble", "source.o")] if emits_asm else []
@@ -497,3 +498,18 @@ def test_proof_cache_key_names_the_members_so_a_renamed_member_is_not_served_a_s
                                               units={unit.path: renamed_unit}))
     second, = native.prove(renamed, renamed_unit, "a", recipe, work)
     assert (first.member, second.member) == ("f", "g")
+
+
+def test_recorded_reads_the_builds_compile_err_and_never_compiles(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    cfg = SimpleNamespace(project=SimpleNamespace(root=tmp_path))
+    unit = UnitSpec("src/a.c", "c", "group", ("f",), "gcc-test", {})
+    kept = tmp_path / "build/a/src/a/@12@"
+    kept.mkdir(parents=True)
+    (kept / "compile.err").write_text("a.c:3: warning: makes pointer from integer\na.c:4: warning: unused\n")
+    monkeypatch.setattr(native.adapters, "toolchain", lambda c, i: SimpleNamespace(
+        refused=lambda text: [x for x in text.splitlines() if "pointer" in x]))
+    monkeypatch.setattr(native.process, "run", Mock(side_effect=AssertionError("never compiles")))
+    snapshot = SimpleNamespace(config=cfg)
+    recipe = SimpleNamespace(toolchain="gcc-test")
+    assert native.recorded(snapshot, unit, "a", recipe) == ("a.c:3: warning: makes pointer from integer",)
