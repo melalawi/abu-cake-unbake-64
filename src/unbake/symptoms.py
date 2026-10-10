@@ -129,7 +129,37 @@ def merge(facts: Sequence[Json]) -> Json:
     return {key: value for key, value in result.items() if key not in _COUNTS or value != 0}
 
 
+class _Line(str):
+    """A diff line that compares equal by its key, so addresses never cause differences."""
+
+    key: str
+
+    def __new__(cls, text: str, key: str) -> "_Line":
+        line = super().__new__(cls, text)
+        line.key = key
+        return line
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, _Line) and self.key == other.key
+
+    def __hash__(self) -> int:
+        return hash(self.key)
+
+
+def _aligned(data: bytes, vram: int) -> list[_Line]:
+    lines = _lines(data)
+    offsets = [rabbitizer.Instruction(int.from_bytes(data[4*i:4*i+4], "big"), vram=4*i)
+               for i in range(len(lines))]
+    plain = [f"{m} {', '.join(o[:-1] if w.isBranch() else o)}" for (m, o), w in zip(lines, offsets, strict=True)]
+    result = []
+    for n, word in enumerate(offsets):
+        target = n + word.getBranchOffset() // 4 if word.isBranch() else None
+        landing = plain[target] if target is not None and 0 <= target < len(plain) else "outside"
+        key = plain[n] if target is None else f"{plain[n]} -> [{landing}]"
+        shown = plain[n] if target is None else f"{plain[n]} -> {vram + 4*target:08X}"
+        result.append(_Line(f"{vram + 4*n:08X}: {shown}", key))
+    return result
+
+
 def diff(built: bytes, target: bytes, vram: int) -> str:
-    b, t = ([f"{vram + 4*i:08X}: {m} {', '.join(o)}" for i, (m, o) in enumerate(_lines(data))]
-            for data in (built, target))
-    return "\n".join(unified_diff(t, b, "target", "built", lineterm="", n=3))
+    return "\n".join(unified_diff(_aligned(target, vram), _aligned(built, vram), "target", "built", lineterm="", n=3))

@@ -204,3 +204,13 @@ def test_diff_has_addresses(vram: int) -> None:
     ])
     assert symptoms.diff(target, target, vram) == ""
     assert symptoms.diff(b"x", b"y", vram) == ""
+
+
+def test_diff_one_inserted_instruction_is_one_hunk() -> None:
+    nops = [_addu(rd) for rd in range(8, 16)]
+    target = _words(0x10400003, *nops)
+    built = _words(0x10400004, nops[0], _addu(2), *nops[1:])
+    out = symptoms.diff(built, target, 0x80000000).splitlines()
+    assert sum(line.startswith("@@") for line in out) == 1
+    assert [line for line in out[2:] if line[0] in "+-"] == ["+80000008: addu $v0, $a0, $a1"]
+    assert " 80000000: beqz $v0 -> 80000010" in out
