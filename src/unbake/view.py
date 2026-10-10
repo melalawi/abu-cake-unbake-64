@@ -41,9 +41,7 @@ def _path(marker: str, root: Path, overlay: Path | None, real: bool = True) -> t
     return str(path), False
 _DIRECTIVE = re.compile(rb'^[ \t]*(?:#[ \t]*include|\.include)[ \t]*([<"])([^>"\n]+)[>"]', re.M)
 def _directives(content: bytes) -> tuple[tuple[bytes, bytes], ...]:
-    """The (delimiter, name) pairs a file includes, parsed once per distinct content."""
-    return cast(tuple[tuple[bytes, bytes], ...],
-                effort.memo(("directives", _sha(content)), lambda: tuple(_DIRECTIVE.findall(content))))
+    return tuple(_DIRECTIVE.findall(content))
 def _link_relative(overlay: Path, root: Path, path: str, content: bytes) -> None:
     """A quoted include is found beside the file naming it: link such files of the real tree into the overlay."""
     for _, name in _directives(content):
@@ -58,8 +56,12 @@ def headers(snapshot: Snapshot, unit: UnitSpec, argv: Sequence[str]) -> tuple[tu
     under the search flags of the command that reads the source (-iquote, -I, -isystem, -include, -imacros), read
     through the snapshot so a planned file counts too. An unfound <name> is the toolchain's own; an unfound quoted
     name is the caller's to cover, never dropped here."""
-    def text(path: str) -> bytes | None:
-        return cast("bytes | None", effort.memo(("includes", snapshot.digest, path), lambda: snapshot.peek(path)))
+    def text(path: str) -> tuple[tuple[bytes, bytes], ...] | None:
+        """What one file includes, read and parsed once per snapshot."""
+        def read() -> tuple[tuple[bytes, bytes], ...] | None:
+            content = snapshot.peek(path)
+            return None if content is None else _directives(content)
+        return cast("tuple[tuple[bytes, bytes], ...] | None", effort.memo(("includes", snapshot.digest, path), read))
     dirs: dict[str, list[str]] = {"-iquote": [], "-I": [], "-isystem": []}
     forced: list[str] = []
     words = iter(argv)
@@ -86,7 +88,7 @@ def headers(snapshot: Snapshot, unit: UnitSpec, argv: Sequence[str]) -> tuple[tu
         reach(name, (".", os.path.dirname(unit.path), *dirs["-iquote"], *angle), True)
     while pending:
         path = pending.pop()
-        for delimiter, raw in _directives(text(path) or b""):
+        for delimiter, raw in text(path) or ():
             quoted = delimiter == b'"'
             reach(raw.decode(), (os.path.dirname(path), *dirs["-iquote"], *angle) if quoted else angle, quoted)
     return tuple(sorted(found - {unit.path})), tuple(sorted(missing))
