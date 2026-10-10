@@ -95,30 +95,6 @@ def test_unit_omit_missing_refused(cfg: Config) -> None:
     assert caught.value.findings[0].key == "recipe.option"
 
 
-def test_proposals_deterministic_and_bounded(cfg: Config) -> None:
-    base = recipes.resolve(cfg, _unit(), {})
-    first = recipes.proposals(cfg, base)
-    row = {"-O1", "-O2"}
-    assert first == recipes.proposals(cfg, base)
-    assert len(first) <= 2 * len(row) + 2
-    assert base.digest not in {p.digest for p in first}
-    assert len({p.digest for p in first}) == len(first)
-    assert [p.cflags for p in first] == [("-O2", "-O1"), (), ("-O1",), ("-O3",)]
-
-
-def test_proposals_ido_levels_and_order(cfg: Config) -> None:
-    base = recipes.resolve(cfg, _unit(toolchain="ido-7.1"), {})
-    out = recipes.proposals(cfg, base)
-    flags = [p.cflags for p in out]
-    assert len(out) <= 2 * 3 + 2
-    assert flags[0] == (*base.cflags, "-O1")  # additions come first
-    assert flags[1] == (*base.cflags, "-O3")
-    assert (*base.cflags[:-1], "-O1") in flags
-    assert (*base.cflags[:-1], "-O3") in flags
-    assert all(p.asflags == base.asflags and p.cppflags == base.cppflags for p in out)
-    assert out == recipes.proposals(cfg, base)
-
-
 def test_digest_changes_only_with_flags(cfg: Config) -> None:
     one = recipes.resolve(cfg, _unit("src/a.c"), {})
     two = recipes.resolve(cfg, replace(_unit("src/b.c"), group="other", members=("x", "y")), {})

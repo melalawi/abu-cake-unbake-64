@@ -36,7 +36,7 @@ def test_load_resource_every_data_file(name: str) -> None:
 
 def test_schema_of_has_no_features() -> None:
     assert "features.toml" not in configuration.SCHEMA_OF
-    assert len(configuration.SCHEMA_OF) == 12
+    assert len(configuration.SCHEMA_OF) == 9
     assert _keys(_refusal(configuration.load_resource, "features.toml")) == {"config.resource"}
 
 
@@ -184,7 +184,7 @@ def test_load_combines_digests(cfg: Any) -> None:
     assert cfg.digest != cfg.project.digest
 
 @pytest.mark.parametrize("tool", ["cpp", "mips_as", "mips_ld", "mips_objcopy", "mips_objdump",
-                                  "n64link", "m2c", "armips", "permuter"])
+                                  "n64link", "armips"])
 def test_optional_host_tool_absent_and_bad_path(tmp_path: Path, tool: str) -> None:
     path = fixture.host(tmp_path)
     path.write_text("\n".join(line for line in path.read_text().splitlines() if not line.startswith(tool + " = ")))

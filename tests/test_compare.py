@@ -1,4 +1,4 @@
-"""compare: holders, gaps, bind, measure and run with native, pool, land and crack mocked."""
+"""compare: holders, gaps, bind, measure and run with native, pool and land mocked."""
 
 from __future__ import annotations
 
@@ -183,14 +183,6 @@ def mock_run(monkeypatch: pytest.MonkeyPatch, cfg: Config, u: UnitSpec, exact: b
     mock_measure(monkeypatch, seen, exact)
     monkeypatch.setattr(compare.layout, "capture", lambda config: s)
     monkeypatch.setattr(compare, "bind", lambda snapshot, file, function: (u, snapshot))
-    feedback = {"member": u.members[0], "subsystem": "unknown", "step": "creative", "score_before": 0.0,
-                "score_after": 1.0 if exact else 0.5, "outcome": "exact" if exact else "better",
-                "hints": [], "next": "", "label": "CRACKED" if exact else ""}
-
-    def fake_feedback(snapshot: Snapshot, name: str, step: str, proofs: Any, note: str) -> tuple[None, dict[str, Any]]:
-        calls["feedback"] = (name, step, note)
-        return None, feedback
-
     def fake_submit(config: Config, request: dict[str, Any], spec: UnitSpec, proofs: Any,
                     source: bytes, origin: str) -> Any:
         calls["submit"] = (request, origin, source)
@@ -200,7 +192,6 @@ def mock_run(monkeypatch: pytest.MonkeyPatch, cfg: Config, u: UnitSpec, exact: b
         calls["drain"] = calls.get("drain", 0) + 1
         return {"running": False, "landed": [], "refused": []}
 
-    monkeypatch.setattr(compare.crack, "feedback", fake_feedback)
     monkeypatch.setattr(compare.land, "submit", fake_submit)
     monkeypatch.setattr(compare.land, "drain", fake_drain)
     return s
@@ -232,17 +223,16 @@ def test_run_exact_submits_and_drains(cfg: Config, tmp_path: Path, monkeypatch: 
     assert origin == "compare" and source == b"int f;"
     assert request["function"] == "f" and request["note"] == "trick"
     assert request["overrides"] == {"add": ["-g"], "omit": []}
-    assert calls["feedback"] == ("f", "creative", "trick")
 
 
-def test_run_not_exact_feedback_only(cfg: Config, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_run_not_exact_submits_nothing(cfg: Config, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     calls: dict[str, Any] = {}
     mock_run(monkeypatch, cfg, unit("f"), False, None, calls)
     result = compare.run(cfg, params(tmp_path, toolchain="gcc-test"))
     assert "drain" not in calls
     assert result["submitted"] is None and result["drain"] is None
     assert result["exact"] is False
-    assert result["gaps"] and result["feedback"]["outcome"] == "better"
+    assert result["gaps"]
     assert calls["submit"][0]["overrides"]["toolchain"] == "gcc-test"
 
 
@@ -262,7 +252,7 @@ def test_multi_member_file_needs_function(cfg: Config, tmp_path: Path, monkeypat
     assert error.value.findings[0].key == "land.request"
     assert "--function" in error.value.findings[0].reason
     result = compare.run(cfg, params(tmp_path, function="g"))
-    assert calls["feedback"][0] == "g"
+    assert calls["submit"][0]["function"] == "g"
     assert result["members"] == ["f", "g"]
 
 

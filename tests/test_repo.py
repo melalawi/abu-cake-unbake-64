@@ -264,7 +264,7 @@ def snapshot(tmp_path, host_file):
     cfg = Config(project, configuration.load_host(host_file), "cfg")
     placements = tuple(Placement(v, ".text", 0x1000, 0x1008, 0x80000400) for v in ("a", "b"))
     members = {"entry": Member("entry", "function", "asm", "code", placements)}
-    group = Group("code", "main", ("entry",), "authored", (), "unknown", False)
+    group = Group("code", "main", ("entry",), "authored", (), False)
     mapping = LayoutMap(32, {"code": group}, members, {}, "layout", (), {})
     for v, files in vf.items():
         for path, data in ((files.split, b"segments: []\n"), (files.baserom, b"synthetic " + v.encode())):
@@ -451,7 +451,7 @@ def test_setup_result_validates(setup_case):
     assert result == {
         "toolchains": ["gcc-test"], "extracted": ["a", "b"],
         "proof": {v: {"members": 1, "exact": 1, "bytes": 8} for v in ("a", "b")},
-        "groups": 1, "subsystems": {"unknown": 1},
+        "groups": 1, "segments": {"main": 1},
         "types": {"functions": 1, "globals": 0, "structs": 0}, "boundary": boundary,
         "joined": 0, "units": {"a": {"built": 0, "withheld": 0}, "b": {"built": 0, "withheld": 0}}, "debt": [],
         "commits": ["1" * 40, "2" * 40, "3" * 40],

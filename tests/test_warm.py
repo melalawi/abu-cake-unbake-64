@@ -123,26 +123,3 @@ def test_a_map_only_overlay_reads_no_version_and_a_repeated_map_is_built_once(cf
     assert layout.load_map(cfg, one, b"x", None) is first
     layout.load_map(cfg, one, b"y", None)
     assert len(built) == 2
-
-
-def test_the_header_context_is_built_once_and_travels_to_every_m2c_job(monkeypatch, tmp_path) -> None:
-    from types import SimpleNamespace
-
-    from unbake import draft, headers
-    built, groups = [], []
-    member = SimpleNamespace(placements=[1], kind="function", group="", reference=lambda names: "v")
-    snapshot = SimpleNamespace(config=SimpleNamespace(project=SimpleNamespace(names_from="v")),
-                               layout=SimpleNamespace(members={"f": member}, groups={}))
-    monkeypatch.setattr(headers, "context", lambda s, v: built.append(v) or "ctx.i")
-    monkeypatch.setattr(draft.pool, "gather", lambda c, g: groups.append(g) or [[], []])
-    monkeypatch.setattr(draft.pool, "map", lambda *a: [{"text": "", "reason": "", "gbi_rewrites": 0}])
-    monkeypatch.setattr(draft, "refuse_fragment", lambda s, m: None)
-    monkeypatch.setattr(draft.versions, "asm_path", lambda c, v, m: SimpleNamespace(read_text=lambda errors: "jal g\n"))
-    monkeypatch.setattr(draft.types, "signature_group", lambda s, n: ("types.m2c", None, [], None))
-    monkeypatch.setattr(draft.types, "declarations", lambda s, n: {})
-    monkeypatch.setattr(draft, "_stages", lambda *a: iter(()))
-    monkeypatch.setattr(draft, "hints", lambda *a: ([], []))
-    draft.create(snapshot, "f", tmp_path / "out.c")
-    name, _, items, key = groups[0][0]
-    assert name == "draft.m2c" and key is draft._text_key  # a keyed group: warm items never reach a worker
-    assert built == ["v"] and {item[4] for item in items} == {"ctx.i"}

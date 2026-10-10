@@ -37,35 +37,6 @@ def test_finding_optional_fields(line):
     assert human.finding(Finding("effort.log", "")) == "Refused: plain sentence."
 
 
-def test_no_escape_codes_when_not_tty():
-    stream = io.StringIO()
-    human.attach(stream, False)
-    effort.progress("work", 1, 2)
-    human.finish("crack", {"member": "member", "label": "CRACKED"}, [Finding("effort.log", "reason")])
-    assert "\x1b" not in stream.getvalue()
-    assert stream.getvalue() == "Refused: plain sentence.\n  because reason\nmember: CRACKED\n"
-
-
-@pytest.mark.parametrize("label,colour", [("CRACKED", "32"), ("NEEDS CREATIVE", "33"), ("OTHER", None)])
-@pytest.mark.parametrize("feedback", [False, True])
-def test_only_two_words_coloured_on_tty(label, colour, feedback):
-    stream = io.StringIO()
-    human.attach(stream, True)
-    result = {"member": "member", "label": label}
-    if feedback:
-        result = {"feedback": {"member": "member", "label": label, "subsystem": "unknown",
-                               "score_before": 0.2, "score_after": 0.75, "outcome": "better", "next": "edit source",
-                               "hints": [{"id": "hint1", "technique": "try this", "because": {"score": 0.75}}]}}
-    human.finish("compare", result, [Finding("effort.log", "reason")])
-    text = stream.getvalue()
-    expected = f"member: \x1b[{colour}m{label}\x1b[0m\n" if colour else ""
-    assert text.startswith("Refused: plain sentence.\n  because reason\n" + expected)
-    assert text.count("\x1b") == (2 if colour else 0)
-    if feedback:
-        assert text.endswith("member (unknown): 20.0% -> 75.0% (better)\n"
-                             "  hint hint1: try this\n    because score=0.75\n  next: edit source\n")
-
-
 @pytest.mark.parametrize("tty", [False, True])
 def test_status_line_only_on_tty(monkeypatch, tty):
     stream = io.StringIO()

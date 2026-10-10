@@ -1,4 +1,4 @@
-"""infer: group partition, subsystem votes, SDK identification, cross-version correspondence and the plan."""
+"""infer: group partition, SDK identification, cross-version correspondence and the plan."""
 
 from __future__ import annotations
 
@@ -33,7 +33,7 @@ def jal(address: int) -> int:
 UNIT = {"path": "asm/a/f0.s", "kind": "asm", "group": "u", "members": ["f0"], "toolchain": "gcc-test",
         "options": {"add": [], "omit": []}}
 EMPTY = {"name": "empty", "segment": "main", "members": [], "evidence": "inferred", "signals": [],
-         "subsystem": "unknown", "sdk": False}
+         "sdk": False}
 LEAF = (0x24020001, 0x24030002, JR_RA, NOP)
 TAIL = (0x24040004, 0x24040004, JR_RA, NOP)  # the last member runs to the end of the ROM page
 
@@ -73,7 +73,7 @@ def test_unsignalled_functions_pack_up_to_the_cap(tmp_path: Path) -> None:
     snapshot = chain(tmp_path, [LEAF, LEAF, LEAF])
     whole = infer.groups(snapshot)
     assert names(whole) == [("f0", "f1", "f2")] and whole[0].signals == ()
-    assert whole[0].evidence == "inferred" and whole[0].subsystem == "unknown" and not whole[0].sdk
+    assert whole[0].evidence == "inferred" and not whole[0].sdk
     assert whole[0].name == f"code_{vram(0x1000):08X}"
     capped = infer.groups(replace(snapshot, layout=replace(snapshot.layout, cap=2)))
     assert names(capped) == [("f0", "f1"), ("f2",)] and "cap" in capped[0].signals
@@ -99,7 +99,7 @@ def test_padding_cut_splits_groups_and_blocks_a_join(tmp_path: Path) -> None:
 @pytest.mark.usefixtures("toolchains")
 def test_authored_group_kept_and_excluded_from_inference(tmp_path: Path) -> None:
     authored = {"name": "mine", "segment": "main", "members": ["f0"], "evidence": "authored", "signals": [],
-                "subsystem": "audio", "sdk": False}
+                "sdk": False}
     result = infer.groups(chain(tmp_path, [LEAF, LEAF], groups=[authored]))
     assert result[0].name == "mine" and result[0].evidence == "authored"
     assert names(result) == [("f0",), ("f1",)]
@@ -127,67 +127,6 @@ def test_version_only_member_is_placed_by_its_version_order(tmp_path: Path) -> N
     members = [m for g in infer.groups(snapshot) for m in g.members]
     assert members.index("extra") == members.index("f0") + 1 or members.index("extra") < members.index("f1")
     assert sorted(members) == ["extra", "f0", "f1"]
-
-
-# ------------------------------------------------------------------ subsystems
-
-
-def scheduler_snapshot(tmp: Path, count: int) -> Snapshot:
-    callee = 0x80000800
-    code = blob(*([jal(callee), NOP] * count), JR_RA, NOP)
-    rows = {"f0": VRAM, "f1": vram(0x1100), "osRecvMesg": callee}
-    return snap(tmp, functions={"f0": both(0x1000, code), "f1": both(0x1100, blob(*LEAF))},
-                symbols={"a": rows, "b": rows})
-
-
-@pytest.mark.usefixtures("toolchains")
-def test_subsystems_from_subsystems_toml(tmp_path: Path) -> None:
-    snapshot = scheduler_snapshot(tmp_path, 2)
-    result = infer.subsystems(snapshot, infer.groups(snapshot))
-    by_member = {g.members[0]: result[g.name] for g in infer.groups(snapshot)}
-    assert by_member == {"f0": "scheduler", "f1": "unknown"}
-
-
-@pytest.mark.usefixtures("toolchains")
-def test_one_weak_vote_is_below_the_threshold(tmp_path: Path) -> None:
-    snapshot = scheduler_snapshot(tmp_path, 1)
-    assert set(infer.subsystems(snapshot, infer.groups(snapshot)).values()) == {"unknown"}
-
-
-def patch_rows(monkeypatch: pytest.MonkeyPatch, rows: list[dict[str, Any]]) -> None:
-    real = configuration.load_resource
-
-    def load_resource(name: str) -> Any:
-        return {"schema": 1, "subsystem": rows} if name == "subsystems.toml" else real(name)
-
-    monkeypatch.setattr(configuration, "load_resource", load_resource)
-
-
-def row(id: str, rank: int, weight: float) -> dict[str, Any]:
-    return {"id": id, "rank": rank, "weight": weight, "calls": ["^osRecvMesg$"], "mnemonics": [], "lui": []}
-
-
-@pytest.mark.usefixtures("toolchains")
-@pytest.mark.parametrize(("weight", "winner"), [(0.0, "unknown"), (2.0, "ghost")])
-def test_zero_weight_rows_never_win(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, weight: float, winner: str
-) -> None:
-    snapshot = scheduler_snapshot(tmp_path, 2)
-    patch_rows(monkeypatch, [row("ghost", 0, weight)])
-    result = infer.subsystems(snapshot, infer.groups(snapshot))
-    first = next(g.name for g in infer.groups(snapshot) if g.members == ("f0",))
-    assert result[first] == winner
-
-
-@pytest.mark.usefixtures("toolchains")
-@pytest.mark.parametrize("order", [("low", "high"), ("high", "low")])
-def test_tie_breaks_by_rank(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, order: tuple[str, str]) -> None:
-    snapshot = scheduler_snapshot(tmp_path, 2)
-    rows = {"low": row("low", 1, 1.0), "high": row("high", 5, 1.0)}
-    patch_rows(monkeypatch, [rows[k] for k in order])
-    result = infer.subsystems(snapshot, infer.groups(snapshot))
-    first = next(g.name for g in infer.groups(snapshot) if g.members == ("f0",))
-    assert result[first] == "low"
 
 
 # ------------------------------------------------------------------ sdk
@@ -280,7 +219,7 @@ def test_plan_keeps_a_data_module_and_its_live_rows(tmp_path: Path, monkeypatch:
     monkeypatch.setattr(pool, "map", lambda cfg, name, fn, items, key=None: [fn(i) for i in items])
     snapshot = corresponding(tmp_path, [("foo_a", "foo_b")])
     row = Member("rodata/unresolved/80001200", "data", ".rodata", "data_80001200", ())
-    module = Group("data_80001200", "main", (row.name, "claimed/away"), "inferred", ("adjacent",), "unknown", False)
+    module = Group("data_80001200", "main", (row.name, "claimed/away"), "inferred", ("adjacent",), False)
     members = {**snapshot.layout.members, row.name: row}
     snapshot = replace(snapshot, layout=replace(snapshot.layout, members=members,
                                                 groups={**snapshot.layout.groups, module.name: module}))

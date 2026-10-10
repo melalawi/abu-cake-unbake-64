@@ -73,7 +73,7 @@ def scene(tmp_path, monkeypatch):
             versions[vid] = Version(vid, tmp_path / f"unused-{vid}", hashlib.sha256(blob).hexdigest(), split, sym,
                                     {}, (("main", 0x1000, 0x1000 + len(blob), BASE),))
         (tmp_path / "symbols.toml").write_bytes(layout.symbols.dump(named))
-        groups = {"grp": Group("grp", "main", tuple(n for n, _, _ in entries), "authored", (), "unknown", False)}
+        groups = {"grp": Group("grp", "main", tuple(n for n, _, _ in entries), "authored", (), False)}
         initial = LayoutMap(200, groups if grouped else {}, {}, {u.path: u for u in units}, "", authored, fuzzy or {})
         text = layout.dump_map(initial)
         (tmp_path / "layout.toml").write_bytes(text)
@@ -485,14 +485,14 @@ def test_unit_options_data_member_refuses_compiled_state(scene):
 
 def test_dump_map_writes_the_documented_layout_text():
     import tomllib
-    groups = {"x": Group("x", "s", ("m", "n"), "proven", ("cap",), "unknown", False)}
+    groups = {"x": Group("x", "s", ("m", "n"), "proven", ("cap",), False)}
     units = {"a.c": UnitSpec("a.c", "c", "x", ("m",), "t", {"add": ["-O1"], "omit": []}, ("eu",)),
              "b.c": UnitSpec("b.c", "c", "x", ("n",), "t", {"add": [], "omit": []})}
     fuzzy = {"m": {"path": 'p"q', "scores": {"us-rev1": 0.5, "de": 1.0}}}
     text = layout.dump_map(LayoutMap(32, groups, {}, units, "d", (), fuzzy))
     assert text.decode() == (
         'schema = 3\ncap = 32\n\n[[group]]\nname = "x"\nsegment = "s"\nmembers = ["m", "n"]\nevidence = "proven"\n'
-        'signals = ["cap"]\nsubsystem = "unknown"\nsdk = false\n\n[[unit]]\npath = "a.c"\nkind = "c"\ngroup = "x"\n'
+        'signals = ["cap"]\nsdk = false\n\n[[unit]]\npath = "a.c"\nkind = "c"\ngroup = "x"\n'
         'members = ["m"]\ntoolchain = "t"\nwithheld = ["eu"]\n\n[unit.options]\nadd = ["-O1"]\nomit = []\n\n'
         '[[unit]]\npath = "b.c"\nkind = "c"\ngroup = "x"\nmembers = ["n"]\ntoolchain = "t"\n\n[unit.options]\n'
         'add = []\nomit = []\n\n[[fuzzy]]\nmember = "m"\npath = "p\\"q"\nscores = {de = 1.0, us-rev1 = 0.5}\n')

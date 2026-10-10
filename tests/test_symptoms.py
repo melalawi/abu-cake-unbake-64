@@ -1,7 +1,5 @@
 """Pure symptom measurements using hand-assembled big-endian MIPS words."""
 
-import json
-from pathlib import Path
 
 import pytest
 
@@ -206,21 +204,3 @@ def test_diff_has_addresses(vram: int) -> None:
     ])
     assert symptoms.diff(target, target, vram) == ""
     assert symptoms.diff(b"x", b"y", vram) == ""
-
-
-def test_vocabulary_closed() -> None:
-    schema_path = Path(symptoms.__file__).parent / "resources/schemas/hint.schema.json"
-    vocabulary = set(json.loads(schema_path.read_text())["properties"]["match"]["properties"])
-    observations = [
-        symptoms.measure(_words(_addu()), _words(_addu(3)), ".text"),
-        symptoms.measure(_words(_float(2)), _words(_float(8)), ".text"),
-        symptoms.measure(_words(_load(2, 29, 8)), _words(_load(2, 29, 12)), ".text"),
-        symptoms.measure(_words(_addiu(29, 29, -16)), _words(_addiu(29, 29, -32)), ".text"),
-        symptoms.measure(_words(_addu(), 0, _addu() + 4, 0, _addu() + 5),
-                         _words(_addu(), _addu() + 4, _addu() + 5), ".text"),
-        symptoms.from_missing(["unproved; no measurement; compile.error; unresolved; incomplete type"]),
-        symptoms.merge([{"score": 0.5, "plateau_probes": 2, "alien": True}]),
-    ]
-    emitted = set().union(*(set(fact) for fact in observations))
-    assert emitted == vocabulary
-    assert set(symptoms.merge(observations)) <= vocabulary

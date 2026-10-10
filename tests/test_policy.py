@@ -207,7 +207,7 @@ def test_census_units_headers_deduplication_and_sdk(snapshot, monkeypatch, names
     member = Member("member", "function", "c", "group", (
         Placement("b", ".text", 0, 4, 0), Placement("a", ".text", 0, 4, 0),
     ))
-    group = Group("group", "main", ("member",), "authored", (), "unknown", True)
+    group = Group("group", "main", ("member",), "authored", (), True)
     snapshot.layout = LayoutMap(200, {"group": group}, {"member": member},
                                 {u.path: u for u in units}, "layout", (), {})
     snapshot.read.side_effect = lambda path: f"text of {path}".encode()

@@ -20,8 +20,6 @@ TOOLCHAIN_ROW = {
     "as_host": "mips_as",
     "cflags": ["-O2"],
     "supported_options": ["-O1", "-O2"],
-    "m2c": "m2c",
-    "permuter": "permuter",
     "splat": "splat",
     "emits_asm": False,
     "preserves_padding": True,

@@ -1,4 +1,4 @@
-"""Tests for headers: catalog, fold and the type-map aware context."""
+"""Tests for headers: catalog and fold."""
 
 from __future__ import annotations
 
@@ -7,9 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from unbake import headers, layout, recipes, types
-from unbake import view as view_module
-from unbake.contracts import Refusal
+from unbake import headers, types
 
 HEADER = (
     "#ifndef G\n#define G\ntypedef int s32;\nextern s32 gCount;\nvoid known(int a);\n"
@@ -50,7 +48,6 @@ def inline(monkeypatch):
     """The catalog fans out to the pool and its cache; these tests run both in process."""
     monkeypatch.setattr(headers.pool, "map",
                         lambda config, name, function, items, key=None: [function(i) for i in items])
-    monkeypatch.setattr(headers.store, "cached", lambda config, kind, key, produce: produce())
 
 
 @pytest.fixture
@@ -159,40 +156,6 @@ def test_fold_no_conflict_when_inferred_or_same(tmp_path, monkeypatch):
     assert findings == ()
 
 
-def _stub_context(monkeypatch, extra):
-    monkeypatch.setattr(types, "context", lambda s: extra)
-    monkeypatch.setattr(layout, "overlay", lambda s, w: s)
-    monkeypatch.setattr(recipes, "resolve", lambda c, u, o: None)
-    monkeypatch.setattr(view_module, "get", lambda *a, **k: SimpleNamespace(text="int cat;\n", key="view"))
-
-
-def test_context_includes_type_map(tmp_path, monkeypatch):
-    _stub_context(monkeypatch, "typedef int mapped;\n")
-    out = headers.context(snap(tmp_path, {"include/g.h": HEADER}), "a")
-    text = out.read_text()
-    assert text.index("int cat;") < text.index("typedef int mapped;")
-    assert out.suffix == ".i"
-
-
-def test_context_key_changes_with_types(tmp_path, monkeypatch):
-    s = snap(tmp_path, {"include/g.h": HEADER})
-    _stub_context(monkeypatch, "one\n")
-    first = headers.context(s, "a")
-    _stub_context(monkeypatch, "two\n")
-    second = headers.context(s, "a")
-    assert first != second
-
-
-def test_context_refusal_is_draft_context(tmp_path, monkeypatch):
-    _stub_context(monkeypatch, "x\n")
-    def boom(*a, **k):
-        raise OSError("no")
-    monkeypatch.setattr(view_module, "get", boom)
-    with pytest.raises(Refusal) as error:
-        headers.context(snap(tmp_path, {"include/g.h": HEADER}), "a")
-    assert error.value.findings[0].key == "draft.context"
-
-
 @pytest.mark.parametrize("definition, conflicts", [
     ("int f(void) { return 0; }", False), ("s32 f(void) { return 0; }", False),
     ("void f(void) { }", True), ("int *f(void) { return 0; }", True),
@@ -206,11 +169,3 @@ def test_fold_refuses_a_definition_whose_header_prototype_returns_another_type(
     assert [f.key for f in findings] == (["headers.conflict"] if conflicts else [])
     if conflicts:
         assert "include/g.h:7" in findings[0].reason and "declares 'int'" in findings[0].reason
-
-
-def test_context_keeps_only_type_map_lines_the_headers_can_read():
-    text = "typedef int s32;\nstruct Query { s32 a; };\n"
-    extra = "void a(s32);\nvoid b(void *, Query *);\nextern u8 resources/rsp/x.s[8];\nvoid c(struct Query *);"
-    kept, dropped = headers._parseable(text, extra)
-    assert kept == "void a(s32);\nvoid c(struct Query *);\n"
-    assert dropped == ["void b(void *, Query *);", "extern u8 resources/rsp/x.s[8];"]

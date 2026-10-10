@@ -1,7 +1,6 @@
 
 """Publish lane: real contract records, mocked native/pool/journal boundaries."""
 
-import json
 from contextlib import nullcontext
 from dataclasses import replace
 from types import SimpleNamespace
@@ -40,7 +39,7 @@ def lane(tmp_path, monkeypatch):
                 2, 2, 0.8, 2, ("test", "test@example.invalid"), {}, "host")
     config = Config(project, host, "config")
     unit = UnitSpec("src/f.c", "c", "group", ("f",), "gcc-test", {"add": [], "omit": []})
-    group = Group("group", "main", ("f",), "authored", (), "unknown", False)
+    group = Group("group", "main", ("f",), "authored", (), False)
     placements = tuple(Placement(v, ".text", 4096, 4104, 0x80000400) for v in ("a", "b"))
     member = Member("f", "function", "asm", "group", placements)
     mapping = LayoutMap(200, {"group": group}, {"f": member}, {}, "map", (), {})
@@ -98,7 +97,6 @@ def lane(tmp_path, monkeypatch):
     monkeypatch.setattr(publish.versions, "undefined", Mock(return_value=()))
     monkeypatch.setattr(publish.versions, "resolve", Mock(return_value=()))
     monkeypatch.setattr(publish.journal, "apply", Mock(return_value="new-commit"))
-    monkeypatch.setattr(publish.crack, "history", Mock(return_value=[]))
     submission = fixture.submission(member="f", source="candidate.c", proofs=proofs)
     return {"snapshot": snapshot, "proposed": proposed, "config": config, "unit": unit,
             "proofs": proofs, "source": source, "work": work, "dumps": dumps, "submission": submission}
@@ -480,35 +478,3 @@ def test_land_fuzzy_compile_failed_refuses(lane, symptom):
     assert finding.key == "land.not_exact" and finding.unit == "f"
     assert set(finding.missing) == {symptom} and finding.symptoms[symptom]
     publish.journal.apply.assert_not_called()
-
-
-@pytest.mark.parametrize("history,existing,expected", [
-    ([], None, {}),
-    ([fixture.attempt(member="f", symptoms={"score": 0.5, "bytes_differ": True}),
-      fixture.attempt(member="f", symptoms={"score": 0.7, "bytes_differ": True,
-                                             "compile_failed": False, "no_measurement": 0}),
-      fixture.attempt(member="f", outcome="exact", symptoms={})], b'{"existing": true}',
-     {"bytes_differ": {"eq": True}}),
-])
-def test_learned_hint_row_valid(lane, history, existing, expected):
-    snapshot = lane["snapshot"]
-    if existing is not None:
-        snapshot = replace(snapshot, overlays={**snapshot.overlays, "hints.jsonl": existing})
-    publish.layout.capture.return_value = snapshot
-    publish.crack.history.return_value = history
-    receipt = publish.land(lane["config"], replace(lane["submission"], note="use a temporary"))
-    plan = publish.journal.apply.call_args.args[1]
-    lines = plan.writes["hints.jsonl"].decode().splitlines()
-    row = json.loads(lines[-1])
-    assert row == {"id": "learned-f", "subsystem": "unknown", "detect": "", "match": expected,
-                   "technique": "use a temporary", "example": "", "scope": "ordinary",
-                   "qualifier_effect": "none"}
-    publish.configuration.validate("hint", row, "hints.jsonl")
-    if existing:
-        assert lines[0] == existing.decode()
-    assert receipt.plan == plan.digest
-    assert plan.digest == digest((plan.operation, plan.base, plan.writes, plan.affected,
-                                  plan.blocking, plan.debt, plan.message))
-    publish.crack.history.assert_called_once_with(lane["config"], "f")
-
-

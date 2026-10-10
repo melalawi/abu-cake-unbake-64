@@ -15,12 +15,12 @@ from string import Template
 from types import MappingProxyType
 from typing import Any
 
-from unbake.contracts import Attempt, Config, Json, NativeResult, Proof, Submission, digest
+from unbake.contracts import Config, Json, NativeResult, Proof, Submission, digest
 
 VRAM_BASE, ROM_BASE, PAGE = 0x80000400, 0x1000, 0x1000
 TOOLS = (
     *("git", "make", "cpp", "mips_as", "mips_ld", "mips_objcopy", "mips_objdump"),
-    *("n64link", "splat", "m2c", "permuter", "armips"),
+    *("n64link", "splat", "armips"),
 )
 Placed = Mapping[str, Mapping[str, tuple[int, bytes]]]  # member name -> version id -> (rom offset, bytes)
 
@@ -133,7 +133,7 @@ def project(
     _write(root / "config.toml", config)
     first = sorted(_place(functions, "asm", names_from))
     default_group = {"name": "code_80000400", "segment": "main", "members": [name for _, _, name, _ in first]}
-    default_group |= {"evidence": "authored", "signals": [], "subsystem": "unknown", "sdk": False}
+    default_group |= {"evidence": "authored", "signals": [], "sdk": False}
     empty = "" if units else "unit = []\n"  # the layout schema requires the key; a fresh project has no units
     rows = _rows("group", [default_group] if groups is None else groups) + _rows("unit", units)
     layout = f"schema = 3\ncap = 200\n{empty}\n" + rows
@@ -251,16 +251,6 @@ def submission(**fields: Any) -> Submission:
     values.setdefault("id", digest(id_basis))
     values.setdefault("source", f".unbake/inbox/{values['id']}.c")
     return Submission(**values)
-
-
-def attempt(**fields: Any) -> Attempt:
-    """A complete Attempt for tests; fields override the defaults."""
-    values: dict[str, Any] = {"member": "func_80000400", "step": "plain", "source_sha256": "0" * 64}
-    values |= {"recipe": "recipe", "score": 0.5, "best_before": 0.0, "outcome": "better"}
-    values |= {"symptoms": {"bytes_differ": True, "score": 0.5}, "hints": (), "subsystem": "unknown", "note": ""}
-    values |= {"invocation": "test-invocation", "time": "2026-10-08T00:00:00Z"}
-    values |= fields
-    return Attempt(**values)
 
 
 def rom_bytes(game_code: bytes = b"NXX", region: bytes = b"E", order: str = "z64", body: bytes = b"") -> bytes:

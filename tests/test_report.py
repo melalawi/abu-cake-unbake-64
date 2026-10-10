@@ -47,9 +47,7 @@ def snapshot_factory(tmp_path, monkeypatch):
     ))
     boundary = {k: {"applied": 0, "proposed": 0, "withheld": 0} for k in ("prelude", "split", "merge")}
     monkeypatch.setattr(report.layout, "boundary_plan", Mock(return_value=(None, boundary)))
-    monkeypatch.setattr(report.draft, "split_slot", lambda s, m: None)
-    monkeypatch.setattr(report.crack, "state", lambda s, m: "fuzzy" if m in s.layout.fuzzy else "open")
-    monkeypatch.setattr(report.crack, "history", Mock(return_value=[]))
+    monkeypatch.setattr(report, "split_slot", lambda s, m: None)
 
     def make(members=(), *, units=(), fuzzy=None, groups=None, versions=("a", "b"), overlays=None):
         vf = {v: VersionFiles(f"{v}.z64", "0" * 40, f"{v}.yaml", f"{v}.txt", {}) for v in versions}
@@ -59,7 +57,7 @@ def snapshot_factory(tmp_path, monkeypatch):
                     None, 2, 2, 0.8, 2, ("test", "test@example.invalid"), {}, "host")
         config = Config(project, host, "config")
         groups = groups if groups is not None else [Group(
-            "g", "main", tuple(m.name for m in members), "authored", (), "unknown", False
+            "g", "main", tuple(m.name for m in members), "authored", (), False
         )]
         lm = LayoutMap(200, {g.name: g for g in groups}, {m.name: m for m in members},
                        {u.path: u for u in units}, "layout", (), fuzzy or {})
@@ -108,10 +106,10 @@ def test_opaque_rom_bytes_stay_out_of_the_denominator(snapshot_factory):
         assert "bin" not in result["kinds"]
 
 
-def test_unknown_group_counts_as_unknown_subsystem(snapshot_factory):
+def test_unknown_group_counts_as_unknown_segment(snapshot_factory):
     snapshot = snapshot_factory([_member("ungrouped", group="")], groups=[])
     result = report.current(snapshot)
-    assert result["subsystems"]["unknown"] == result["versions"]
+    assert result["segments"]["unknown"] == result["versions"]
 
 
 @pytest.mark.parametrize("score, code_fuzzy, data_fuzzy, fuzzy_percent", [(0.0, 0, 0, 25.0), (0.25, 5, 2, 33.75),
@@ -154,36 +152,21 @@ def test_debt_and_boundary(snapshot_factory, monkeypatch, document, expected):
     assert result["versions"]["a"]["code_percent"] == 0.0
 
 
-def test_items_order_rank_state_size(snapshot_factory, monkeypatch):
-    specs = [("creative", "creative", 1, 10), ("fuzzy", "fuzzy", 1, 10),
-             ("tool", "tool", 1, 10), ("large", "open", 32, 1),
-             ("late", "open", 16, 30), ("z_tie", "open", 16, 10),
-             ("a_tie", "open", 16, 10)]
-    members = [_member(n, size=size, address=addr, group="math") for n, _, size, addr in specs]
+def test_items_order_size_then_address(snapshot_factory):
+    specs = [("creative", 1, 10), ("fuzzy", 1, 10), ("tool", 1, 10), ("large", 32, 1),
+             ("late", 16, 30), ("z_tie", 16, 10), ("a_tie", 16, 10)]
+    members = [_member(n, size=size, address=addr, group="math") for n, size, addr in specs]
     members += [_member("sdk_creative", size=999, group="sdk"), _member("matched", group="math")]
-    groups = [Group(s, "main", tuple(m.name for m in members if m.group == s),
-                    "authored", (), s, False) for s in ("sdk", "math")]
+    groups = [Group(s, s, tuple(m.name for m in members if m.group == s), "authored", (), False)
+              for s in ("sdk", "math")]
     snapshot = snapshot_factory(members, groups=groups, units=[_unit("matched")],
                                 fuzzy={"fuzzy": {"path": "src/fuzzy/fuzzy.c", "scores": {"a": .7, "b": .4}}})
-    states = {n: state for n, state, *_ in specs} | {"sdk_creative": "creative"}
-    monkeypatch.setattr(report.crack, "state", lambda s, m: states[m])
-    history = Mock(return_value=[fixture.attempt(score=.2), fixture.attempt(score=.8)])
-    monkeypatch.setattr(report.crack, "history", history)
     rows = report.items(snapshot, {})
     assert [r["member"] for r in rows] == ["sdk_creative", "large", "a_tie", "z_tie", "late",
-                                           "tool", "fuzzy", "creative"]  # biggest first, sub-16-byte fragments last
-    seconds = configuration.load_resource("flow.toml")["work"]["permuter_seconds"]
-    for row in rows:
-        name = row["member"]
-        assert row["best"] == (.4 if name == "fuzzy" else 0.0 if row["state"] == "open" else .8)
-        command = (f"unbake crack {name} --seconds {seconds}" if row["state"] in ("open", "tool")
-                   else f"unbake compare .unbake/work/{name}.c --function {name}")
-        assert row["command"] == command
-        if row["state"] == "creative":
-            assert row["packet"] == f".unbake/packets/{name}.json"
-    assert all(c.args[0] is snapshot.config for c in history.call_args_list)
-    assert not {"fuzzy", "large", "late", "z_tie", "a_tie"} & {c.args[1] for c in history.call_args_list}
-    assert [r["member"] for r in report.items(snapshot, {"subsystem": "sdk"})] == ["sdk_creative"]
+                                           "creative", "fuzzy", "tool"]  # biggest first, sub-16-byte fragments last
+    assert {r["segment"] for r in rows} == {"sdk", "math"}
+    assert all(set(r) == {"member", "kind", "segment", "size", "address"} for r in rows)
+    assert [r["member"] for r in report.items(snapshot, {"segment": "sdk"})] == ["sdk_creative"]
 
 
 def test_items_candidates_and_holder_fallback(snapshot_factory):
@@ -194,14 +177,12 @@ def test_items_candidates_and_holder_fallback(snapshot_factory):
     rows = report.items(snapshot_factory(members), {})
     assert [r["member"] for r in rows] == ["only_b", "data"]
     assert rows[0]["address"] == 88
-    assert rows[0]["best"] == 0.0
 
 
-def test_items_send_a_withheld_member_to_its_existing_source(snapshot_factory):
+def test_items_name_the_existing_source_of_a_withheld_member(snapshot_factory):
     unit = replace(_unit("partial"), withheld=("b",))
     rows = report.items(snapshot_factory([_member("partial")], units=[unit]), {})
-    assert [(r["member"], r["command"]) for r in rows] == [
-        ("partial", f"unbake compare {unit.path} --function partial")]
+    assert [(r["member"], r["source"]) for r in rows] == [("partial", unit.path)]
 
 
 @pytest.mark.parametrize("modulus", [1, 2, 3, 7, 31])
@@ -227,7 +208,6 @@ def test_items_bad_shard_refuses(snapshot_factory, shard):
 @pytest.mark.parametrize("count", [None, 1, 2, 10, 0, -1, 1.5, "2", True])
 def test_items_count(snapshot_factory, monkeypatch, count):
     snapshot = snapshot_factory([_member(f"m{i}") for i in range(3)])
-    history = report.crack.history
     if count is not None and (type(count) is not int or count < 1):
         with pytest.raises(Refusal) as error:
             report.items(snapshot, {"count": count})
@@ -236,13 +216,12 @@ def test_items_count(snapshot_factory, monkeypatch, count):
     rows = report.items(snapshot, {"count": count})
     assert len(rows) == (3 if count is None else min(count, 3))
     assert [r["member"] for r in rows] == [f"m{i}" for i in range(len(rows))]
-    history.assert_not_called()  # an open member has no attempts file to read
 
 
-@pytest.mark.parametrize("subsystem", ["not-a-subsystem", "", 1, True])
-def test_items_bad_subsystem_refuses(snapshot_factory, subsystem):
+@pytest.mark.parametrize("segment", ["not-a-segment", "", 1, True])
+def test_items_bad_segment_refuses(snapshot_factory, segment):
     with pytest.raises(Refusal) as error:
-        report.items(snapshot_factory(), {"subsystem": subsystem})
+        report.items(snapshot_factory(), {"segment": segment})
     assert error.value.findings[0].key == "report.request"
 
 
@@ -251,8 +230,8 @@ def test_objdiff_validates_and_is_deterministic(snapshot_factory, monkeypatch):
                _member("matched", address=100, size=10, group="sdk"),
                _member("data", address=400, kind="data", section=".data", size=12),
                _member("other_version", versions=("b",))]
-    groups = [Group("g", "main", ("open", "fuzzy", "data"), "authored", (), "unknown", False),
-              Group("sdk", "main", ("matched",), "authored", (), "sdk", False)]
+    groups = [Group("g", "main", ("open", "fuzzy", "data"), "authored", (), False),
+              Group("sdk", "boot", ("matched",), "authored", (), False)]
     snapshot = snapshot_factory(members, groups=groups, units=[_unit("matched"), _unit("data", "data")],
                                 fuzzy={"fuzzy": {"path": "src/fuzzy/fuzzy.c", "scores": {"a": .333333333, "b": .5}}})
     validation = Mock(wraps=configuration.validate)
@@ -271,7 +250,7 @@ def test_objdiff_validates_and_is_deterministic(snapshot_factory, monkeypatch):
     assert [u["name"] for u in first["units"]] == ["matched", "fuzzy", "data", "open"]
     by_name = {u["name"]: u for u in first["units"]}
     assert by_name["matched"]["metadata"] == {
-        "complete": True, "progress_categories": ["sdk"], "source_path": "src/matched.c"}
+        "complete": True, "progress_categories": ["boot"], "source_path": "src/matched.c"}
     assert by_name["matched"]["measures"] == {
         "total_code": "10", "total_units": 1, "total_functions": 1, "fuzzy_match_percent": 100.0,
         "matched_code": "10", "complete_code": "10", "matched_code_percent": 100.0,
@@ -289,8 +268,8 @@ def test_objdiff_validates_and_is_deterministic(snapshot_factory, monkeypatch):
     assert first["measures"]["matched_code_percent"] == 16.666666
     # objdiff weights the f32 per-unit value (33.333332), not the unrounded input
     assert first["measures"]["fuzzy_match_percent"] == 27.777777
-    assert [c["id"] for c in first["categories"]] == ["sdk", "unknown"]
-    assert first["categories"][0]["name"] == configuration.load_resource("subsystems.toml")["subsystem"][0]["label"]
+    assert [c["id"] for c in first["categories"]] == ["boot", "main"]
+    assert first["categories"][0]["name"] == "boot"
     assert first["categories"][0]["measures"]["matched_code_percent"] == 100.0
 
 
@@ -399,11 +378,11 @@ def test_run_results_validate(snapshot_factory, monkeypatch, next_mode, empty):
         inbox.assert_not_called()
     else:
         assert result["inbox"] == 2
-        assert result["next"] == ("" if empty else report.items(snapshot, {"count": 1})[0]["command"])
+        assert "next" not in result
         inbox.assert_called_once_with(snapshot.config)
 
 
 def test_items_leave_out_fragments_whose_delay_slot_is_in_the_next_member(snapshot_factory, monkeypatch):
-    monkeypatch.setattr(report.draft, "split_slot", lambda snap, name: "next" if name == "cut" else None)
+    monkeypatch.setattr(report, "split_slot", lambda snap, name: "next" if name == "cut" else None)
     rows = report.items(snapshot_factory([_member("cut"), _member("whole", address=96)]), {})
     assert [r["member"] for r in rows] == ["whole"]
