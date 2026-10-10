@@ -193,7 +193,6 @@
    "enum": [
     "submit",
     "compare",
-    "crack",
     "check"
    ]
   },

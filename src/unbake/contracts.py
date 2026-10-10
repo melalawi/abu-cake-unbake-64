@@ -256,7 +256,7 @@ class Receipt:
     proofs: tuple[Proof, ...]
     debt: int
     invocation: str
-# ---------------------------------------------------------------- flow: inbox and cracking feedback
+# ---------------------------------------------------------------- flow: inbox
 @dataclass(frozen=True)
 class Submission:
     """One inbox entry (.unbake/inbox/<id>.json + <id>.c). Crackers write it; only land.drain consumes it."""
