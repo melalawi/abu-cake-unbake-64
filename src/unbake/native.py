@@ -108,6 +108,28 @@ def _compiled(snapshot: Snapshot, unit: UnitSpec, version: str, recipe: Recipe, 
                                                               after=adapters.toolchain(cfg, recipe.toolchain).check))
     obj.write_bytes(value)
     return obj, tuple(results)
+def warnings(snapshot: Snapshot, unit: UnitSpec, version: str, recipe: Recipe, work: Path) -> tuple[str, ...]:
+    """The refused-view warnings of the unit's own compile, kept by the text compiled."""
+    with effort.stage("native.warnings"), _tools(unit):
+        cfg = snapshot.config
+        if not config.load_resource("units.toml")["kind"][unit.kind]["cacheable"]:
+            return ()
+        work.mkdir(parents=True, exist_ok=True)
+        stem, text = Path(unit.path).stem, view.get(snapshot, unit, version, recipe).text
+        steps = adapters.chain_steps(cfg, recipe.toolchain, recipe, _include(snapshot, unit, version), stem)
+        key = compile.key(text.encode(), f"{stem}.i", steps, adapters.tool_identity(cfg, recipe.toolchain) + "warnings")
+        def _produce() -> bytes:
+            (work / f"{stem}.i").write_text(text, encoding="utf-8")
+            argv = [w.replace("{in}", f"{stem}.i").replace("{out}", steps[0].out) for w in steps[0].argv]
+            result = process.run("compile", argv, work, tmp=process.scratch(cfg.project.root))
+            found = adapters.toolchain(cfg, recipe.toolchain).refused(result.stderr.decode(errors="replace"))
+            return json.dumps(found).encode()
+        return tuple(json.loads(store.cached(cfg, "warnings", key, _produce)))
+def _include(snapshot: Snapshot, unit: UnitSpec, version: str) -> tuple[Path, ...]:
+    project = snapshot.config.project
+    macros = config.load_resource("repo.toml")["splat"]["options"]["generated_asm_macros_directory"]
+    return (project.root / "include", (project.root / unit.path).parent,
+            project.root / macros.format(version=version, name=project.name))
 def objects(snapshot: Snapshot, unit: UnitSpec, version: str, recipe: Recipe,
             work: Path) -> tuple[Path, tuple[NativeResult, ...]]:
     with effort.stage("native.objects"), _tools(unit):
@@ -118,10 +140,7 @@ def objects(snapshot: Snapshot, unit: UnitSpec, version: str, recipe: Recipe,
         stem = Path(unit.path).stem
         obj = work / f"{stem}.o"
         results: list[NativeResult] = []
-        project = snapshot.config.project
-        macros = config.load_resource("repo.toml")["splat"]["options"]["generated_asm_macros_directory"]
-        include = (project.root / "include", (project.root / unit.path).parent,
-                   project.root / macros.format(version=version, name=project.name))
+        include = _include(snapshot, unit, version)
         if config.load_resource("units.toml")["kind"][unit.kind]["cacheable"]:
             return _compiled(snapshot, unit, version, recipe, work, include, stem)
         dependencies, pending = {}, [source]

@@ -2,6 +2,7 @@
 
 from contextlib import nullcontext
 from dataclasses import replace
+from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
@@ -220,6 +221,8 @@ def test_census_units_headers_deduplication_and_sdk(snapshot, monkeypatch, names
     evaluate = Mock(side_effect=lambda snap, path, text, source, sdk: (
         Finding("source.volatile-storage", f"debt {path}", path=path, line=2),))
     gathered = Mock(side_effect=lambda cfg, groups: [[g[1](item) for item in g[2]] for g in groups])
+    monkeypatch.setattr(policy.native, "warnings", lambda *a: ())
+    monkeypatch.setattr(policy.store, "work", lambda cfg: nullcontext(Path("work")))
     monkeypatch.setattr(policy.recipes, "resolve", resolve)
     monkeypatch.setattr(policy._view, "get", get)
     monkeypatch.setattr(policy._view, "closure", closure)
@@ -233,11 +236,11 @@ def test_census_units_headers_deduplication_and_sdk(snapshot, monkeypatch, names
         (PATH, 2, False), ("src/second.c", 2, False), ("include/shared.h", 2, False),
     ]
     (call,) = gathered.call_args_list  # units and headers are one dispatch, each resolving its own warm items
-    assert [g[0] for g in call.args[1]] == ["policy.census", "policy.census.headers"]
+    assert [g[0] for g in call.args[1]] == ["policy.census", "policy.census.headers", "policy.census.warnings"]
     assert call.args[1][0][2] == [(snapshot, u) for u in units[:2]]
     assert call.args[1][1][2] == [(snapshot, "include/shared.h", True)]  # read once, not once per unit
     assert all(g[3] is not None for g in call.args[1])
-    assert [call.args for call in resolve.call_args_list] == [(snapshot.config, u, {}) for u in units[:2]]
+    assert [call.args for call in resolve.call_args_list] == [(snapshot.config, u, {}) for u in units[:2]] * 2
     assert [call.args for call in get.call_args_list] == [(snapshot, u, expected_version, recipe) for u in units[:2]]
     assert [call.args[1] for call in evaluate.call_args_list] == [PATH, "src/second.c", "include/shared.h"]
     assert evaluate.call_args_list[-1].args[3] is None  # a header has no single view
@@ -259,6 +262,17 @@ def test_census_counts_a_name_declared_with_two_spellings(snapshot, monkeypatch)
     conflict = Finding("types.conflict", "gX is declared 2 ways and defined nowhere", unit="gX",
                        missing=("gX: src/a.c:3 s32 gX;", "gX: include/a.h:9 f32 gX;"))
     snapshot.layout = LayoutMap(200, {}, {}, {}, "layout", (), {})
-    monkeypatch.setattr(policy.pool, "gather", lambda cfg, groups: [[], []])
+    monkeypatch.setattr(policy.pool, "gather", lambda cfg, groups: [[], [], []])
     monkeypatch.setattr(policy.types, "conflicts", lambda snap: [conflict])
     assert [(f.key, f.unit, f.blocking) for f in policy.census(snapshot)] == [("types.conflict", "gX", False)]
+
+
+def test_census_counts_landed_view_conversions_as_debt_by_unit(snapshot, monkeypatch):
+    unit = UnitSpec(PATH, "c", "group", ("member",), "test", {})
+    snapshot.layout = LayoutMap(200, {}, {"member": Member("member", "function", "c", "group", (
+        Placement("a", ".text", 0, 4, 0),))}, {unit.path: unit}, "layout", (), {})
+    monkeypatch.setattr(policy.recipes, "resolve", lambda *a: None)
+    monkeypatch.setattr(policy.native, "warnings", lambda *a: ("a.c:1: makes pointer from integer", "a.c:2: x"))
+    monkeypatch.setattr(policy.store, "work", lambda cfg: nullcontext(Path("work")))
+    found = policy._census_warnings((snapshot, unit))
+    assert [(f.key, f.path, len(f.missing)) for f in found] == [("land.view-conversion", PATH, 2)]

@@ -45,7 +45,17 @@ def _objects(item):
     return native.objects(*item)[0]
 def _measure(item):
     return native.measure(*item)
-def _blocking(findings):
+def _view_conversions(unit: UnitSpec, text: str, old: bytes | None, warnings: Sequence[str]) -> tuple[Finding, ...]:
+    """The refused warnings whose line is new or changed text of the candidate; its landed debt never blocks."""
+    lines, before, found = text.splitlines(), set((old or b"").decode().splitlines()), []
+    for warning in warnings:
+        at = re.search(r"([^\s:,]+)[:,] ?(?:line )?(\d+)\b", warning)
+        if (at and Path(at[1]).name == Path(unit.path).name and 0 < int(at[2]) <= len(lines)
+                and lines[int(at[2]) - 1] not in before):
+            found.append(Finding("land.view-conversion", warning, path=unit.path, line=int(at[2]),
+                                 action="type the variable as the pointer it holds"))
+    return tuple(found)
+def _blocking(findings: Sequence[Finding]) -> None:
     findings = tuple(f for f in findings if f.blocking)
     if findings:
         raise Refusal(*findings)
@@ -143,6 +153,8 @@ def admit(snapshot: Snapshot, request: Json) -> tuple[UnitSpec, Snapshot, tuple[
                                    for f in versions.resolve(snap.versions[v], versions.undefined(obj), unit.path))
                 if unresolved:
                     raise Refusal(*unresolved)
+                _blocking(_view_conversions(unit, text, snapshot.peek(unit.path), native.warnings(
+                    snap, unit, holders[0], recipe, work / "warnings")))
             with effort.stage("publish.admit.8"):
                 jobs = [(snap, unit, v, recipe, obj, work / f"{i}")
                         for i, (v, obj) in enumerate(zip(holders, objects, strict=True))]

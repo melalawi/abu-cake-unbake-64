@@ -94,6 +94,7 @@ def lane(tmp_path, monkeypatch):
     monkeypatch.setattr(publish.native, "objects", Mock(side_effect=lambda *args: (args[-1] / "out.o", ())))
     monkeypatch.setattr(publish.native, "measure", Mock(side_effect=lambda *args: (proofs[("a", "b").index(args[2])],)))
     monkeypatch.setattr(publish.native, "prove", Mock(side_effect=lambda *args: (proofs[("a", "b").index(args[2])],)))
+    monkeypatch.setattr(publish.native, "warnings", Mock(return_value=()))
     monkeypatch.setattr(publish.versions, "undefined", Mock(return_value=()))
     monkeypatch.setattr(publish.versions, "resolve", Mock(return_value=()))
     monkeypatch.setattr(publish.journal, "apply", Mock(return_value="new-commit"))
@@ -524,3 +525,16 @@ def test_a_later_layout_option_is_planned_only_when_the_first_does_not_prove(lan
     monkeypatch.setattr(publish.compare, "holders", Mock(return_value=("a",)))
     taken = publish.plans(lane["snapshot"], lane["unit"], lane["proposed"], {})
     assert next(taken) is first and publish._option_plan.call_count == 1
+
+
+def test_admission_refuses_a_view_conversion_in_new_text_only(lane):
+    text = lane["snapshot"].read(lane["unit"].path).decode()
+    publish.native.warnings.return_value = (f"{lane['unit'].path}: 1: warning: makes pointer from integer",)
+    snapshot = replace(lane["snapshot"], overlays={lane["unit"].path: b"int f(void) { return 0; }\n"})
+    publish.compare.bind.return_value = (lane["unit"], replace(lane["proposed"], overlays={
+        lane["unit"].path: text.encode()}))
+    with pytest.raises(Refusal) as exc:
+        publish.admit(snapshot, _request(lane))
+    assert [(f.key, f.line) for f in exc.value.findings] == [("land.view-conversion", 1)]
+    same = replace(lane["snapshot"], overlays={lane["unit"].path: text.encode()})
+    assert publish.admit(same, _request(lane))[2] == lane["proofs"]  # the line was already landed text

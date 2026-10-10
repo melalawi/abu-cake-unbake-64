@@ -165,11 +165,11 @@ class TemplateToolchain:
             start = stderr.rfind("\n", 0, match.start()) + 1
             end = stderr.find("\n", match.end())
             return (Finding("preprocess.error", reason=stderr[start:end if end >= 0 else None].strip()),)
-        for line in stderr.splitlines():
-            if any(re.search(warning, line) for warning in self.row["refused_warnings"]):
-                return (Finding("land.view-conversion", reason=line.strip(),
-                                action="type the variable as the pointer it holds"),)
         return ()
+    def refused(self, stderr: str) -> list[str]:
+        """The compiler lines that spell a refused view (data: refused_warnings), never a failure by themselves."""
+        return [line.strip() for line in stderr.splitlines()
+                if any(re.search(warning, line) for warning in self.row["refused_warnings"])]
     @staticmethod
     def _raise(findings: tuple[Finding, ...]) -> None:
         if findings:

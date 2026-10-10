@@ -183,13 +183,12 @@ def test_diagnose_ido_error_pattern(adapter_config, toolchains):
     assert chain.diagnose(fixture.native_result(stderr=b"ordinary warning")) == ()
 
 
-def test_diagnose_refuses_an_integer_passed_where_a_pointer_is_declared(adapter_config, toolchains):
+def test_refused_names_the_warning_lines_and_diagnose_never_fails_on_them(adapter_config, toolchains):
     chain = adapters.toolchain(adapter_config, "gcc-test")
     warning = "t.c:3: warning: passing arg 1 of `take' makes pointer from integer without a cast"
-    findings = chain.diagnose(fixture.native_result(stderr=f"t.c: In function `g':\n{warning}\n".encode()))
-    assert [(f.key, f.reason) for f in findings] == [("land.view-conversion", warning)]
-    assert "pointer" in findings[0].action
-    assert chain.diagnose(fixture.native_result(stderr=b"t.c:3: warning: unused variable `x'")) == ()
+    stderr = f"t.c: In function `g':\n{warning}\nt.c:4: warning: unused variable `x'\n"
+    assert chain.refused(stderr) == [warning]
+    assert chain.diagnose(fixture.native_result(stderr=stderr.encode())) == ()
 
 
 def test_script_quotes_words_and_preserves_variables(adapter_config, recipe, toolchains):
