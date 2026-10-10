@@ -32,7 +32,7 @@ def write(path: Path, content: bytes) -> bool:
     except FileNotFoundError:
         pass
     path.parent.mkdir(parents=True, exist_ok=True)
-    part = path.with_name(f"{path.name}.{uuid.uuid4().hex}.part")
+    part = path.with_name(f".{uuid.uuid4().hex}.part")  # the name alone may already sit near the 255-byte limit
     part.write_bytes(content)
     part.replace(path)
     effort.forget("pin", "includes", "edges", "closure", "listing")  # the memoised reads of project files are stale now

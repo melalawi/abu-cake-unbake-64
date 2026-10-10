@@ -149,3 +149,8 @@ def test_stem_flattens_slashes_and_digests_long_names():
     assert store.stem("src/a.c") == "src.a.c"
     long = "x/" + "y" * 200
     assert len(store.stem(long)) <= 100 and store.stem(long) != store.stem(long + "z")
+
+
+def test_write_keeps_a_name_near_the_filesystem_limit(tmp_path: Path) -> None:
+    path = tmp_path / ("x" * 240 + ".s")  # the temporary file must not lengthen the name past 255 bytes
+    assert store.write(path, b"a") and path.read_bytes() == b"a" and [p.name for p in tmp_path.iterdir()] == [path.name]
