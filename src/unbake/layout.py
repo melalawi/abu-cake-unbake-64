@@ -415,7 +415,8 @@ def boundary_plan(snapshot: Snapshot) -> tuple[Plan, Json]:
                                          lambda: pickle.dumps(_boundary(snapshot))))
 def _boundary(snapshot: Snapshot) -> tuple[Plan, Json]:
     assembly = _kinds()[1]
-    counts: Json = {rule: {"proposed": 0, "applied": 0, "withheld": 0} for rule in ("prelude", "split", "merge")}
+    counts: dict[str, Any] = {rule: {"proposed": 0, "applied": 0, "withheld": 0}
+                              for rule in ("prelude", "split", "merge")}
     counts["withheld_reasons"], counts["join"], counts["align"], counts["retype"] = {}, 0, 0, 0
     protected = {row["name"] for row in snapshot.layout.authored}
     candidates, placements = {}, {}
@@ -496,20 +497,22 @@ def _boundary(snapshot: Snapshot) -> tuple[Plan, Json]:
             del table[name]
     landed = {m for u in snapshot.layout.units.values() for m in u.members}
     data: dict[str, list[tuple[str, str, Placement]]] = {}  # the rows as they will be, misaligned ones cut
+    raw = {k: next(t for t in row["types"] if not t.startswith(".")) for k, row in
+           configuration.load_resource("units.toml")["section"].items()}
     for holder, version in sorted(snapshot.versions.items()):
         data[holder] = []
         tables = [a for n, a in version.symbols.items() if n.startswith("jtbl_") and n in table]
-        for name, state, p in _rows(snapshot, version):
+        for name, was, p in _rows(snapshot, version):
             gap = -p.vram % 4
             cut = p.section in (".data", ".rodata") and version_data.unowned(name) and 0 < gap < p.size
-            retype = state == "data" and version_data.unowned(name) and any(p.vram <= a < p.vram + p.size
-                                                                              for a in tables)
-            state = "rodata" if retype else state  # only read-only data has its jump table words labelled
+            retype = p.section == ".data" and was == raw['data'] and version_data.unowned(name) and any(
+                p.vram <= a < p.vram + p.size for a in tables)
+            state = raw['rodata'] if retype else was  # only read-only data has its jump table words labelled
             data[holder].append((name, state, p))
             if cut or retype:
                 fresh = f"{version_data.section_of(version, state, name)[1:]}/unresolved/{p.vram + gap:08X}"
                 writes[version.split] = _edit(writes.get(version.split, snapshot.read(version.split)), name,
-                                              state=state if retype else None, types=frozenset({"data"}),
+                                              state=state if retype else None, types=frozenset({was}),
                                               additions=((p.rom_start + gap, fresh),) if cut else ())
             if cut:
                 data[holder][-1:] = [(name, state, replace(p, rom_end=p.rom_start + gap)),
