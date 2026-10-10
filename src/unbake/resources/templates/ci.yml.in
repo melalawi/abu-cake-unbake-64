@@ -1,6 +1,7 @@
 name: CI
-on:
-  push:
+on:  # progress sites read the report artifacts; a run per push floods them, so main reports on a schedule
+  schedule:
+    - cron: "0 */6 * * *"
   pull_request:
   workflow_dispatch:
 permissions:

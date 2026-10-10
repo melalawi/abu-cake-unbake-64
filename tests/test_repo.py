@@ -292,6 +292,7 @@ def test_files_contents(snapshot, monkeypatch, existing):
     for row in rules["github"].values():
         assert f"{row['action']}@{row['sha']} # {row['tag']}" in ci
     assert "versions/a/report.json" in ci and "versions/b/report.json" in ci
+    assert "schedule:" in ci and "\n  push:" not in ci  # main reports on a schedule, never once per push
     gitlab = result[".gitlab-ci.yml"].decode()
     assert rules["gitlab"]["image"] in gitlab
     assert " ".join(rules["gitlab"]["packages"]) in gitlab
