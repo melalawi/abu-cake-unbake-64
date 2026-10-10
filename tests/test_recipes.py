@@ -113,7 +113,9 @@ def test_a_unit_preprocessor_option_goes_to_the_preprocessor_and_codegen_stays_w
     assert recipes.resolve(cfg, _unit(), {"omit": ["-DGBI"]}).cppflags[0] == "-undef"
 
 
-def test_every_shipped_toolchain_preprocesses_with_the_shared_preprocessor() -> None:
+def test_gcc_rows_preprocess_as_they_always_did_and_only_ido_moved_to_the_shared_preprocessor() -> None:
     rows = configuration.load_resource("toolchains.toml")["toolchain"]
-    shared = ("{cpp}", "{cppflags}", "{defines}", "{includes}", "{source}")
-    assert {tuple(row["preprocess"]) for row in rows.values()} == {shared}
+    shared = ["{cpp}", "{cppflags}", "{defines}", "{includes}", "{source}"]
+    assert {i: r["preprocess"] for i, r in rows.items() if r["family"] == "gcc"} == {
+        "gcc-2.7.2-kmc": shared, "gcc-2.8.1-sn64": shared}
+    assert {r["preprocess"][0] for i, r in rows.items() if r["family"] == "ido"} == {"{cpp}"}
