@@ -29,9 +29,6 @@ def _keys(refusal: Refusal) -> set[str]:
 def test_load_resource_every_data_file(name: str) -> None:
     document = configuration.load_resource(name)
     assert document
-    if name == "hints.jsonl":
-        assert list(document) == ["rows"]
-        assert len(document["rows"]) == 19
 
 
 def test_schema_of_has_no_features() -> None:

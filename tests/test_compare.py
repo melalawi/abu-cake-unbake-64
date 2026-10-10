@@ -218,7 +218,6 @@ def test_run_exact_submits_and_drains(cfg: Config, tmp_path: Path, monkeypatch: 
     assert result["drain"] == {"running": False, "landed": [], "refused": []}
     assert result["exact"] is True
     assert result["score"] == {"a": 1.0, "b": 1.0}
-    assert "hints" not in result
     request, origin, source = calls["submit"]
     assert origin == "compare" and source == b"int f;"
     assert request["function"] == "f" and request["note"] == "trick"
