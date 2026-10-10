@@ -1,5 +1,6 @@
 """Native execution with per-child accounting and process-group timeouts."""
 
+import ctypes
 import os
 import selectors
 import signal
@@ -18,6 +19,19 @@ def _kill(pid: int) -> None:
         os.killpg(pid, signal.SIGKILL)
 
 
+def _reap(group: int) -> float:
+    """Kills what the child left in its process group and reaps it, returning the CPU seconds of every member: a
+    killed child never waited for its own children, which are ours (subreaper) and only we can account for."""
+    _kill(group)
+    cpu = 0.0
+    while True:
+        try:
+            _, _, usage = os.wait4(-group, 0)
+        except ChildProcessError:
+            return cpu
+        cpu += usage.ru_utime + usage.ru_stime
+
+
 def scratch(root: Path) -> Path:
     """The temporary directory every child of a project gets (TMPDIR), created when first needed."""
     path = root / ".unbake" / "tmp"
@@ -27,6 +41,7 @@ def scratch(root: Path) -> Path:
 
 def _execute(name, argv, cwd, stdin, stdout_path, timeout, outputs, tmp):
     start = perf_counter_ns()
+    ctypes.CDLL(None).prctl(36, 1, 0, 0, 0)  # PR_SET_CHILD_SUBREAPER: orphans of a killed child come to us to be reaped
     deadline = None if timeout is None else start + timeout * 1_000_000_000
     streams = {"stdout": bytearray(), "stderr": bytearray()}
     with ExitStack() as stack:
@@ -83,18 +98,20 @@ def _execute(name, argv, cwd, stdin, stdout_path, timeout, outputs, tmp):
                             pipe.close()
             _, status, usage = os.wait4(proc.pid, 0)
             proc.returncode = os.waitstatus_to_exitcode(status)
+            orphans = _reap(proc.pid)
         finally:
             if proc.returncode is None:
                 _kill(proc.pid)
                 _, status, _ = os.wait4(proc.pid, 0)
                 proc.returncode = os.waitstatus_to_exitcode(status)
+                _reap(proc.pid)
     code = proc.returncode
     result = NativeResult(
         tuple(str(arg) for arg in argv), str(cwd),
         code if code >= 0 else None, -code if code < 0 else None,
         bytes(streams["stdout"]), bytes(streams["stderr"]),
         (perf_counter_ns() - start) / 1_000_000_000,
-        usage.ru_utime + usage.ru_stime, usage.ru_maxrss * 1024, dict(outputs),
+        usage.ru_utime + usage.ru_stime + orphans, usage.ru_maxrss * 1024, dict(outputs),
     )
     effort.record_native(name, result, start)
     return result

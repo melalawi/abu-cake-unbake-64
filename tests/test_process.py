@@ -175,6 +175,20 @@ def test_large_stdin_and_both_streams(tmp_path, redirect):
         assert result.stdout == payload
 
 
+def test_a_grandchild_the_child_leaves_behind_is_killed_and_reaped_by_us(tmp_path, monkeypatch):
+    real_wait4, reaped = process.os.wait4, []
+
+    def wait4(pid, options):
+        found = real_wait4(pid, options)
+        reaped.append((pid, found[0]))
+        return found
+
+    monkeypatch.setattr(process.os, "wait4", wait4)
+    result = process.run("orphan", ("/bin/sh", "-c", "sleep 300 >/dev/null 2>&1 & exit 0"), tmp_path, tmp=tmp_path / "tmp")
+    child = reaped[0][0]
+    assert result.exit == 0 and [pid for pid, _ in reaped] == [child, -child]
+
+
 def test_wait4_accounting_and_record_callback(tmp_path, monkeypatch):
     real_popen, real_wait4 = process.subprocess.Popen, process.os.wait4
     seen = {}
@@ -186,6 +200,8 @@ def test_wait4_accounting_and_record_callback(tmp_path, monkeypatch):
         return child
 
     def wait4(pid, options):
+        if pid < 0:
+            return real_wait4(pid, options)
         seen["waited"] = pid
         reaped, status, _ = real_wait4(pid, options)
         return reaped, status, SimpleNamespace(ru_utime=0.5, ru_stime=0.25, ru_maxrss=4096)
