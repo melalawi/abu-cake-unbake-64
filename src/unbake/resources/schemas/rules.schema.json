@@ -100,12 +100,30 @@
     "address_ranges"
    ],
    "additionalProperties": false
+  },
+  "gfx": {
+   "type": "object",
+   "properties": {
+    "opcodes": {
+     "type": "array",
+     "items": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 255
+     }
+    }
+   },
+   "required": [
+    "opcodes"
+   ],
+   "additionalProperties": false
   }
  },
  "required": [
   "schema",
   "rule",
-  "hardware"
+  "hardware",
+  "gfx"
  ],
  "additionalProperties": false
 }

@@ -95,3 +95,11 @@ address_ranges = [
   { start = 0xA5000000, end = 0xA5FFFFFF },
   { start = 0xBFC00000, end = 0xBFCFFFFF },
 ]
+
+# Opcodes (high byte of a display-list word) the raw-gfx rule treats as graphics commands.
+[gfx]
+opcodes = [
+    1, 2, 5, 6, 8, 175, 179, 180, 182, 183, 185, 186, 188, 191, 215, 217,
+    218, 219, 220, 221, 222, 223, 225, 226, 227, 228, 230, 231, 232, 233, 237, 238,
+    240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255,
+]

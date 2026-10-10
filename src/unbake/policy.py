@@ -119,7 +119,7 @@ def _empty_loops(code: str) -> set[int]:
 
 _PAIR = re.compile(r"\s*\)?\s*,\s*0x[0-9A-Fa-f]{8}\b")
 def _raw_gfx(code: str) -> set[int]:
-    opcodes = {command["opcode"] for command in config.load_resource("gbi.toml")["command"]}
+    opcodes = set(config.load_resource("rules.toml")["gfx"]["opcodes"])
     result, line = set(), _numbered(code)
     for match in re.finditer(r"\b0x[0-9A-Fa-f]{8}\b", code):
         if int(match[0], 16) >> 24 not in opcodes:
