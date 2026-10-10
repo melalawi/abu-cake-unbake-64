@@ -55,6 +55,24 @@ def _content(config: Config, layout: LayoutMap, vers: Mapping[str, Version], rea
                     for v in sorted(vers.values(), key=lambda v: v.id)]))
 def _load(config: Config, key: str, produce: Callable[[], bytes]) -> tuple:
     return pickle.loads(store.cached(config, "capture", key, produce))
+def _pins(config: Config, paths: list[str]) -> list[tuple[str, str]]:
+    """(path, sha256) of each file the capture reads. A file whose stat is unchanged keeps the hash recorded for it, and
+    a file rewritten with the same bytes (a regeneration, a touch) keeps the capture warm."""
+    base, slot = str(config.project.root), hashlib.sha256(str(config.project.root).encode()).hexdigest()
+    blob = store.get(config, "pins", slot)
+    known: dict[str, tuple[int, int, str]] = pickle.loads(blob) if blob else {}
+    fresh, pins = {}, []
+    for p in paths:
+        st = os.stat(f"{base}/{p}")
+        row = known.get(p)
+        if row is None or row[:2] != (st.st_mtime_ns, st.st_size):
+            with open(f"{base}/{p}", "rb") as handle:
+                row = (st.st_mtime_ns, st.st_size, hashlib.file_digest(handle, "sha256").hexdigest())
+        fresh[p] = row
+        pins.append((p, row[2]))
+    if fresh != known:
+        store.put(config, "pins", slot, pickle.dumps(fresh, protocol=5))
+    return pins
 def capture(config: Config) -> Snapshot:
     with effort.stage("layout.capture"):
         def reader(p: str) -> bytes:
@@ -67,8 +85,7 @@ def capture(config: Config) -> Snapshot:
                 paths.update(chain.from_iterable(version_data.fact_files(config, vid)))
             paths.update(p.relative_to(config.project.root).as_posix()
                          for p in config.project.root.glob(".unbake/symbols/*/*.csv"))
-            base = str(config.project.root)
-            pins = [(p, st.st_mtime_ns, st.st_size) for p in sorted(paths) for st in (os.stat(f"{base}/{p}"),)]
+            pins = _pins(config, sorted(paths))
             # the root keeps copies of one project apart; not the commit: caches stay warm across setup's own
             key = digest((str(config.project.root), config.digest, pins, _code()))
             def produce():
