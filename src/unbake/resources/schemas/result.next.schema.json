@@ -18,21 +18,9 @@
        "data"
       ]
      },
-     "subsystem": {
+     "segment": {
       "type": "string",
       "minLength": 1
-     },
-     "rank": {
-      "type": "integer",
-      "minimum": 0
-     },
-     "state": {
-      "enum": [
-       "open",
-       "tool",
-       "creative",
-       "fuzzy"
-      ]
      },
      "size": {
       "type": "integer",
@@ -42,30 +30,16 @@
       "type": "integer",
       "minimum": 0
      },
-     "best": {
-      "type": "number",
-      "minimum": 0,
-      "maximum": 1
-     },
-     "command": {
-      "type": "string",
-      "minLength": 1
-     },
-     "packet": {
-      "type": "string",
-      "minLength": 1
+     "source": {
+      "type": "string"
      }
     },
     "required": [
      "member",
      "kind",
-     "subsystem",
-     "rank",
-     "state",
+     "segment",
      "size",
-     "address",
-     "best",
-     "command"
+     "address"
     ],
     "additionalProperties": false
    }

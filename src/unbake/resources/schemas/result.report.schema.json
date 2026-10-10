@@ -75,7 +75,7 @@
     "additionalProperties": false
    }
   },
-  "subsystems": {
+  "segments": {
    "type": "object",
    "additionalProperties": {
     "type": "object",
@@ -346,21 +346,17 @@
   "inbox": {
    "type": "integer",
    "minimum": 0
-  },
-  "next": {
-   "type": "string"
   }
  },
  "required": [
   "commit",
   "versions",
-  "subsystems",
+  "segments",
   "kinds",
   "debt",
   "boundary",
   "pending_boundary",
-  "inbox",
-  "next"
+  "inbox"
  ],
  "additionalProperties": false
 }

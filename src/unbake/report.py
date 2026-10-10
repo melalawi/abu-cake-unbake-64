@@ -1,4 +1,4 @@
-"""Layout credit, cracking work lists, objdiff reports and README progress."""
+"""Layout credit, work lists, objdiff reports and README progress."""
 from __future__ import annotations
 
 import hashlib
@@ -9,7 +9,7 @@ import struct
 from collections import defaultdict
 
 from unbake import config as configuration
-from unbake import crack, draft, effort, land, layout, pool, store
+from unbake import effort, land, layout, pool, versions
 from unbake.contracts import Config, Finding, Json, Refusal, Snapshot
 
 
@@ -24,16 +24,31 @@ def _f32(value: float) -> float:
             return shortest
     return float(single)
 
-def _subsystems() -> Json:
-    return {r["id"]: r for r in configuration.load_resource("subsystems.toml")["subsystem"]}
-
+def _text_starts(snapshot: Snapshot) -> dict[tuple[str, int], str]:
+    """The first member whose text starts at each (version, ROM offset), built once per command."""
+    def build() -> dict[tuple[str, int], str]:
+        starts: dict[tuple[str, int], str] = {}
+        for name, member in snapshot.layout.members.items():
+            for p in member.placements:
+                if p.section == ".text":
+                    starts.setdefault((p.version, p.rom_start), name)
+        return starts
+    return effort.memo(("text-starts", snapshot.digest), build)  # type: ignore[return-value]
+def split_slot(snapshot: Snapshot, member: str) -> str | None:
+    """The member holding the delay slot of `member`'s last instruction when that slot lies outside it."""
+    for place in snapshot.layout.members[member].placements:
+        version = snapshot.versions[place.version]
+        if place.section == ".text" and place.size >= 4 and versions.delay_slot(
+                int.from_bytes(versions.rom_bytes(version, place.rom_end - 4, place.rom_end), "big")):
+            return _text_starts(snapshot).get((place.version, place.rom_end), "an unowned range")
+    return None
 def _inventory(snapshot: Snapshot):
     kinds = configuration.load_resource("units.toml")["kind"]
     for name, member in snapshot.layout.members.items():
         if (unit := layout.unit_of(snapshot, name)) is None and member.state == "bin":
             continue  # opaque ROM bytes are neither code nor data
         matched = unit is not None and kinds[unit.kind]["decompiled"] and not unit.withheld  # built in every version
-        yield name, member, unit, matched, snapshot.layout.groups[member.group].subsystem if member.group else "unknown"
+        yield name, member, unit, matched, snapshot.layout.groups[member.group].segment if member.group else "unknown"
 
 def _tally(b: Json) -> Json:
     return {**b, "fuzzy_bytes": (fuzzy := b["code_fuzzy"] + b["data_fuzzy"]),
@@ -46,14 +61,14 @@ def current(snapshot: Snapshot) -> Json:
         zero = dict.fromkeys(("code_total", "code_matched", "data_total", "data_matched",
                               "functions_total", "functions_matched", "code_fuzzy", "data_fuzzy"), 0)
         totals = {v: dict(zero) for v in snapshot.config.project.versions}
-        subsystems, kinds = defaultdict(dict), defaultdict(dict)
-        for name, member, unit, matched, subsystem in _inventory(snapshot):
+        segments, kinds = defaultdict(dict), defaultdict(dict)
+        for name, member, unit, matched, segment in _inventory(snapshot):
             for v in member.holders():
                 placements = [p for p in member.placements if p.version == v]
                 code = sum(p.size for p in placements if p.section == ".text")
                 data = sum(p.size for p in placements if p.section in (".data", ".rodata"))
                 score = 0.0 if matched else (snapshot.layout.fuzzy.get(name) or {"scores": {v: 0.0}})["scores"][v]
-                for bucket in (totals[v], subsystems[subsystem].setdefault(v, dict(zero)),
+                for bucket in (totals[v], segments[segment].setdefault(v, dict(zero)),
                                kinds[unit.kind if unit else member.state].setdefault(v, dict(zero))):
                     for prefix, size in (("code_", code), ("data_", data),
                                          ("functions_", int(member.kind == "function"))):
@@ -71,17 +86,17 @@ def current(snapshot: Snapshot) -> Json:
         counts = layout.boundary_plan(snapshot)[1]
         boundary = {key: counts[key] for key in ("prelude", "split", "merge")}
         return {"commit": snapshot.commit, "versions": {v: _tally(b) for v, b in totals.items()},
-                "subsystems": {s: {v: _tally(b) for v, b in rows.items()} for s, rows in subsystems.items()},
+                "segments": {s: {v: _tally(b) for v, b in rows.items()} for s, rows in segments.items()},
                 "kinds": {k: {v: _tally(b) for v, b in rows.items()} for k, rows in kinds.items()},
                 "debt": debt, "boundary": boundary,
                 "pending_boundary": sum(row["applied"] for row in boundary.values())}
 
 def items(snapshot: Snapshot, params: Json) -> list[Json]:
     with effort.stage("report.items"):
-        subsystems = _subsystems()
-        subsystem, shard, count = (params.get(k) for k in ("subsystem", "shard", "count"))
-        if subsystem is not None and (not isinstance(subsystem, str) or subsystem not in subsystems):
-            raise Refusal(Finding("report.request", "subsystem must be a subsystems.toml id"))
+        segment, shard, count = (params.get(k) for k in ("segment", "shard", "count"))
+        if segment is not None and (not isinstance(segment, str)
+                                    or segment not in {g.segment for g in snapshot.layout.groups.values()}):
+            raise Refusal(Finding("report.request", "segment must be a segment name of the layout"))
         if count is not None and (type(count) is not int or count < 1):
             raise Refusal(Finding("report.request", "count must be an integer at least 1"))
         index, modulus = 0, 1
@@ -93,31 +108,19 @@ def items(snapshot: Snapshot, params: Json) -> list[Json]:
             sections = (".text",) if member.kind == "function" else (".data", ".rodata")
             if matched or not any(p.section in sections for p in member.placements):
                 continue
-            if member.kind == "function" and draft.split_slot(snapshot, name) is not None:
+            if member.kind == "function" and split_slot(snapshot, name) is not None:
                 continue
-            if subsystem is not None and sid != subsystem:
+            if segment is not None and sid != segment:
                 continue
             if int(hashlib.sha256(name.encode()).hexdigest()[:8], 16) % modulus != index:
                 continue
             version = member.reference(snapshot.config.project.names_from)
             placement = next(p for p in member.placements if p.version == version)
-            rows.append({"member": name, "kind": member.kind, "subsystem": sid, "rank": subsystems[sid]["rank"],
-                         "state": crack.state(snapshot, name), "size": placement.size, "address": placement.vram,
-                         "source": unit.path if unit is not None and unit.withheld else ""})
-        rows.sort(key=lambda r: (r["size"] < 16, r["rank"], ("open", "tool", "fuzzy", "creative").index(r["state"]),
-                                 -r["size"], r["address"], r["member"]))  # biggest first, fragments last
-        seconds = configuration.load_resource("flow.toml")["work"]["permuter_seconds"]
-        for row in rows[:count]:
-            name = row["member"]
-            row["best"] = (min(snapshot.layout.fuzzy[name]["scores"].values()) if row["state"] == "fuzzy"
-                           else 0.0 if row["state"] == "open"  # no attempts file, so no history to read
-                           else max((a.score for a in crack.history(snapshot.config, name)), default=0.0))
-            source = row.pop("source")  # a withheld member has source: compare it, never crack it
-            row["command"] = (f"unbake compare {source} --function {name}" if source
-                              else f"unbake crack {name} --seconds {seconds}" if row["state"] in ("open", "tool")
-                              else f"unbake compare .unbake/work/{store.stem(name)}.c --function {name}")
-            if row["state"] == "creative":
-                row["packet"] = f".unbake/packets/{store.stem(name)}.json"
+            rows.append({"member": name, "kind": member.kind, "segment": sid, "size": placement.size,
+                         "address": placement.vram,
+                         **({"source": unit.path} if unit is not None and unit.withheld else {})})
+        # biggest first, fragments last
+        rows.sort(key=lambda r: (r["size"] < 16, -r["size"], r["address"], r["member"]))
         return rows[:count]
 
 def _sum_measures(units: list[Json]) -> Json:
@@ -136,7 +139,7 @@ def _sum_measures(units: list[Json]) -> Json:
 
 def objdiff(snapshot: Snapshot, report: Json, version: str) -> Json:
     with effort.stage("report.objdiff"):
-        units, subsystems = [], _subsystems()
+        units = []
         for name, member, unit, matched, sid in _inventory(snapshot):
             placements = [p for p in member.placements if p.version == version]
             if not placements:
@@ -174,9 +177,9 @@ def objdiff(snapshot: Snapshot, report: Json, version: str) -> Json:
                      for name, m in snapshot.layout.members.items() if version in m.holders()}
         units.sort(key=lambda u: (addresses[u["name"]], u["name"]))
         present = {u["metadata"]["progress_categories"][0] for u in units}
-        categories = [{"id": sid, "name": subsystems[sid]["label"],
+        categories = [{"id": sid, "name": sid,
                        "measures": _sum_measures([u for u in units if sid in u["metadata"]["progress_categories"]])}
-                      for sid in sorted(present, key=lambda s: (subsystems[s]["rank"], s))]
+                      for sid in sorted(present)]
         result = {"measures": _sum_measures(units), "units": units, "categories": categories, "version": 2}
         configuration.validate("objdiff", result, f"versions/{version}/report.json")
         return result
@@ -236,5 +239,4 @@ def run(config: Config, params: Json) -> Json:
         snapshot = layout.capture(config)
         if params["next"]:
             return {"items": items(snapshot, params)}
-        return {**current(snapshot), "inbox": len(land.inbox(config)),
-                "next": (items(snapshot, {**params, "count": 1}) or [{"command": ""}])[0]["command"]}
+        return {**current(snapshot), "inbox": len(land.inbox(config))}
