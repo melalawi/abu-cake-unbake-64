@@ -101,6 +101,49 @@ def test_disagreements_leave_out_the_names_the_caller_defines(tmp_path):
     assert headers.disagreements(snap(tmp_path, files), {"D_7"}) == ({}, [])
 
 
+def test_disagreements_cache_content_paths_and_explicit_definitions(tmp_path, monkeypatch):
+    files = {"include/g.h": "extern int g;\n", "src/a.c": "extern float g;\n"}
+    s = snap(tmp_path, files)
+    cache, jobs = {}, []
+
+    def cached(config, name, function, items, key=None):
+        result = []
+        for item in items:
+            slot = (name, key(item)) if key else None
+            if slot not in cache:
+                jobs.append(name)
+                value = function(item)
+                if slot is not None:
+                    cache[slot] = value
+            else:
+                value = cache[slot]
+            result.append(value)
+        return result
+
+    monkeypatch.setattr(headers.pool, "map", cached)
+    first = headers.disagreements(s)
+    assert len(first[1]) == 1
+    cold = list(jobs)
+    s.commit = "unrelated-commit"
+    assert headers.disagreements(s) == first and jobs == cold
+    assert headers.disagreements(s, {"g"}) == ({}, [])
+    assert jobs.count("headers.disagreements") == 2
+    assert jobs.count("headers.catalog") == 2  # the changed definition set keeps file scans warm
+    s.overlays["src/a.c"] = b"extern int g;\n"
+    read = s.read
+    s.read = lambda p: s.overlays[p] if p in s.overlays else read(p)
+    assert headers.disagreements(s)[0] == {"g": "int @"}
+    assert jobs.count("headers.disagreements") == 3
+    assert jobs.count("headers.catalog") == 3
+    s.overlays["src/a.c"] = None
+    assert headers.disagreements(s)[0] == {"g": "int @"}
+    assert jobs.count("headers.disagreements") == 4
+    s.overlays["include/other.h"] = b"extern int other;\n"
+    assert headers.disagreements(s)[0] == {"g": "int @", "other": "int @"}
+    assert jobs.count("headers.disagreements") == 5
+    assert jobs.count("headers.catalog") == 4
+
+
 def test_fold_moves_new_prototype_and_removes_known(tmp_path, no_types):
     source = "void known(int a);\nvoid fresh(int b);\nint f(void) { return 0; }\n"
     s = snap(tmp_path, {"include/g.h": HEADER, "src/a.c": source})
