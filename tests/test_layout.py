@@ -193,25 +193,24 @@ def test_capture_busy_after_three(scene, monkeypatch):
 
 
 @pytest.mark.parametrize("version", ["a", "b"])
-def test_asm_unit_paths_and_kind(scene, monkeypatch, version):
-    snapshot = scene()
+@pytest.mark.parametrize("grouped", [True, False])
+def test_asm_unit_paths_and_kind(scene, monkeypatch, version, grouped):
+    snapshot = scene(grouped=grouped)
     path = snapshot.config.project.root / f"versions/{version}/asm/func_80000400.s"
     asm_path = Mock(return_value=path)
     monkeypatch.setattr(layout.version_data, "asm_path", asm_path)
     unit = layout.asm_unit(snapshot, "func_80000400", version)
     assert unit == UnitSpec(path.relative_to(snapshot.config.project.root).as_posix(), "asm",
-                           "grp", ("func_80000400",), "gcc-test", {"add": [], "omit": []})
+                           "grp" if grouped else "", ("func_80000400",), "gcc-test", {"add": [], "omit": []})
     asm_path.assert_called_once_with(snapshot.config, version, "func_80000400")
 
 
-def test_ungrouped_member_is_refused_by_name_and_no_unit_is_built(scene):
+def test_ungrouped_member_is_refused_by_name_when_a_unit_is_built(scene):
     snapshot = scene(grouped=False)
-    for build in (lambda: layout.unit_options(snapshot, "func_80000400", b"source"),
-                  lambda: layout.asm_unit(snapshot, "func_80000400", "a")):
-        with pytest.raises(Refusal) as caught:
-            build()
-        finding = caught.value.findings[0]
-        assert (finding.key, finding.unit, finding.action) == ("layout.member", "func_80000400", "run unbake setup")
+    with pytest.raises(Refusal) as caught:
+        layout.unit_options(snapshot, "func_80000400", b"source")
+    finding = caught.value.findings[0]
+    assert (finding.key, finding.unit, finding.action) == ("layout.member", "func_80000400", "run unbake setup")
 
 
 @pytest.mark.parametrize("member,version", [("missing", "a"), ("func_80000400", "missing"), ("datum", "a")])

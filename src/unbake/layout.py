@@ -185,7 +185,6 @@ def asm_unit(snapshot: Snapshot, member: str, version: str) -> UnitSpec:
         if item is None or not any(p.version == version and p.section == ".text" for p in item.placements):
             raise Refusal(Finding("layout.member", reason="member has no text placement in this version",
                                   unit=member, versions=(version,)))
-        _grouped(item)
         config = snapshot.config
         path = version_data.asm_path(config, version, member).relative_to(config.project.root).as_posix()
         return UnitSpec(path, _kinds()[1], item.group, (member,), config.project.toolchain, {"add": [], "omit": []})
