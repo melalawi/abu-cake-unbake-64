@@ -2,14 +2,12 @@
 
 import json
 import re
-from collections.abc import Sequence
 from pathlib import Path
-from typing import Any
 
 from pycparser import CParser, c_ast, c_generator
 from pycparser.c_parser import ParseError
 
-from unbake import config, effort, headers, layout, pool, process, store, versions
+from unbake import config, effort, headers, store
 from unbake.contracts import Finding, Json, Refusal, Snapshot, SourceView, UnitSpec, digest
 
 
@@ -31,25 +29,6 @@ def _dump(doc):  # inline tables written directly: the document is megabytes and
 _KEYWORDS = frozenset(("extern", "const", "volatile", "unsigned", "signed", "char", "short", "int", "long", "float",
                        "double", "void", "struct", "union", "enum"))
 _CODE = digest(Path(__file__).read_bytes())  # cached scans are only valid for the code that made them
-def _m2c_key(job) -> str:
-    _, _, asm, target, _, ctx_digest, tool = job
-    return digest((asm, target, ctx_digest, tool))
-def _m2c_job(job):
-    cfg, name, asm, target, ctx, _, tool = job  # the context travels as a path, never as bytes per job
-    asm_path = ctx.parent / f"{digest((name, asm))}.s"
-    store.write(asm_path, asm)  # named by its content: a leftover or a concurrent writer holds the same bytes
-    result = process.run("types.m2c", [str(tool), "-t", target, "--valid-syntax", "--context", str(ctx),
-                                       "--function", name, str(asm_path)], cfg.project.root,
-                         tmp=process.scratch(cfg.project.root))
-    if result.exit != 0:
-        message = result.stderr.decode(errors="replace") or f"m2c exited with {result.exit} (signal {result.signal})"
-        return name, "", "", Finding("types.m2c", message, unit=name, blocking=False)
-    output = result.stdout.decode(errors="replace")
-    signature = next((line.split("{", 1)[0] for line in output.splitlines()
-        if line.rstrip().endswith("{") and re.search(r"\b" + re.escape(name) + r"\s*\(", line)), "")
-    finding = None if signature else Finding("types.m2c", "m2c produced no function signature",
-                                            unit=name, blocking=False)
-    return name, " ".join(signature.split()), output, finding
 def scan(snapshot: Snapshot) -> bytes:
     """Setup's type map: globals from data placements, the prototypes and type definitions the headers declare
     (authored) and the landed definitions. No m2c runs here. Cached on the inputs it reads."""
@@ -94,56 +73,6 @@ def conflicts(snapshot: Snapshot) -> list[Finding]:
     with effort.stage("types.conflicts"):
         return headers.disagreements(snapshot, {n for n, r in load(snapshot)["function"].items()
                                                 if r["evidence"] == "landed"})[1]
-def _signature_jobs(
-        snapshot: Snapshot, names: Sequence[str]) -> tuple[dict[str, str], list[tuple[Any, ...]], list[Finding]]:
-    """The prototypes already known for `names`, the m2c jobs that would find the rest, and why some have no job."""
-    cfg, doc = snapshot.config, load(snapshot)
-    found = {n: doc["function"][n]["signature"] for n in names if n in doc["function"]}
-    toolchains = config.load_resource("toolchains.toml")["toolchain"]
-    jobs, contexts, debt = [], {}, []
-    for name in dict.fromkeys(names):
-        member = snapshot.layout.members.get(name)
-        if name in found or member is None or member.kind != "function":
-            continue
-        version = member.reference(cfg.project.names_from)
-        if version not in contexts:
-            try:
-                ctx = headers.context(snapshot, version)
-                contexts[version] = ctx, digest(ctx.read_bytes())
-            except Refusal as refusal:  # no context: no signatures, never a refusal
-                contexts[version] = None
-                debt.append(Finding("types.m2c", f"no header context for {version}: {refusal.findings[0].reason}",
-                                    blocking=False))
-        if contexts[version] is None:
-            continue
-        unit = layout.unit_of(snapshot, name)
-        asm = snapshot.read(versions.asm_path(cfg, version, name).relative_to(cfg.project.root).as_posix())
-        target = toolchains[unit.toolchain if unit else cfg.project.toolchain]["m2c"]
-        jobs.append((cfg, name, asm, target, *contexts[version], process.tool(cfg, "m2c")))
-    return found, jobs, debt
-def signature_group(snapshot: Snapshot, names: Sequence[str]) -> tuple[Any, ...]:
-    """The pool group (name, function, items, key) finding what `signature` would, to run beside other work."""
-    return "types.m2c", _m2c_job, _signature_jobs(snapshot, names)[1], _m2c_key
-def signature(snapshot: Snapshot, names: Sequence[str]) -> dict[str, str]:
-    """Prototypes for named functions: authored/landed ones from types.toml, the rest from m2c (pool, content cache)."""
-    with effort.stage("types.signature") as span:
-        found, jobs, debt = _signature_jobs(snapshot, names)
-        results = pool.map(snapshot.config, "types.m2c", _m2c_job, jobs, _m2c_key)
-        span.add(items=len(jobs), findings=[*debt, *(row[3] for row in results if row[3] is not None)])
-        found.update({name: sig for name, sig, _output, _finding in results if sig})
-        return found
-def context(snapshot: Snapshot) -> str:
-    with effort.stage("types.context"):
-        doc = load(snapshot)
-        return "\n".join([doc["function"][name]["signature"] + ";" for name in sorted(doc["function"])
-                          if doc["function"][name]["evidence"] != "authored"] +
-            [doc["global"][name]["declaration"] for name in sorted(doc["global"])])
-def declarations(snapshot: Snapshot, names: Sequence[str]) -> dict[str, str]:
-    with effort.stage("types.declarations"):
-        doc = load(snapshot)
-        sigs = signature(snapshot, [n for n in names if n not in doc["global"]])
-        return {name: sigs[name] + ";" if name in sigs else doc["global"][name]["declaration"] for name in names
-                if name in sigs or name in doc["global"]}
 def landed(snapshot: Snapshot, unit: UnitSpec, view: SourceView) -> bytes:
     with effort.stage("types.landed"):
         doc, owners, lines, owner = load(snapshot), [], [], unit.path
