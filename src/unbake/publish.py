@@ -145,8 +145,8 @@ def plans(snapshot: Snapshot, unit: UnitSpec, proposed: Snapshot) -> list[Plan]:
         recipe = recipes.resolve(proposed.config, unit, unit.options)
         first = compare.holders(proposed, unit)[0]
         owner = layout.unit_of(snapshot, unit.members[0])
-        again = (owner is not None and owner.path == unit.path
-                 and snapshot.layout.members[unit.members[0]].state == unit.kind)
+        state = snapshot.layout.members[unit.members[0]].state
+        again = owner is not None and owner.path == unit.path and (state == unit.kind or state.startswith("."))
         if again:  # its declarations were folded when it first landed: a new text keeps them where they are
             folded, conflicts = {unit.path: proposed.read(unit.path)}, ()
         else:
@@ -163,8 +163,11 @@ def plans(snapshot: Snapshot, unit: UnitSpec, proposed: Snapshot) -> list[Plan]:
                 writes.update((p, b) for p, b in folded.items() if p != unit.path)
                 overlay = layout.overlay(snapshot, writes)
                 configured = replace(option, toolchain=unit.toolchain, options=unit.options)
-                units = dict(overlay.layout.units)
+                gone = {k for k in snapshot.layout.units.keys() - proposed.layout.units.keys()  # data it now owns
+                        if all(map(versions.unowned, snapshot.layout.units[k].members))}
+                units = {k: u for k, u in overlay.layout.units.items() if k not in gone}
                 units[option.path] = configured
+                writes.update(dict.fromkeys(gone))
                 member = unit.members[0]
                 if member in snapshot.layout.fuzzy:
                     writes[snapshot.layout.fuzzy[member]["path"]] = None
@@ -232,9 +235,7 @@ def land(config: Config, submission: Submission) -> Receipt:
         inbox = config.project.root / submission.source
         if submission.operation == "publish":
             kinds = configuration.load_resource("units.toml")["kind"]
-            if unit is not None and kinds[unit.kind]["decompiled"] and (  # an owned data member is landed
-                    snapshot.layout.members[member].kind != "function"
-                    or snapshot.read(unit.path) == inbox.read_bytes()):
+            if unit is not None and kinds[unit.kind]["decompiled"] and snapshot.read(unit.path) == inbox.read_bytes():
                 raise Refusal(Finding("land.duplicate", f"{member} is already landed in {unit.path}", unit=member))
             request = {"file": str(inbox), "function": submission.function or member,
                        "overrides": submission.overrides, "note": submission.note}

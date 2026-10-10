@@ -136,29 +136,27 @@ def declarations(snapshot: Snapshot, names: Sequence[str]) -> dict[str, str]:
                 if name in sigs or name in doc["global"]}
 def landed(snapshot: Snapshot, unit: UnitSpec, view: SourceView) -> bytes:
     with effort.stage("types.landed"):
-        return _landed(snapshot, unit, view)
-def _landed(snapshot, unit, view):
-    doc, owners, lines, owner = load(snapshot), [], [], unit.path
-    for line in view.text.splitlines(keepends=True):
-        marker = re.match(r'^\s*#\s*(?:line\s+)?\d+\s+"([^"]+)"', line)
-        if marker:
-            owner = marker[1]
-        owners.append(owner)
-        lines.append("\n" if marker else line)
-    from unbake.headers import normal  # headers reads the type map, so it is imported here; one C reading for both
-    try:
-        tree = CParser().parse(normal("".join(lines)), filename=unit.path)
-    except ParseError as error:
-        at = re.search(r":(\d+):\d+:", str(error))
-        line = int(at[1]) if at and 0 < int(at[1]) <= len(lines) else 0
-        where = f" (view line {line} from {owners[line - 1]}: {lines[line - 1].strip()[:160]})" if line else ""
-        raise Refusal(Finding("headers.parse", str(error) + where, path=unit.path)) from error
-    for node in tree.ext:
-        if not isinstance(node, c_ast.FuncDef):
-            continue
-        path = owners[node.coord.line - 1].removeprefix(snapshot.config.project.root.as_posix() + "/")
-        path = re.sub(r"^(?:.*?/)?build/views/[0-9a-fA-F]+/", "", path).removeprefix("./")
-        if path == unit.path:
-            name = node.decl.name
-            doc["function"][name] = {"signature": c_generator.CGenerator().visit(node.decl), "evidence": "landed"}
-    return _dump(doc)
+        doc, owners, lines, owner = load(snapshot), [], [], unit.path
+        for line in view.text.splitlines(keepends=True):
+            marker = re.match(r'^\s*#\s*(?:line\s+)?\d+\s+"([^"]+)"', line)
+            if marker:
+                owner = marker[1]
+            owners.append(owner)
+            lines.append("\n" if marker else line)
+        from unbake.headers import normal  # headers reads the type map, so it is imported here; one C reading for both
+        try:
+            tree = CParser().parse(normal("".join(lines)), filename=unit.path)
+        except ParseError as error:
+            at = re.search(r":(\d+):\d+:", str(error))
+            line = int(at[1]) if at and 0 < int(at[1]) <= len(lines) else 0
+            where = f" (view line {line} from {owners[line - 1]}: {lines[line - 1].strip()[:160]})" if line else ""
+            raise Refusal(Finding("headers.parse", str(error) + where, path=unit.path)) from error
+        for node in tree.ext:
+            if not isinstance(node, c_ast.FuncDef):
+                continue
+            path = owners[node.coord.line - 1].removeprefix(snapshot.config.project.root.as_posix() + "/")
+            path = re.sub(r"^(?:.*?/)?build/views/[0-9a-fA-F]+/", "", path).removeprefix("./")
+            if path == unit.path:
+                name = node.decl.name
+                doc["function"][name] = {"signature": c_generator.CGenerator().visit(node.decl), "evidence": "landed"}
+        return _dump(doc)

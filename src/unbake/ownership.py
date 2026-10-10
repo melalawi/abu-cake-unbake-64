@@ -284,7 +284,7 @@ def claims(snapshot: Snapshot, version: str | None = None, units: Mapping[str, U
     with effort.stage("layout.ownership") as span:
         wanted = dict(snapshot.layout.units if units is None else units)
         phases = config.load_resource("units.toml")["kind"]
-        todo = [u for u in wanted.values() if "compile" in phases[u.kind]["phases"]]
+        todo = sorted((u for u in wanted.values() if "compile" in phases[u.kind]["phases"]), key=_unowned)
         results = pool.map(snapshot.config, "layout.ownership", _job, [(snapshot, u, version) for u in todo], _job_key)
         indexes = {v: _index(snapshot, v) for v in snapshot.versions}
         taken: dict[str, list[tuple[int, int, str]]] = defaultdict(list)
@@ -300,6 +300,9 @@ def claims(snapshot: Snapshot, version: str | None = None, units: Mapping[str, U
         findings = _findings(debt, "fix the source of each listed unit")
         span.add(items=len(todo), findings=findings)
         return out, tuple(found), findings
+def _unowned(unit: UnitSpec) -> bool:
+    """A data unit of rows no function has claimed: it gives them up to the first function whose object emits them."""
+    return bool(unit.members) and all(versions.unowned(n) for n in unit.members)
 def derive(snapshot: Snapshot, unit: UnitSpec) -> tuple[Snapshot, UnitSpec]:
     """The snapshot and the unit with the data rows its present source emits, per holder, where the ROM holds them
     exactly: what a candidate must reproduce besides its code. The rows its claims become exist only in a private
@@ -312,7 +315,8 @@ def derive(snapshot: Snapshot, unit: UnitSpec) -> tuple[Snapshot, UnitSpec]:
     members = snapshot.layout.members
     taken: dict[str, list[tuple[int, int, str]]] = defaultdict(list)
     for other in snapshot.layout.units.values():
-        data = [members[n] for n in other.members if members[n].kind != "function"] if other.path != unit.path else []
+        data = [members[n] for n in other.members if members[n].kind != "function"
+                ] if other.path != unit.path and not _unowned(other) else []
         for p in (p for m in data for p in m.placements if p.rom_end > p.rom_start):
             taken[p.version].append((p.rom_start, p.rom_end, other.path))
     for rows in taken.values():
@@ -323,7 +327,11 @@ def derive(snapshot: Snapshot, unit: UnitSpec) -> tuple[Snapshot, UnitSpec]:
     owned, kept = _own(unit, members, keep, resolved, mine, taken, debt)
     rows = layout.claim_rows(snapshot, kept)
     if rows:
-        units = {**snapshot.layout.units, owned.path: owned}
+        spans = [(c.version, c.start, c.end) for c in kept]
+        units = {path: u for path, u in snapshot.layout.units.items() if not _unowned(u) or not any(
+            p.version == v and p.rom_start < e and s < p.rom_end for n in u.members
+            for p in members[n].placements for v, s, e in spans)}
+        units[owned.path] = owned
         snapshot = layout.overlay(snapshot, {**rows, "layout.toml": layout.dump_map(replace(snapshot.layout,
                                                                                           units=units))})
     return snapshot, owned

@@ -20,7 +20,9 @@ def case(monkeypatch):
     config = SimpleNamespace(project=SimpleNamespace(
         versions=("a",), version_files={"a": SimpleNamespace(symbols="versions/a/symbol_addrs.txt")}))
     files = {symbols.path(): symbols.dump(table), **FILES}
-    snapshot = SimpleNamespace(config=config, commit="h" * 40, digest="d", read=files.__getitem__)
+    snapshot = SimpleNamespace(config=config, commit="h" * 40, digest="d", read=files.__getitem__,
+                               versions={}, layout=SimpleNamespace(members={}))
+    config.snapshot = snapshot
     applied = []
     monkeypatch.setattr(rename.effort, "stage", lambda name: nullcontext())
     monkeypatch.setattr(rename.store, "exclusive", lambda c, n: nullcontext(True))
@@ -44,6 +46,15 @@ def test_rename_rewrites_the_table_every_token_and_the_generated_files_in_one_co
     assert plan.writes["versions/a/symbol_addrs.txt"] == b"new = 0x80000400; // type:func\ntaken = 0x80000500;\n"
     assert "new" in symbols.parse(plan.writes["symbols.toml"], ("a",))
     assert result["files"] == sorted(plan.writes)
+
+
+def test_rename_knows_a_generated_name_of_the_versions_facts(case) -> None:
+    config, applied = case
+    config.snapshot.versions = {"a": SimpleNamespace(symbols={"D_auto_80000600": 0x80000600})}
+    rename.run(config, {"old": "D_auto_80000600", "new": "camera"})
+    plan, = applied
+    assert plan.writes["versions/a/symbol_addrs.txt"].count(b"camera = 0x80000600;") == 1
+    assert "camera" in symbols.parse(plan.writes["symbols.toml"], ("a",))
 
 
 @pytest.mark.parametrize(("old", "new", "key"), [("old", "taken", "symbols.exists"), ("old", "9x", "symbols.name"),

@@ -31,15 +31,8 @@ def _entry(raw: Any) -> dict[str, Any]:
     """Normalise a splat segment or subsegment (list or mapping form) to a mapping."""
     if isinstance(raw, Mapping):
         return dict(raw)
-    items = list(raw)
-    out: dict[str, Any] = {"start": items[0]}
-    if len(items) > 1:
-        out["type"] = items[1]
-    if len(items) > 2 and isinstance(items[2], str):
-        out["name"] = items[2]
-    if len(items) > 3 and isinstance(items[3], str):
-        out["section"] = items[3]
-    return out
+    return {k: v for k, v in zip(("start", "type", "name", "section"), raw, strict=False)
+            if k in ("start", "type") or isinstance(v, str)}
 def _document(data: bytes, file: str) -> list[dict[str, Any]]:
     try:
         document = yaml.load(data, Loader=yaml.CSafeLoader)
@@ -62,15 +55,8 @@ def _symbol_table(data: bytes, file: str) -> dict[str, int]:
             continue
         name, address = match.group(1), int(match.group(2), 16)
         if table.setdefault(name, address) != address:
-            raise Refusal(
-                Finding(
-                    "symbols.conflict",
-                    reason=f"{name} has two addresses in {file}",
-                    path=f"{file}:{number}",
-                    line=number,
-                    unit=name,
-                )
-            )
+            raise Refusal(Finding("symbols.conflict", reason=f"{name} has two addresses in {file}",
+                                  path=f"{file}:{number}", line=number, unit=name))
     return table
 def _asm_symbols(data: bytes) -> tuple[dict[str, int], dict[str, int], frozenset[str]]:
     text = data.decode(errors="replace")
@@ -124,6 +110,8 @@ def _generated(config: Config, vid: str, files: tuple[list[str], list[str]], par
             if name not in declared:
                 facts[name] = address
     return facts, frozenset(code)
+def unowned(name: str) -> bool:  # a data row no function has claimed
+    return re.match(r"\w+/unresolved/", name) is not None
 def facts_digest(version: Version) -> str:
     """A version's symbol table and code names as one hash (tens of thousands of names), computed once per command."""
     return effort.memo(("facts", id(version)), lambda: (version, hashlib.sha256(

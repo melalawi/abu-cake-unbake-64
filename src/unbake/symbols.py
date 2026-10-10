@@ -60,15 +60,13 @@ def render(table: Mapping[str, Mapping], version: str) -> bytes:
 def files(table: Mapping[str, Mapping], paths: Mapping[str, str]) -> dict[str, bytes]:
     """The table and every file generated from it; paths maps a version to its symbol file."""
     return {PATH: dump(table), **{path: render(table, v) for v, path in paths.items()}}
-def check_name(table: Mapping[str, Mapping], old: str, new: str) -> None:
+def rename(table: dict[str, dict], old: str, new: str) -> None:
     if old not in table:
         raise Refusal(Finding("symbols.unknown", f"{old} is not a symbol of the project", path=PATH, unit=old))
     if not _NAME.fullmatch(new):
         raise Refusal(Finding("symbols.name", f"{new} is not a C identifier", path=PATH, unit=new))
     if new in table:
         raise Refusal(Finding("symbols.exists", f"{new} already names a symbol", path=PATH, unit=new))
-def rename(table: dict[str, dict], old: str, new: str) -> None:
-    check_name(table, old, new)
     table[new] = table.pop(old)
 def rewrite(text: str, old: str, new: str) -> str:
     """text with every token equal to old replaced; names inside longer identifiers are left alone."""

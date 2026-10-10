@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import tomllib
 import zlib
 from dataclasses import replace
 from pathlib import Path
@@ -13,7 +14,7 @@ import pytest
 
 from unbake import config as configuration
 from unbake import infer, layout, pool
-from unbake.contracts import Refusal, Snapshot
+from unbake.contracts import Group, Member, Refusal, Snapshot
 
 JR_RA, NOP = 0x03E00008, 0
 VRAM = fixture.VRAM_BASE
@@ -272,6 +273,19 @@ def test_plan_writes_the_layout_and_no_symbols(tmp_path: Path, monkeypatch: pyte
     assert plan.operation == "layout" and plan.base == snapshot.digest
     assert list(plan.writes) == ["layout.toml"]  # symbols are rows of symbols.toml, never planned here
     assert plan.message == "infer: 1 groups, 0 sdk units, 0 files cut"
+
+
+@pytest.mark.usefixtures("toolchains")
+def test_plan_keeps_a_data_module_and_its_live_rows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(pool, "map", lambda cfg, name, fn, items, key=None: [fn(i) for i in items])
+    snapshot = corresponding(tmp_path, [("foo_a", "foo_b")])
+    row = Member("rodata/unresolved/80001200", "data", ".rodata", "data_80001200", ())
+    module = Group("data_80001200", "main", (row.name, "claimed/away"), "inferred", ("adjacent",), "unknown", False)
+    members = {**snapshot.layout.members, row.name: row}
+    snapshot = replace(snapshot, layout=replace(snapshot.layout, members=members,
+                                                groups={**snapshot.layout.groups, module.name: module}))
+    kept = tomllib.loads(infer.plan(snapshot).writes["layout.toml"].decode())["group"]
+    assert [g["members"] for g in kept if g["name"] == module.name] == [[row.name]]
 
 
 @pytest.mark.usefixtures("toolchains")

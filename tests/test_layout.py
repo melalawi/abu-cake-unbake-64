@@ -498,3 +498,43 @@ def test_dump_map_writes_the_documented_layout_text():
     assert tomllib.loads(text.decode())["fuzzy"][0]["scores"] == {"de": 1.0, "us-rev1": 0.5}
     empty = tomllib.loads(layout.dump_map(LayoutMap(32, {}, {}, {}, "d", (), {})).decode())
     assert empty == {"schema": 3, "cap": 32, "group": [], "unit": []}
+
+
+def _ungrouped_data(scene, entries):
+    snapshot = scene(entries)
+    members = {n: replace(m, group="") if m.kind != "function" else m for n, m in snapshot.layout.members.items()}
+    groups = {k: replace(g, members=tuple(n for n in g.members if members[n].kind == "function"))
+              for k, g in snapshot.layout.groups.items()}
+    text = layout.dump_map(replace(snapshot.layout, members=members, groups=groups))
+    (snapshot.config.project.root / "layout.toml").write_bytes(text)
+    return layout.overlay(snapshot, {"layout.toml": text})
+
+
+def _land_data(snapshot, name):
+    unit, writes = layout.unit_options(snapshot, name, b"const unsigned int d[2] = {1, 2};\n")[0]
+    return unit, layout.overlay(snapshot, writes)
+
+
+def test_unowned_data_lands_as_a_unit_of_a_data_module_of_the_rows_that_follow_each_other(scene):
+    entries = (("func_80000400", "asm", RETURN), ("rodata/unresolved/80000408", "rodata", (1, 2)),
+               ("rodata/unresolved/80000410", "rodata", (3, 4)), ("rodata/unresolved/80000418", "rodata", (5, 6)))
+    snapshot = _ungrouped_data(scene, entries)
+    snapshot = replace(snapshot, layout=replace(snapshot.layout, cap=2))
+    first, landed = _land_data(snapshot, "rodata/unresolved/80000410")
+    assert first.group == "data_80000408" and first.kind == "data" and first.members == ("rodata/unresolved/80000410",)
+    module = landed.layout.groups["data_80000408"]  # the run of unowned rows, cut at the cap, not the function before
+    assert module.members == ("rodata/unresolved/80000408", "rodata/unresolved/80000410") and module.segment == "main"
+    assert layout.unit_of(landed, "rodata/unresolved/80000410") == first
+    assert b", .rodata, rodata/unresolved/80000410]" in landed.read("versions/a/Game.yaml")
+    assert landed.layout.members["rodata/unresolved/80000408"].group == "data_80000408"
+    second, _ = _land_data(landed, "rodata/unresolved/80000408")  # its neighbour joins the module that exists
+    assert second.group == "data_80000408"
+    third, more = _land_data(snapshot, "rodata/unresolved/80000418")  # the next cut is a module of its own
+    assert third.group == "data_80000418" and set(more.layout.groups) == {"grp", "data_80000418"}
+
+
+def test_data_named_for_its_function_joins_that_functions_module(scene):
+    entries = (("func_80000400", "asm", RETURN), ("rodata/func_80000400/80000408", "rodata", (1, 2)))
+    snapshot = _ungrouped_data(scene, entries)
+    unit, landed = _land_data(snapshot, "rodata/func_80000400/80000408")
+    assert unit.group == "grp" and landed.layout.groups == snapshot.layout.groups

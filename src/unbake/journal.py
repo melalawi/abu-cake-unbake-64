@@ -9,14 +9,6 @@ from unbake import effort, process
 from unbake.contracts import Config, Finding, Plan, Refusal
 
 
-def _sync(directory: Path) -> None:
-    fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
-    try:
-        os.fsync(fd)
-    finally:
-        os.close(fd)
-
-
 def _install(path: Path, content: bytes | None) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     if content is None:
@@ -33,7 +25,11 @@ def _install(path: Path, content: bytes | None) -> None:
             os.replace(name, path)
         finally:
             Path(name).unlink(missing_ok=True)
-    _sync(path.parent)
+    fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)  # the directory entry is durable too
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
 
 
 def _read(path: Path) -> bytes | None:

@@ -198,8 +198,7 @@ def run(config: Config, params: Json) -> Json:
                     steps.append({"step": attempt.step, "score": attempt.score, "outcome": attempt.outcome})
                     if attempt.score > best or attempt.outcome == "exact":
                         best, best_overrides, proofs = attempt.score, overrides, measured
-                    exact = attempt.outcome == "exact"
-                    if exact:
+                    if exact := attempt.outcome == "exact":
                         break
         if not exact:
             with effort.stage("crack.permuter"):

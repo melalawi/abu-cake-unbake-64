@@ -363,3 +363,39 @@ def test_derive_does_not_reserve_another_units_unclaimed_holder(monkeypatch):
     assert shown is snapshot and got.withheld == ()
     assert claims == [Claim("src/f.c", "b", ".rodata", 0, 4, ("rodata/f/00000100",))]
     assert got.members == ("f", "rodata/f/00000100")
+
+
+def test_derive_takes_the_rows_of_an_unowned_data_unit_for_the_function_that_claims_them(monkeypatch):
+    from unbake import layout
+    name = "rodata/unresolved/00000100"
+    members = {"f": member("f", "function", ".text"), name: member(name)}
+    placeholder = replace(unit(name), path="src/data.c", kind="data")
+    snapshot = SimpleNamespace(config=SimpleNamespace(project=SimpleNamespace(names_from="a")),
+                               layout=LayoutMap(200, {}, members, {placeholder.path: placeholder}, "d", (), {}),
+                               versions={"a": None})
+    seen = {}
+    monkeypatch.setattr(ownership.config, "load_resource",
+                        lambda n: {"kind": {"c": {"phases": ["compile"]}, "data": {"phases": ["compile"]}}})
+    monkeypatch.setattr(ownership, "_index", lambda snap, v: INDEXES["a"])
+    monkeypatch.setattr(ownership, "_job", lambda item: {"a": {".rodata": [[0, 4]]}})
+    monkeypatch.setattr(layout, "claim_rows", lambda snap, claims: {"split.yaml": b"rows"})
+    monkeypatch.setattr(layout, "dump_map", lambda value: seen.setdefault("units", value.units) and b"map")
+    monkeypatch.setattr(layout, "overlay", lambda snap, writes: snap)
+    _, got = ownership.derive(snapshot, unit("f"))
+    assert got.withheld == () and got.members == ("f", "rodata/f/00000100")  # not "owned by another unit"
+    assert set(seen["units"]) == {"src/f.c"}  # the placeholder unit is gone with its row
+
+
+def test_claims_let_a_function_unit_take_bytes_before_an_unowned_data_unit(monkeypatch):
+    name = "rodata/unresolved/00000100"
+    members = {"f": member("f", "function", ".text"), name: member(name)}
+    units = {"src/data.c": replace(unit(name), path="src/data.c"), "src/f.c": unit("f")}
+    order = []
+    monkeypatch.setattr(ownership.config, "load_resource", lambda n: {"kind": {"c": {"phases": ["compile"]}}})
+    monkeypatch.setattr(ownership.pool, "map", lambda cfg, label, fn, items, key=None: order.extend(
+        i[1].path for i in items) or [{"a": {}} for _ in items])
+    monkeypatch.setattr(ownership, "_index", lambda snap, v: INDEXES["a"])
+    snapshot = SimpleNamespace(config=SimpleNamespace(project=SimpleNamespace(names_from="a")),
+                               layout=SimpleNamespace(members=members, units=units), versions={"a": None})
+    ownership.claims(snapshot)
+    assert order == ["src/f.c", "src/data.c"]

@@ -341,6 +341,9 @@ def _plan(snapshot: Snapshot) -> Plan:
     updated = {g.name: g if g.evidence in {"authored", "proven"} else replace(
         g, subsystem=labels[g.name], sdk=bool(g.members) and all(
             n in identified for n in g.members if snapshot.layout.members[n].kind == "function")) for g in inferred}
+    updated |= {g.name: replace(g, members=live) for g in snapshot.layout.groups.values()  # data modules outlive it
+                if g.name not in updated and (live := tuple(n for n in g.members if n in snapshot.layout.members))
+                and all(snapshot.layout.members[n].kind != "function" for n in live)}
     memberships = {n: g.name for g in updated.values() for n in g.members}
     # a unit owns the data it emits
     assigned, claimed, found = ownership.claims(snapshot, units=dict(snapshot.layout.units))

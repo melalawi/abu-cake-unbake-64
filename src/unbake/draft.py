@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+from collections import Counter
 from pathlib import Path
 
 from unbake import config as configuration
@@ -66,9 +67,7 @@ def _data_text(snapshot: Snapshot, entry: Member, version: str) -> str:
         raise Refusal(Finding("draft.data", "no ROM bytes to draft", unit=entry.name, versions=(version,)))
     record = snapshot.versions[version]
     raw = b"".join(versions.rom_bytes(record, p.rom_start, p.rom_end) for p in placements)
-    counts: dict[int, int] = {}
-    for vram in record.symbols.values():
-        counts[vram] = counts.get(vram, 0) + 1
+    counts = Counter(record.symbols.values())
     reverse = {vram: name for name, vram in record.symbols.items() if counts[vram] == 1}
     members = snapshot.layout.members
     words = len(raw) % 4 == 0

@@ -332,17 +332,25 @@ def test_land_duplicate_refuses(lane, same, decompiled):
         assert publish.land(lane["config"], lane["submission"]).operation == "publish"
 
 
-def test_land_refuses_a_data_member_a_decompiled_unit_already_owns(lane):
+@pytest.mark.parametrize("same", [True, False])
+def test_land_replaces_the_untyped_source_of_a_landed_data_member_with_a_typed_one(lane, same):
     snapshot, unit = lane["snapshot"], lane["unit"]
     unit = replace(unit, kind="c")
-    members = {**snapshot.layout.members, "f": replace(snapshot.layout.members["f"], kind="rodata")}
+    landed = replace(snapshot.layout.members["f"], kind="rodata", state=".rodata")  # landed data
+    members = {**snapshot.layout.members, "f": landed}
     snapshot = replace(snapshot, layout=replace(snapshot.layout, units={unit.path: unit}, members=members))
     publish.layout.capture.return_value = snapshot
-    lane["source"].write_bytes(b"another source")
-    with pytest.raises(Refusal) as exc:
-        publish.land(lane["config"], lane["submission"])
-    assert exc.value.findings[0].key == "land.duplicate"
-    publish.journal.apply.assert_not_called()
+    if not same:
+        lane["source"].write_bytes(b"const unsigned int f = 1;")  # the typed text of the same bytes
+    publish.layout.unit_options.side_effect = AssertionError("a landed member needs no new unit option")
+    if same:
+        with pytest.raises(Refusal) as exc:
+            publish.land(lane["config"], lane["submission"])
+        assert exc.value.findings[0].key == "land.duplicate"
+        publish.journal.apply.assert_not_called()
+    else:
+        assert publish.land(lane["config"], lane["submission"]).operation == "publish"
+        publish.compare.bind.assert_called_once_with(snapshot, lane["source"], "f")
 def test_land_not_exact_after_head_moved(lane, monkeypatch):
     snapshot = lane["snapshot"]
     plan = publish._plan("publish", snapshot, {"src/f.c": b"candidate"}, ("src/f.c",), (), "publish f")

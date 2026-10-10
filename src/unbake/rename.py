@@ -14,6 +14,10 @@ def run(config: Config, params: Json) -> Json:
         old, new, project = params["old"], params["new"], config.project
         snapshot = layout.capture(config)
         table = symbols.edit(snapshot)
+        for vid, record in snapshot.versions.items():  # a generated name (D_auto_...) is a fact of its version
+            if old in record.symbols:
+                kind = getattr(snapshot.layout.members.get(old), "kind", "data")
+                table.setdefault(old, {"kind": "function" if kind == "function" else "data"})[vid] = record.symbols[old]
         symbols.rename(table, old, new)
         writes = symbols.files(table, {v: vf.symbols for v, vf in project.version_files.items()})
         tracked = process.git(config, "ls-files", "-z", "--", *_SPELLED).stdout.decode().split("\0")

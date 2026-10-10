@@ -322,28 +322,38 @@ def _data_option(snapshot: Snapshot, member: str, source: bytes, kind: str) -> t
         writes[version.split] = _edit(writes.get(version.split, snapshot.read(version.split)), member,
                                       state=f".{section}", types=raw)
     stem = member.removesuffix(".c").removeprefix("src/").replace("/", ".")
-    unit = UnitSpec(f"src/{stem}.c", kind, item.group or _data_group(snapshot, member), (member,),
-                    snapshot.config.project.toolchain, {"add": [], "omit": []})
-    units = {**snapshot.layout.units, unit.path: unit}
-    return unit, {**writes, unit.path: source, "layout.toml": dump_map(replace(snapshot.layout, units=units))}
-def _data_group(snapshot: Snapshot, member: str) -> str:
-    """The module a data item joins: the function its name says owns it, else a function whose code names it."""
-    members = snapshot.layout.members
+    group, new = (item.group, None) if item.group else _data_group(snapshot, member)
+    unit = UnitSpec(f"src/{stem}.c", kind, group, (member,), snapshot.config.project.toolchain,
+                    {"add": [], "omit": []})
+    units, groups = {**snapshot.layout.units, unit.path: unit}, dict(snapshot.layout.groups)
+    if new:
+        groups[group] = new
+    return unit, {**writes, unit.path: source,
+                  "layout.toml": dump_map(replace(snapshot.layout, units=units, groups=groups))}
+def _data_group(snapshot: Snapshot, member: str) -> tuple[str, Group | None]:
+    """The module a data item joins: its owner function's when its name says one, else a data module of its own (new
+    here): the rows of its section that no function has claimed and that follow each other in the ROM, cut every cap
+    rows. A function that later claims a row takes it through the claim path."""
+    layout, item = snapshot.layout, snapshot.layout.members[member]
     owner = member.split("/")[1] if member.count("/") == 2 else ""
-    if owner in members and members[owner].group:
-        return members[owner].group
-    for placement in members[member].placements:
-        record = snapshot.versions[placement.version]
-        names = [n for n, vram in record.symbols.items() if vram == placement.vram]
-        if not names:
-            continue
-        pattern = re.compile(rf"\b(?:{'|'.join(map(re.escape, names))})\b")
-        for path in sorted((snapshot.config.project.root / "asm" / placement.version).rglob("*.s")):
-            user = members.get(path.stem)
-            if user is not None and user.group and pattern.search(path.read_text(errors="replace")):
-                return user.group
-    raise Refusal(Finding("layout.member", reason=f"no function names {member}, so it has no module to join",
-                          unit=member, action="land a function that uses it first"))
+    if owner in layout.members and layout.members[owner].group:
+        return layout.members[owner].group, None
+    version = snapshot.versions[item.reference(snapshot.config.project.names_from)]
+    section, run = next(p.section for p in item.placements if p.version == version.id), []
+    for row in sorted(version_data.rows(version, snapshot.read), key=lambda r: r[2].rom_start):
+        free = row[2].section == section and (row[0] == member or version_data.unowned(row[0]))
+        if not (free and run and run[-1][2].rom_end == row[2].rom_start):
+            if any(r[0] == member for r in run):
+                break
+            run = []
+        if free:
+            run.append(row)
+    cut = [r[0] for r in run].index(member) // layout.cap * layout.cap
+    chunk = run[cut:cut + layout.cap]
+    name = f"data_{chunk[0][2].vram:08X}"
+    segment = next(s[0] for s in version.segments if s[1] <= chunk[0][2].rom_start < s[2])
+    return name, None if name in layout.groups else Group(name, segment, tuple(r[0] for r in chunk), "inferred",
+                                                          ("adjacent",), "unknown", False)
 def _decoded(snapshot: Snapshot, version: Version, rows: list) -> tuple[dict[str, tuple[int, ...]], frozenset[int]]:
     def decode() -> tuple[dict[str, tuple[int, ...]], frozenset[int]]:
         addresses = {p.vram for _, _, p in rows if p.section == ".text"}

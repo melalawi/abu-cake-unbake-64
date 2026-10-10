@@ -78,12 +78,8 @@ def append(config: Config, stream: str, row: Json) -> None:
     path = _stream_path(config, stream)
     line = json.dumps(row, sort_keys=True, separators=(",", ":"), default=str) + "\n"
     path.parent.mkdir(parents=True, exist_ok=True)
-    with _flock(path.with_name(path.name + ".lock"), fcntl.LOCK_EX):
-        fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
-        try:
-            os.write(fd, line.encode())
-        finally:
-            os.close(fd)
+    with _flock(path.with_name(path.name + ".lock"), fcntl.LOCK_EX), path.open("ab") as stream:
+        stream.write(line.encode())
 def rows(config: Config, stream: str) -> list[Json]:
     """Read every line of .unbake/<stream>.jsonl; a line that does not parse refuses with store.corrupt."""
     path = _stream_path(config, stream)
