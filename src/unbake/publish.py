@@ -102,7 +102,7 @@ def admit(snapshot: Snapshot, request: Json) -> tuple[UnitSpec, Snapshot, tuple[
         with effort.stage("publish.admit.1"):
             file = Path(request["file"])
             file = file if file.is_absolute() else snapshot.config.project.root / file
-            unit, snap = compare.bind(snapshot, file, request["function"], request["overrides"].get("toolchain"))
+            unit, snap = compare.bind(snapshot, file, request["function"])
             for member in unit.members:
                 owner = layout.unit_of(snapshot, member)
                 if (owner is not None and owner.path != unit.path
@@ -165,8 +165,7 @@ def plans(snapshot: Snapshot, unit: UnitSpec, proposed: Snapshot) -> list[Plan]:
         if conflicts:
             raise Refusal(*conflicts)
         result, last = [], ()
-        options = ([(owner, {})] if again else
-                   layout.unit_options(snapshot, unit.members[0], folded[unit.path], unit.toolchain))
+        options = [(owner, {})] if again else layout.unit_options(snapshot, unit.members[0], folded[unit.path])
         for option, writes in options:
             try:
                 writes = dict(writes)
@@ -239,7 +238,7 @@ def land(config: Config, submission: Submission) -> Receipt:
                     return Receipt("publish", commit, plan.digest, proofs, len(plan.debt), effort.invocation())
             raise Refusal(*gaps)
         if submission.operation == "fuzzy":
-            unit, bound = compare.bind(snapshot, inbox, member, submission.overrides.get("toolchain"))
+            unit, bound = compare.bind(snapshot, inbox, member)
             group = bound.layout.groups[unit.group]
             text = bound.read(unit.path).decode()
             _blocking(policy.evaluate(bound, unit.path, text, None, group.sdk))

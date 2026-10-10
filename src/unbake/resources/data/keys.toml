@@ -110,10 +110,6 @@ sentence = "a unit's compiled data could not be placed exactly in the ROM"
 owner = "layout"
 sentence = "the member is not an assembly row"
 
-[key."layout.toolchain"]
-owner = "layout"
-sentence = "a new unit's toolchain is neither asked for nor held by its group"
-
 [key."layout.nonconvergent"]
 owner = "layout"
 sentence = "applying the boundary plan produced another plan"

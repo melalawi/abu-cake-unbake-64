@@ -294,27 +294,17 @@ def _grouped(item: Member) -> None:
     if not item.group:
         raise Refusal(Finding("layout.member", reason=f"{item.name} belongs to no group", unit=item.name,
                               action="run unbake setup"))
-def _toolchain(snapshot: Snapshot, group: str, explicit: str | None, member: str) -> str:
-    """The toolchain a new unit is compiled with: the one asked for, else its group's existing unit's, else unknown."""
-    if explicit:
-        return explicit
-    for unit in sorted((u for u in snapshot.layout.units.values() if u.group == group), key=lambda u: u.path):
-        return unit.toolchain
-    raise Refusal(Finding("layout.toolchain", f"{member}'s group has no unit, so its toolchain is unknown",
-                          unit=member, action="run try with --toolchain ID"))
-def unit_options(snapshot: Snapshot, member: str, source: bytes,
-                 toolchain: str | None) -> list[tuple[UnitSpec, dict[str, bytes | None]]]:
-    return effort.memo(("unit_options", snapshot.digest, member, digest(source), toolchain),
-                       lambda: _options(snapshot, member, source, toolchain))
-def _options(snapshot: Snapshot, member: str, source: bytes,
-             toolchain: str | None) -> list[tuple[UnitSpec, dict[str, bytes | None]]]:
+def unit_options(snapshot: Snapshot, member: str, source: bytes) -> list[tuple[UnitSpec, dict[str, bytes | None]]]:
+    return effort.memo(("unit_options", snapshot.digest, member, digest(source)),
+                       lambda: _options(snapshot, member, source))
+def _options(snapshot: Snapshot, member: str, source: bytes) -> list[tuple[UnitSpec, dict[str, bytes | None]]]:
     with effort.stage("layout.unit_options"):
         if member not in snapshot.layout.members:
             raise Refusal(Finding("layout.member", reason="member is absent from layout", unit=member))
         item = snapshot.layout.members[member]
         compiled, assembly, datum = _kinds()
         if item.kind != "function":
-            return [_data_option(snapshot, member, source, datum, toolchain)]
+            return [_data_option(snapshot, member, source, datum)]
         _grouped(item)
         split_writes = {}
         holder_rows = {}
@@ -338,7 +328,8 @@ def _options(snapshot: Snapshot, member: str, source: bytes,
         group = snapshot.layout.groups.get(item.group)
         stem = item.group if not group_units and group and group.members and group.members[0] == member else member
         standalone = UnitSpec(f"src/{stem}.c", compiled, item.group, (member,),
-                              _toolchain(snapshot, item.group, toolchain, member), {"add": [], "omit": []})
+                              group_units[0].toolchain if group_units else snapshot.config.project.toolchain,
+                              {"add": [], "omit": []})
         options.append((standalone, source))
         result = []
         for unit, content in options:
@@ -347,8 +338,7 @@ def _options(snapshot: Snapshot, member: str, source: bytes,
             result.append((unit, {**split_writes, unit.path: content,
                                   "layout.toml": dump_map(replace(snapshot.layout, units=units))}))
         return result
-def _data_option(snapshot: Snapshot, member: str, source: bytes, kind: str,
-                 toolchain: str | None) -> tuple[UnitSpec, dict[str, bytes | None]]:
+def _data_option(snapshot: Snapshot, member: str, source: bytes, kind: str) -> tuple[UnitSpec, dict[str, bytes | None]]:
     """A data member published from C: each holder's split row turns from extracted type to compiled section."""
     item, writes = snapshot.layout.members[member], dict[str, bytes | None]()
     sections = configuration.load_resource("units.toml")["section"]
@@ -364,7 +354,7 @@ def _data_option(snapshot: Snapshot, member: str, source: bytes, kind: str,
                                       state=f".{section}", types=raw)
     stem = member.removesuffix(".c").removeprefix("src/").replace("/", ".")
     group, new = (item.group, None) if item.group else _data_group(snapshot, member)
-    unit = UnitSpec(f"src/{stem}.c", kind, group, (member,), _toolchain(snapshot, group, toolchain, member),
+    unit = UnitSpec(f"src/{stem}.c", kind, group, (member,), snapshot.config.project.toolchain,
                     {"add": [], "omit": []})
     units, groups = {**snapshot.layout.units, unit.path: unit}, dict(snapshot.layout.groups)
     if new:
