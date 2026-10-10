@@ -6,7 +6,7 @@ import hashlib
 import json
 import os
 import re
-import threading
+import uuid
 from collections.abc import Sequence
 from dataclasses import replace
 from pathlib import Path
@@ -50,7 +50,7 @@ def _link_relative(overlay: Path, root: Path, path: str, content: bytes) -> None
         real, target = root / relative, overlay / relative
         if not relative.startswith("..") and real.is_file() and not (target.exists() or target.is_symlink()):
             target.parent.mkdir(parents=True, exist_ok=True)
-            pending = target.with_name(f".{target.name}.{os.getpid()}.{threading.get_ident()}")
+            pending = target.with_name(f".{target.name}.{uuid.uuid4().hex}")
             pending.unlink(missing_ok=True)
             pending.symlink_to(real)
             os.replace(pending, target)  # atomic: another job making the same link finds it whole, never half-made
