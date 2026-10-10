@@ -90,6 +90,10 @@ sentence = "the project changed under a planned write"
 owner = "journal"
 sentence = "committed files differ from the plan"
 
+[key."land.breaks_dependent"]
+owner = "publish"
+sentence = "the candidate stops another landed file from building exactly"
+
 [key."land.not_exact"]
 owner = "compare"
 sentence = "the build does not match the ROM in every holding version"

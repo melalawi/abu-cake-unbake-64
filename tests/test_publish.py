@@ -402,7 +402,8 @@ def test_land_first_exact_plan_wins(lane, monkeypatch):
 def test_land_a_consumers_gap_blocks_only_when_head_proves_it_exact(lane, monkeypatch, exact_at_head, lands):
     snapshot = lane["snapshot"]
     plan = publish._plan("publish", snapshot, {"src/f.c": b"0"}, ("src/f.c", "src/g.c"), (), "0")
-    consumer = Finding("land.not_exact", "g differs", unit="g", versions=("a",), missing=("bytes",))
+    error = "src/g.c:3: conflicting types for 'x'"
+    consumer = Finding("land.not_exact", "g differs", unit="g", versions=("a",), missing=(error,))
     monkeypatch.setattr(publish, "admit", Mock(return_value=(lane["unit"], lane["proposed"], lane["proofs"])))
     monkeypatch.setattr(publish, "plans", Mock(return_value=[plan]))
     unit_of = publish.layout.unit_of.side_effect
@@ -416,7 +417,10 @@ def test_land_a_consumers_gap_blocks_only_when_head_proves_it_exact(lane, monkey
     else:
         with pytest.raises(Refusal) as exc:
             publish.land(lane["config"], lane["submission"])
-        assert exc.value.findings == (consumer,)
+        finding, = exc.value.findings
+        assert (finding.key, finding.path, finding.unit, finding.missing) == (
+            "land.breaks_dependent", "src/g.c", "g", (error,))
+        assert finding.reason == f"{lane['unit'].path} breaks src/g.c: {error}" and "src/g.c" in finding.action
     assert publish._proofs.call_args_list[1].args[1] == ["src/g.c"]
 
 

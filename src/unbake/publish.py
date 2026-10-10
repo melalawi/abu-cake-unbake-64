@@ -71,13 +71,24 @@ def _proofs(snapshot: Snapshot, affected: Sequence[str]) -> tuple[tuple[Proof, .
         proofs = tuple(p for batch in batches for p in batch)
         gaps = tuple(f for own, unit in units for f in compare.gaps(own, unit, proofs))
         return proofs, gaps
-def _regressions(snapshot: Snapshot, gaps: tuple[Finding, ...], own: Sequence[str]) -> tuple[Finding, ...]:
-    """Another member's gap blocks only in a version where HEAD proves it exact."""
+def _regressions(snapshot: Snapshot, gaps: tuple[Finding, ...], own: Sequence[str],
+                 candidate: str) -> tuple[Finding, ...]:
+    """Another member's gap blocks only in a version where HEAD proves it exact, and is then named for what it is: the
+    candidate broke a landed file."""
     heads = {g.unit: layout.unit_of(snapshot, g.unit) for g in gaps if g.unit not in own}
     paths = sorted({u.path for u in heads.values() if u is not None})
     exact = {(p.member, p.version) for p in _proofs(snapshot, paths)[0] if p.exact} if paths else set()
-    return tuple(g for g in gaps if g.unit in own or heads[g.unit] is None
-                 or any((g.unit, v) in exact for v in g.versions))
+    kept = []
+    for g in gaps:
+        head = heads.get(g.unit)
+        if g.unit in own or head is None:
+            kept.append(g)
+        elif any((g.unit, v) in exact for v in g.versions):
+            kept.append(Finding(
+                "land.breaks_dependent", f"{candidate} breaks {head.path}: {g.missing[0].splitlines()[0]}",
+                path=head.path, unit=g.unit, versions=g.versions, missing=g.missing, symptoms=g.symptoms,
+                action=f"make the declaration agree with {head.path}, or change both"))
+    return tuple(kept)
 def _consumers(snapshot: Snapshot, changed: Sequence[str]) -> tuple[str, ...]:
     """Every unit, of any group, that includes a changed header directly or through other headers. A quote include
     names a file beside the including one, else under include/ or src/; taking every one that exists
@@ -232,7 +243,7 @@ def land(config: Config, submission: Submission) -> Receipt:
             unit, proposed, _ = admit(snapshot, request)
             for plan in plans(snapshot, unit, proposed):
                 proofs, gaps = _proofs(layout.overlay(snapshot, plan.writes), plan.affected)
-                gaps = _regressions(snapshot, gaps, unit.members)
+                gaps = _regressions(snapshot, gaps, unit.members, unit.path)
                 if not gaps:
                     commit = journal.apply(config, plan, snapshot.commit)
                     return Receipt("publish", commit, plan.digest, proofs, len(plan.debt), effort.invocation())
