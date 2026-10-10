@@ -61,6 +61,17 @@ def render(table: Mapping[str, Mapping], version: str) -> bytes:
 def files(table: Mapping[str, Mapping], paths: Mapping[str, str]) -> dict[str, bytes]:
     """The table and every file generated from it; paths maps a version to its symbol file."""
     return {PATH: dump(table), **{path: render(table, v) for v, path in paths.items()}}
+def rename(table: dict[str, dict[str, object]], old: str, new: str) -> None:
+    if old not in table:
+        raise Refusal(Finding("symbols.unknown", f"{old} is not a symbol of the project", path=PATH, unit=old))
+    if not _TOKEN.fullmatch(new):
+        raise Refusal(Finding("symbols.name", f"{new} is not a C identifier", path=PATH, unit=new))
+    if new in table:
+        raise Refusal(Finding("symbols.exists", f"{new} already names a symbol", path=PATH, unit=new))
+    table[new] = table.pop(old)
+def rewrite(text: str, old: str, new: str) -> str:
+    """text with every token equal to old replaced; names inside longer identifiers are left alone."""
+    return re.sub(rf"(?<![A-Za-z0-9_]){re.escape(old)}(?![A-Za-z0-9_])", new, text)
 def tokens(text: str) -> set[str]:
     return set(_TOKEN.findall(text))
 def referenced(snapshot: Snapshot, table: Mapping[str, Mapping]) -> set[str]:

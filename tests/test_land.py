@@ -340,6 +340,14 @@ def test_check_result_validates(lane, monkeypatch):
     configuration.validate("result.check", json.loads(json.dumps(result)), "result.check")
 
 
+def test_land_result_validates_and_reports_refusals(lane):
+    _submit(lane)
+    lane[6].side_effect = Refusal(Finding("land.request", "refused"))
+    result = land.land_command(lane[0], {})
+    assert len(result["refused"]) == 1
+    configuration.validate("result.land", json.loads(json.dumps(result)), "result.land")
+
+
 def test_check_strict_reports_debt_after_census_written(lane, monkeypatch):
     finding = Finding("check.debt", "debt", blocking=False)
     monkeypatch.setattr(land.policy, "census", lambda snap: (finding,))

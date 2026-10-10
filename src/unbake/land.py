@@ -146,6 +146,9 @@ def drain(config: Config) -> Json:
             busy = not claimed  # what is left belongs to other drains
         return {"running": busy, "landed": landed, "refused": refused}
 
+def land_command(config: Config, params: Json) -> Json:
+    return drain(config)
+
 def check_command(config: Config, params: Json) -> Json:
     with effort.stage("land.check_command"):
         snapshot = layout.capture(config)

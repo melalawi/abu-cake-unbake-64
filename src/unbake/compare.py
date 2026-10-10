@@ -122,28 +122,57 @@ def bind(snapshot: Snapshot, file: Path, function: str | None) -> tuple[UnitSpec
     unit, writes = options[-1]
     return unit, layout.overlay(snapshot, writes)
 
+def _target(snapshot: Snapshot, file: Path) -> str:
+    """The project path a change-set file replaces: itself when inside the project, else the landed unit of its name."""
+    root = snapshot.config.project.root.resolve()
+    if file.resolve().is_relative_to(root):
+        return file.resolve().relative_to(root).as_posix()
+    unit = next((u for u in snapshot.layout.units.values() if file.stem in u.members), None)
+    if unit is None:
+        raise Refusal(Finding("land.request", f"{file} is outside the project and is no landed unit's source.",
+                              path=str(file), action="pass a file inside the project or a landed unit's new text"))
+    return unit.path
+
+def _attempt(config: Config, files: Sequence[Path], params: Json, overrides: Json, out: Path | None,
+             origin: str) -> Json:
+    """Measure the first file (the others are a change set landed with it), submit it and drain: the one path."""
+    snapshot = layout.capture(config)
+    extras = {_target(snapshot, f): f.read_bytes() for f in files[1:]}
+    unit, bound = bind(layout.overlay(snapshot, extras) if extras else snapshot, files[0], params["function"])
+    bound, unit = ownership.derive(bound, unit)
+    proofs = measure(bound, unit, overrides, out)
+    found = gaps(bound, unit, proofs)
+    member = params["function"] or (unit.members[0] if len(unit.members) == 1 else None)
+    if member is None:
+        raise Refusal(Finding("land.request", reason="the file holds several members; pass --function",
+                              unit=unit.path, action="pass --function NAME"))
+    request = {"file": str(files[0]), "function": member, "overrides": overrides, "note": params["note"] or ""}
+    submission = land.submit(config, request, unit, proofs, files[0].read_bytes(), origin, extras,
+                             bool(params["withhold"]))
+    return {"unit": unit, "proofs": proofs, "found": found, "member": member, "submission": submission,
+            "drain": land.drain(config) if submission else None}
+
 def run(config: Config, params: Json) -> Json:
     with effort.stage("compare.run"):
-        snapshot = layout.capture(config)
-        unit, bound = bind(snapshot, Path(params["file"]), params["function"])
         overrides: dict[str, Any] = {"add": list(params["flag"]), "omit": list(params["omit_flag"])}
         if params["toolchain"]:
             overrides["toolchain"] = params["toolchain"]
         out = Path(params["out"]) if params["out"] else None
-        bound, unit = ownership.derive(bound, unit)
-        proofs = measure(bound, unit, overrides, out)
-        found = gaps(bound, unit, proofs)
-        member = params["function"] or (unit.members[0] if len(unit.members) == 1 else None)
-        if member is None:
-            raise Refusal(Finding("land.request", reason="the file holds several members; pass --function",
-                                  unit=unit.path, action="pass --function NAME"))
-        note = params["note"] or ""
-        request = {"file": str(params["file"]), "function": member, "overrides": overrides, "note": note}
-        submission = land.submit(config, request, unit, proofs, Path(params["file"]).read_bytes(), "compare",
-                                 withhold=bool(params["withhold"]))
-        drain = land.drain(config) if submission else None
+        done = _attempt(config, [Path(params["file"])], params, overrides, out, "compare")
+        unit, proofs, found, submission = done["unit"], done["proofs"], done["found"], done["submission"]
         score = {v: min(p.score for p in proofs if p.version == v) for v in sorted({p.version for p in proofs})}
         return {"unit": unit.path, "members": list(unit.members),
                 "exact": all(p.exact for p in proofs) and not found, "score": score,
                 "proofs": [asdict(p) for p in proofs], "gaps": [asdict(f) for f in found],
-                "submitted": submission.id if submission else None, "drain": drain}
+                "submitted": submission.id if submission else None, "drain": done["drain"]}
+
+def submit_command(config: Config, params: Json) -> Json:
+    with effort.stage("compare.submit_command"):
+        files = [Path(f) for f in params["files"]]
+        done = _attempt(config, files, params, {"add": [], "omit": []}, None, "submit")
+        proofs, entry = done["proofs"], done["submission"]
+        row = {"file": str(files[0]), "files": [str(f) for f in files], "member": done["member"],
+               "id": entry.id if entry else None, "operation": entry.operation if entry else "none",
+               "exact": all(p.exact for p in proofs), "score": min(p.score for p in proofs),
+               "findings": [asdict(f) for f in done["found"]]}
+        return {"submissions": [row], "drain": done["drain"]}

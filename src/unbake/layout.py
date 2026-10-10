@@ -495,7 +495,7 @@ def _boundary(snapshot: Snapshot) -> tuple[Plan, Json]:
         if name in table and drop and table[name].keys() <= {"kind"}:
             del table[name]
     landed = {m for u in snapshot.layout.units.values() for m in u.members}
-    data = {}  # the data rows as they will be: one that starts between words has its first bytes cut off
+    data: dict[str, list[tuple[str, str, Placement]]] = {}  # the rows as they will be, misaligned ones cut
     for holder, version in sorted(snapshot.versions.items()):
         data[holder] = []
         for name, state, p in _rows(snapshot, version):
@@ -508,19 +508,19 @@ def _boundary(snapshot: Snapshot) -> tuple[Plan, Json]:
                 data[holder][-1:] = [(name, state, replace(p, rom_end=p.rom_start + gap)),
                                      (fresh, state, replace(p, rom_start=p.rom_start + gap, vram=p.vram + gap))]
                 counts["align"] += 1
-    reference, spelled = snapshot.config.project.names_from, defaultdict(list)  # one symbol names one data member
+    reference, spelled = snapshot.config.project.names_from, defaultdict[str, list[tuple[str, str]]](list)
     for holder in sorted(snapshot.versions, key=lambda v: (v != reference, v)):
         at = {a: n for n, a in snapshot.versions[holder].symbols.items()}
         for name, _, p in data[holder]:
             if p.section in (".data", ".rodata") and (symbol := at.get(p.vram)) in table:  # declared names only
                 spelled[symbol].append((holder, name))
     moves = {}
-    for names in spelled.values():  # a landed name is authoritative: it is kept, never renamed, never given a version
-        keep = next((n for _, n in names if n in landed), names[0][1])
+    for shown in spelled.values():  # a landed name is authoritative: it is kept, never renamed, never given a version
+        keep = next((n for _, n in shown if n in landed), shown[0][1])
         held_by = snapshot.layout.members[keep].holders() if keep in landed else None
-        moves.update({(h, n): keep for h, n in names
+        moves.update({(h, n): keep for h, n in shown
                       if n != keep and n not in landed and (held_by is None or h in held_by)})
-    held = {h: {n for n, _, _ in rows} for h, rows in data.items()}
+    held = {h: {n for n, _, _ in items} for h, items in data.items()}
     while step := [(h, n, k) for (h, n), k in moves.items() if k not in held[h]]:  # a row takes only a free name
         for holder, name, keep in step:
             held[holder] -= {name}

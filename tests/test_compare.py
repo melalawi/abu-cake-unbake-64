@@ -184,8 +184,9 @@ def mock_run(monkeypatch: pytest.MonkeyPatch, cfg: Config, u: UnitSpec, exact: b
     monkeypatch.setattr(compare.layout, "capture", lambda config: s)
     monkeypatch.setattr(compare, "bind", lambda snapshot, file, function: (u, snapshot))
     def fake_submit(config: Config, request: dict[str, Any], spec: UnitSpec, proofs: Any,
-                    source: bytes, origin: str, withhold: bool = False) -> Any:
+                    source: bytes, origin: str, extras: dict[str, bytes], withhold: bool = False) -> Any:
         calls["submit"] = (request, origin, source)
+        calls["extras"] = extras
         calls["withhold"] = withhold
         return submitted
 
@@ -300,3 +301,30 @@ def test_measure_many_runs_all_variants_in_one_pool_map(cfg: Config, monkeypatch
     proofs = compare.measure_many(s, unit("f"), [{"add": [], "omit": []}, {"add": ["-O1"], "omit": []}])
     assert calls == [4] and [[p.version for p in each] for each in proofs] == [["a", "b"], ["a", "b"]]
     assert len({p.parent / p.name for p in seen}) == 4  # each variant has its own job directory
+
+
+def test_submit_lands_an_exact_file_with_its_change_set_and_validates(
+        cfg: Config, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: dict[str, Any] = {}
+    mock_run(monkeypatch, cfg, unit("f"), True, fixture.submission(id="sub3", operation="publish"), calls)
+    extra = cfg.project.root / "include/h.h"
+    extra.parent.mkdir(parents=True)
+    extra.write_bytes(b"extern int f;")
+    result = compare.submit_command(cfg, {"files": [params(tmp_path)["file"], extra], "function": None,
+                                          "note": None, "withhold": False})
+    row = result["submissions"][0]
+    assert row["id"] == "sub3" and row["exact"] and row["operation"] == "publish" and calls["drain"] == 1
+    assert calls["submit"][1] == "submit" and calls["extras"] == {"include/h.h": b"extern int f;"}
+    configuration.validate("result.submit", json.loads(json.dumps(result)), "result.submit")
+
+
+def test_submit_withhold_asks_land_to_withhold_a_partial_file(
+        cfg: Config, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: dict[str, Any] = {}
+    mock_run(monkeypatch, cfg, unit("f"), False, None, calls)
+    result = compare.submit_command(cfg, {"files": [params(tmp_path)["file"]], "function": None, "note": None,
+                                          "withhold": True})
+    row = result["submissions"][0]
+    assert calls["withhold"] is True and row["id"] is None and row["operation"] == "none" and not row["exact"]
+    assert row["findings"] and result["drain"] is None
+    configuration.validate("result.submit", json.loads(json.dumps(result)), "result.submit")
