@@ -465,3 +465,21 @@ def test_reading_zero_as_a_source_keeps_the_function(snapshot_factory, monkeypat
 def test_items_leave_out_handwritten_assembly(snapshot_factory):
     rows = report.items(snapshot_factory([_member("loop", state="hasm"), _member("plain", address=96)]), {})
     assert [r["member"] for r in rows] == ["plain"]
+
+
+def test_a_function_with_a_coprocessor_or_system_instruction_is_not_offered(snapshot_factory, monkeypatch):
+    jr, nop = 0x03E00008, 0
+    bodies = {"plain": [0x27BDFFE8, jr, nop], "status": [0x40026000, 0x34420001, 0x40826000, jr, nop],  # mfc0, or, mtc0
+              "flush": [0xBC000000, jr, nop], "return": [0x42000018, nop, nop], "order": [0x0000000F, jr, nop]}
+    words, members, start = {}, [], 0x1000
+    for name, body in bodies.items():
+        words.update({start + 4 * i: w for i, w in enumerate(body)})
+        members.append(Member(name, "function", "asm", "g", (
+            Placement("a", ".text", start, start + 4 * len(body), 0x80000000 + start),)))
+        start += 0x20
+    snapshot = snapshot_factory(members, versions=("a",))
+    monkeypatch.setattr(versions, "rom_bytes", lambda v, lo, hi: b"".join(words[a].to_bytes(4, "big")
+                                                                        for a in range(lo, hi, 4)))
+    monkeypatch.setattr(report, "split_slot", _REAL_SPLIT_SLOT)
+    assert [report.split_slot(snapshot, n) for n in bodies] == [None] + ["system code C cannot emit"] * 4
+    assert [r["member"] for r in report.items(snapshot, {})] == ["plain"]

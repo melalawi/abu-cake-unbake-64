@@ -62,21 +62,27 @@ def _reads_before_writing(words: Sequence[int], vram: int) -> bool:
             return False
         slot = instruction.hasDelaySlot()
     return False
-def _writes_zero(words: Sequence[int], vram: int) -> bool:
-    """Whether some word other than the canonical nop is a non-jump instruction writing $zero: no compiler emits one,
-    so the bytes are data. Reading $zero as a source is ordinary and never counts."""
+_SYSTEM = frozenset({"mfc0", "mtc0", "dmfc0", "dmtc0", "cache", "eret", "sync", "tlbr", "tlbwi", "tlbwr", "tlbp"})
+def _not_c(words: Sequence[int], vram: int) -> str:
+    """Why the words cannot be compiler output, or "": a non-jump instruction writing $zero (a destination, never a
+    source) is data; a coprocessor-0 or system instruction is what C cannot emit without inline assembly."""
     for index, word in enumerate(words):
         instruction = rabbitizer.Instruction(word, vram + 4 * index)
-        if word and instruction.isValid() and not instruction.hasDelaySlot() and any(
+        if not word or not instruction.isValid():
+            continue
+        if instruction.getOpcodeName() in _SYSTEM:
+            return "system code C cannot emit"
+        if not instruction.hasDelaySlot() and any(
                 int(getattr(instruction, name).value) == 0
                 for name, writing in (("rt", instruction.modifiesRt()), ("rd", instruction.modifiesRd())) if writing):
-            return True
-    return False
+            return "data misclassified as code"
+    return ""
 def split_slot(snapshot: Snapshot, member: str) -> str | None:
     """The member that `member` runs into: the one holding the delay slot of its last instruction, or the one it
     falls through into when its last instruction pair is not an unconditional jump. A member whose entry reads a
     register that is undefined there is itself a piece of a function, named "the middle of a function". A member whose
-    text writes $zero is data misclassified as code, named so."""
+    text writes $zero is data misclassified as code, and one with a coprocessor-0 or system instruction is system code,
+    named so."""
     reference = snapshot.layout.members[member].reference(snapshot.config.project.names_from)
     for place in snapshot.layout.members[member].placements:
         if place.section != ".text" or place.size < 4:
@@ -84,8 +90,8 @@ def split_slot(snapshot: Snapshot, member: str) -> str | None:
         version = snapshot.versions[place.version]
         if place.version == reference:
             text = versions.rom_bytes(version, place.rom_start, place.rom_end)
-            if _writes_zero([int.from_bytes(text[i:i + 4], "big") for i in range(0, len(text) - 3, 4)], place.vram):
-                return "data misclassified as code"
+            if why := _not_c([int.from_bytes(text[i:i + 4], "big") for i in range(0, len(text) - 3, 4)], place.vram):
+                return why
         last = int.from_bytes(versions.rom_bytes(version, place.rom_end - 4, place.rom_end), "big")
         pair = place.size >= 8 and int.from_bytes(
             versions.rom_bytes(version, place.rom_end - 8, place.rom_end - 4), "big")
