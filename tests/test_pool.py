@@ -151,7 +151,8 @@ def test_executor_reuse_and_host_change(tmp_path, monkeypatch):
     assert first.shutdowns == [{"wait": True, "cancel_futures": True}]
     assert second.kwargs["max_workers"] == config.host.workers
     assert second.kwargs["mp_context"].get_start_method() == "forkserver"
-    assert second.kwargs["initargs"] == (config.host.memory_worker_bytes,)
+    assert second.kwargs["initargs"] == (config.host.memory_worker_bytes,
+                                            replace(config, host=replace(config.host, digest="other")))
 
 
 def test_threads_asking_at_once_create_one_executor(tmp_path, monkeypatch):
@@ -226,7 +227,6 @@ def test_job_ships_only_notable_records():
 def test_items_travel_without_the_snapshot_they_run_against(tmp_path, monkeypatch):
     """A snapshot is megabytes: it is stored once in the cache by digest and every worker loads it once."""
     import hashlib
-    import io
     import pickle
 
     from unbake.contracts import LayoutMap, Member, Placement, Snapshot
@@ -254,12 +254,12 @@ def test_pool_record_measures_the_parent_and_the_workers(tmp_path, mocked_parall
     assert record.dispatch_seconds >= 0 and record.busy_seconds >= 0 and record.jobs == 80
 
 
-def test_worker_dies_with_its_parent(monkeypatch):
+def test_worker_dies_with_its_parent(tmp_path, monkeypatch):
     calls = []
     monkeypatch.setattr(pool.resource, "setrlimit", lambda *a: None)
     monkeypatch.setattr(pool.ctypes, "CDLL", lambda name: type("L", (), {"prctl": lambda self, *a: calls.append(a)})())
     monkeypatch.setattr(pool, "_in_worker", False)
-    pool._init(1 << 30)
+    pool._init(1 << 30, _config(tmp_path))
     assert calls == [(1, pool.signal.SIGKILL)]
 
 
@@ -334,12 +334,17 @@ def test_an_equal_key_from_a_changed_module_is_cold(tmp_path, monkeypatch, mocke
 
 def test_the_key_pass_dispatches_chunks_and_the_parent_computes_no_key(tmp_path, monkeypatch, mocked_parallel):
     config, chunks, parent = _config(tmp_path), [], []
-    def dispatched(blob):
-        items = pool._Unpickler(io.BytesIO(blob)).load()[1]
-        chunks.append(len(items))
-        return [str(item) for item in items]
-    monkeypatch.setattr(pool, "_keys_dispatch", dispatched)
+    monkeypatch.setattr(sys.modules[__name__], "_KEY_CHUNKS", chunks)
+    monkeypatch.setattr(pool, "_keys_job", _record_key_chunk)
     monkeypatch.setattr(pool, "_keys", lambda key, items, identity: parent.append(len(items)))
     items = list(range(640))
     pool.map(config, "units", _square, items, key=_name)
     assert sum(chunks) == 640 and 1 < len(chunks) < 640 and parent == []
+
+
+_KEY_CHUNKS = []
+
+def _record_key_chunk(item):
+    items = item[1]
+    _KEY_CHUNKS.append(len(items))
+    return [str(value) for value in items]

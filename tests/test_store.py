@@ -171,3 +171,50 @@ def test_stem_flattens_slashes_and_digests_long_names():
 def test_write_keeps_a_name_near_the_filesystem_limit(tmp_path: Path) -> None:
     path = tmp_path / ("x" * 240 + ".s")  # the temporary file must not lengthen the name past 255 bytes
     assert store.write(path, b"a") and path.read_bytes() == b"a" and [p.name for p in tmp_path.iterdir()] == [path.name]
+
+
+def _budget_child(config, pipe, release):
+    with store.slots(config, 10) as width:
+        pipe.send(width)
+        release.wait(20)
+
+
+def test_two_processes_share_ten_worker_slots(cfg):
+    from dataclasses import replace
+    config = replace(cfg, host=replace(cfg.host, cores=10, workers=10))
+    context = multiprocessing.get_context("spawn")
+    receive, send = context.Pipe(False)
+    release = context.Event()
+    with store.slots(config, 4) as own:
+        children = [context.Process(target=_budget_child, args=(config, send, release)) for _ in range(2)]
+        for child in children:
+            child.start()
+        try:
+            other = receive.recv()
+            assert own + other == 10
+            with pytest.raises(Refusal, match=r"resources\.workers"):
+                changed = replace(config, host=replace(config.host, workers=11))
+                # Another process/thread must inspect the directory rather than reuse our lease.
+                token = store._held.set(None)
+                try:
+                    with store.slots(changed, 1):
+                        pass
+                finally:
+                    store._held.reset(token)
+        finally:
+            release.set()
+            for child in children:
+                child.join(20)
+        assert receive.recv() == 6
+        assert all(child.exitcode == 0 for child in children)
+    with store.slots(config, 10) as width:
+        assert width == 10
+
+
+def test_nested_budget_uses_existing_slot_and_failure_releases(cfg):
+    with pytest.raises(ValueError), store.slots(cfg, 1) as width:
+        with store.slots(cfg, cfg.host.workers) as nested:
+            assert width == nested == 1
+        raise ValueError("failed")
+    with store.slots(cfg, cfg.host.workers) as width:
+        assert width == cfg.host.workers

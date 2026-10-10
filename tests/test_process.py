@@ -27,7 +27,7 @@ def process_config(tmp_path):
         tools={"git": tmp_path / "git"}, sdk_catalog=None, serial_seconds=2,
         serial_cores=2, pool_fill=0.8, pool_fanout=2, author=("test", "test@example.invalid"),
         origins={}, digest="host",
-    )
+        budget_dir=tmp_path / "budget")
     project = Project(
         root=tmp_path, id="fixture", name="fixture", title="Fixture", versions=(), names_from="",
         toolchain="", build={}, version_files={}, version_macros={}, resident={}, layout_cap=200,
@@ -263,3 +263,27 @@ def test_children_get_the_project_tmpdir(tmp_path):
     scratch = process.scratch(tmp_path)
     result = process.run("env", ("/bin/sh", "-c", 'printf %s "$TMPDIR"'), tmp_path, tmp=scratch)
     assert result.stdout.decode() == str(tmp_path / ".unbake" / "tmp") and scratch.is_dir()
+
+
+def test_native_make_and_permuter_use_admitted_width(process_config, tmp_path, monkeypatch):
+    from contextlib import contextmanager
+
+    from unbake import store
+    @contextmanager
+    def lease(config, want):
+        assert config is process_config and want == process_config.host.workers
+        yield 1
+    seen = []
+    monkeypatch.setattr(store, "slots", lease)
+    monkeypatch.setattr(effort, "resources", lambda: process_config)
+    monkeypatch.setattr(process, "_execute", lambda name, argv, *args: seen.append(argv))
+    make = tmp_path / "make"
+    make.write_text("#!/bin/sh\nexit 0\n")
+    make.chmod(0o755)
+    process.run("make check", [str(make), "-j2", "check"], tmp_path, tmp=tmp_path / "tmp")
+    assert seen[-1] == [str(make), "-j1", "check", "JOBS=1"]
+    permuter = tmp_path / "permuter"
+    permuter.write_bytes(make.read_bytes())
+    permuter.chmod(0o755)
+    process.run("permuter", [str(permuter), "-j", "2"], tmp_path, tmp=tmp_path / "tmp")
+    assert seen[-1] == [str(permuter), "-j", "1"]

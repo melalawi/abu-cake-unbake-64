@@ -31,11 +31,12 @@ _executor: ProcessPoolExecutor | None = None
 _host_digest: str | None = None
 _in_worker = False
 _creating = threading.Lock()
-def _init(limit: int) -> None:
+def _init(limit: int, config: Config) -> None:
     global _in_worker
     resource.setrlimit(resource.RLIMIT_DATA, (limit, limit))
     ctypes.CDLL(None).prctl(1, signal.SIGKILL)  # PR_SET_PDEATHSIG: a worker never outlives the process that forked it
     _in_worker = True
+    effort.bind(config)
 def _short_socket_dir() -> None:
     """The fork server's socket must fit an AF_UNIX path (about 100 bytes), so its directory is a short private one
     under the user's runtime directory, never under the project path or the shared temp directory."""
@@ -71,7 +72,7 @@ def _get_executor(config: Config) -> ProcessPoolExecutor:
                 max_workers=config.host.workers,
                 mp_context=context,
                 initializer=_init,
-                initargs=(config.host.memory_worker_bytes,),
+                initargs=(config.host.memory_worker_bytes, config),
             )
             _host_digest = config.host.digest
         return _executor
@@ -126,10 +127,11 @@ def _chunk(function: Callable, items: Sequence, floor: float, sink: tuple | None
         store.put_many(sink[0], sink[1], [(key, pickle.dumps(value, protocol=5)) for (ok, value, _), key in
                                           zip(outcomes, sink[2], strict=True) if ok and key is not None])
     return outcomes
-def _dispatch(blob: bytes, floor: float) -> list[tuple[bool, Any, Json]]:
+def _dispatch(blob: bytes, floor: float, config: Config) -> list[tuple[bool, Any, Json]]:
     """One chunk travels as its own pickle, so a worker only unpacks the items it runs and stores their results."""
     function, items, sink = _Unpickler(io.BytesIO(blob)).load()
-    return _chunk(function, items, floor, sink)
+    with store.slots(config, 1):
+        return _chunk(function, items, floor, sink)
 def _raise_failure(config: Config, name: str, index: int, exc: Any) -> None:
     if isinstance(exc, Refusal):
         raise exc
@@ -151,8 +153,8 @@ def _identity(function: Callable[..., Any]) -> str:
     return _IDENTITIES[module]
 def _keys(key: Callable[[Any], str | None], items: Sequence[Any], identity: str) -> list[str | None]:
     return [None if (named := key(item)) is None else digest((named, identity)) for item in items]
-def _keys_dispatch(blob: bytes) -> list[str | None]:
-    return _keys(*_Unpickler(io.BytesIO(blob)).load())
+def _keys_job(item: tuple) -> list[str | None]:
+    return _keys(*item)
 class _Run:
     """One group of a gather: its items, the cache keys of those, and the indexes the workers must still compute."""
     def __init__(self, name: str, function: Callable[..., Any], items: Sequence[Any],
@@ -197,23 +199,11 @@ def _resolve(config: Config, runs: Sequence[_Run]) -> None:
         for run, key in keyed:
             run.resolve(config, _keys(key, run.items, _identity(run.function)))
         return
-    executor, width, futures = _get_executor(config), config.host.workers, []
-    for run, key in keyed:
-        size, identity = max(1, len(run.items) // (width * 32)), _identity(run.function)
-        for lo in range(0, len(run.items), size):
-            stream = io.BytesIO()
-            _Pickler(stream, protocol=5).dump((key, run.items[lo:lo + size], identity))
-            futures.append((run, executor.submit(_keys_dispatch, stream.getvalue())))
-    found: dict[int, list[str | None]] = {id(run): [] for run, _ in keyed}
-    for run, future in futures:
-        try:
-            found[id(run)].extend(future.result())
-        except (BrokenProcessPool, Refusal):
-            raise
-        except Exception as exc:
-            _raise_failure(config, run.name, 0, exc)
-    for run, _ in keyed:
-        run.resolve(config, found[id(run)])
+    groups = [(run.name + ".keys", _keys_job,
+               [(key, run.items[lo:lo + size], _identity(run.function)) for lo in range(0, len(run.items), size)])
+              for run, key in keyed for size in [max(1, len(run.items) // (config.host.workers * 32))]]
+    for (run, _), chunks in zip(keyed, gather(config, groups), strict=True):
+        run.resolve(config, [key for chunk in chunks for key in chunk])
 def map(config: Config, name: str, function: Callable[[Any], Any], items: Sequence[Any],
         key: Callable[[Any], str | None] | None = None) -> list[Any]:
     return gather(config, [(name, function, items, key)])[0]
@@ -239,13 +229,14 @@ def gather(config: Config, groups: Sequence[tuple]) -> list[list[Any]]:
                     picked = run.todo[lo:lo + size[run]]
                     if inline:
                         pending[future := Future()] = (run, picked)
-                        future.set_result(_chunk(run.function, [run.items[i] for i in picked], floor,
-                                                 run.sink(config, picked)))
+                        with store.slots(config, 1):
+                            future.set_result(_chunk(run.function, [run.items[i] for i in picked], floor,
+                                                     run.sink(config, picked)))
                     else:
                         stream = io.BytesIO()
                         _Pickler(stream, protocol=5).dump(
                             (run.function, [run.items[i] for i in picked], run.sink(config, picked)))
-                        pending[executor.submit(_dispatch, stream.getvalue(), floor)] = (run, picked)
+                        pending[executor.submit(_dispatch, stream.getvalue(), floor, config)] = (run, picked)
                     run.submitted += len(picked)
                 if not pending:
                     break

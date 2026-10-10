@@ -22,7 +22,8 @@ from unbake.contracts import Config, Finding, Host, Plan, Project, Refusal, dige
 def repo(tmp_path, monkeypatch):
     project = Project(tmp_path, "test", "test", "Test", (), "", "test", {}, {}, {}, {}, 200, {}, "project")
     host = Host(1, 1, 1024, 1024, 1024, tmp_path / "tools", {}, None,
-                2, 2, 0.8, 2, ("Writer", "writer@example.invalid"), {}, "host")
+                2, 2, 0.8, 2, ("Writer", "writer@example.invalid"), {}, "host",
+                    budget_dir=tmp_path / "budget")
     config = Config(project, host, "config")
     state = {"head": "a" * 40, "status": b"", "log": b"", "committed": {}, "paths": (), "tracked": (), "blobs": {}}
 

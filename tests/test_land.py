@@ -35,7 +35,8 @@ def lane(tmp_path, monkeypatch):
     project = Project(tmp_path, "test", "test", "Test", ("a", "b"), "a", "gcc-test",
                       {}, {}, {}, {}, 200, {}, "project")
     host = Host(2, 2, 1024, 1024, 1024, tmp_path / "tools",
-                {}, None, 2, 2, 0.8, 2, ("test", "test@example.invalid"), {}, "host")
+                {}, None, 2, 2, 0.8, 2, ("test", "test@example.invalid"), {}, "host",
+                    budget_dir=tmp_path / "budget")
     cfg = Config(project, host, "config")
     unit = UnitSpec("src/f.c", "c", "group", ("f",), "gcc-test", {})
     placements = tuple(Placement(v, ".text", 4096, 4104, 0x80000400) for v in ("a", "b"))

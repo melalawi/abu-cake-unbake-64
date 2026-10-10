@@ -89,6 +89,13 @@ def _replayed(cfg: Config, key: str, produce):
         effort.count("refused", False)
         store.put(cfg, "refused", key, json.dumps([asdict(f) for f in refusal.findings]).encode())
         raise
+def _compile_inputs(snapshot: Snapshot, unit: UnitSpec, version: str, recipe: Recipe,
+                    include: tuple[Path, ...], stem: str) -> tuple[str, tuple[compile.Step, ...], str, str]:
+    text = view.get(snapshot, unit, version, recipe, lines=False).text
+    steps = adapters.chain_steps(snapshot.config, recipe.toolchain, recipe, include, stem)
+    tools = str(effort.memo(("tool-identity", recipe.toolchain),
+                            lambda: adapters.tool_identity(snapshot.config, recipe.toolchain)))
+    return text, steps, tools, compile.key(text.encode(), f"{stem}.i", steps, tools)
 def _compiled(snapshot: Snapshot, unit: UnitSpec, version: str, recipe: Recipe, work: Path, include: tuple[Path, ...],
               stem: str) -> tuple[Path, tuple[NativeResult, ...]]:
     """Preprocess, compile and assemble through abucache's cache, keyed by the preprocessed bytes, the exact commands
@@ -96,12 +103,9 @@ def _compiled(snapshot: Snapshot, unit: UnitSpec, version: str, recipe: Recipe, 
     cfg = snapshot.config
     if "preprocess" not in _phases(unit):
         raise Refusal(Finding("config.resource", f"unit kind {unit.kind} is cacheable but has no preprocess phase"))
-    text = view.get(snapshot, unit, version, recipe, lines=False).text
+    text, steps, tools, key = _compile_inputs(snapshot, unit, version, recipe, include, stem)
     source, obj = work / f"{stem}.i", work / f"{stem}.o"
     source.write_text(text, encoding="utf-8")
-    steps = adapters.chain_steps(cfg, recipe.toolchain, recipe, include, stem)
-    tools = adapters.tool_identity(cfg, recipe.toolchain)
-    key = compile.key(text.encode(), source.name, steps, tools)
     def run(phase: str, argv: Sequence[str], cwd: Path) -> NativeResult:
         return process.run(phase, argv, cwd, tmp=process.scratch(cfg.project.root))
     value, results = _replayed(cfg, key, lambda: compile.build(store.content(cfg), run, steps, source, tools, work,
@@ -109,10 +113,8 @@ def _compiled(snapshot: Snapshot, unit: UnitSpec, version: str, recipe: Recipe, 
     obj.write_bytes(value)
     if results:  # the compile that ran keeps its refused warnings, so nothing compiles again to count them
         found = adapters.toolchain(cfg, recipe.toolchain).refused(results[0].stderr.decode(errors="replace"))
-        store.put(cfg, "warnings", _warning_key(key), json.dumps(found).encode())
+        store.put(cfg, "warnings", digest((key, "warnings")), json.dumps(found).encode())
     return obj, tuple(results)
-def _warning_key(key: str) -> str:
-    return digest((key, "warnings"))
 def recorded(snapshot: Snapshot, unit: UnitSpec, version: str, recipe: Recipe) -> tuple[str, ...] | None:
     """The refused warnings the build or a proof kept for this unit; None when none was kept; never compiles."""
     cfg = snapshot.config
@@ -121,11 +123,8 @@ def recorded(snapshot: Snapshot, unit: UnitSpec, version: str, recipe: Recipe) -
     home = cfg.project.root / "build" / version / Path(unit.path).with_suffix("")
     for kept in sorted(home.glob("*/compile.err")):
         return tuple(adapters.toolchain(cfg, recipe.toolchain).refused(kept.read_text(errors="replace")))
-    stem = Path(unit.path).stem
-    steps = adapters.chain_steps(cfg, recipe.toolchain, recipe, _include(snapshot, unit, version), stem)
-    tools = effort.memo(("tool-identity", recipe.toolchain), lambda: adapters.tool_identity(cfg, recipe.toolchain))
-    text = view.get(snapshot, unit, version, recipe, lines=False).text
-    kept_json = store.get(cfg, "warnings", _warning_key(compile.key(text.encode(), f"{stem}.i", steps, str(tools))))
+    *_, key = _compile_inputs(snapshot, unit, version, recipe, _include(snapshot, unit, version), Path(unit.path).stem)
+    kept_json = store.get(cfg, "warnings", digest((key, "warnings")))
     return None if kept_json is None else tuple(json.loads(kept_json))
 def warnings(snapshot: Snapshot, unit: UnitSpec, version: str, recipe: Recipe, work: Path) -> tuple[str, ...]:
     """The refused-view warnings of the unit's own compile, kept by the text compiled."""
@@ -134,17 +133,15 @@ def warnings(snapshot: Snapshot, unit: UnitSpec, version: str, recipe: Recipe, w
         if not config.load_resource("units.toml")["kind"][unit.kind]["cacheable"]:
             return ()
         work.mkdir(parents=True, exist_ok=True)
-        stem, text = Path(unit.path).stem, view.get(snapshot, unit, version, recipe, lines=False).text
-        steps = adapters.chain_steps(cfg, recipe.toolchain, recipe, _include(snapshot, unit, version), stem)
-        tools = adapters.tool_identity(cfg, recipe.toolchain)
-        key = _warning_key(compile.key(text.encode(), f"{stem}.i", steps, tools))
+        stem = Path(unit.path).stem
+        text, steps, _, key = _compile_inputs(snapshot, unit, version, recipe, _include(snapshot, unit, version), stem)
         def _produce() -> bytes:
             (work / f"{stem}.i").write_text(text, encoding="utf-8")
             argv = [w.replace("{in}", f"{stem}.i").replace("{out}", steps[0].out) for w in steps[0].argv]
             result = process.run("compile", argv, work, tmp=process.scratch(cfg.project.root))
             found = adapters.toolchain(cfg, recipe.toolchain).refused(result.stderr.decode(errors="replace"))
             return json.dumps(found).encode()
-        return tuple(json.loads(store.cached(cfg, "warnings", key, _produce)))
+        return tuple(json.loads(store.cached(cfg, "warnings", digest((key, "warnings")), _produce)))
 def _include(snapshot: Snapshot, unit: UnitSpec, version: str) -> tuple[Path, ...]:
     project = snapshot.config.project
     macros = config.load_resource("repo.toml")["splat"]["options"]["generated_asm_macros_directory"]

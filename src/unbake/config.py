@@ -139,6 +139,9 @@ def load_host(path: Path) -> Host:
             except (Refusal, ValueError) as error:
                 reason = "; ".join(f.reason for f in error.findings) if isinstance(error, Refusal) else str(error)
                 problems.append(_bad("host", "sdk.catalog", f"{catalog} is not a valid catalog: {reason}", origins))
+    budget_dir = Path(document["resources"]["budget_dir"])
+    if not budget_dir.is_absolute():
+        problems.append(_bad("host", "resources.budget_dir", "budget_dir must be absolute", origins))
     res, budgets, publish = document["resources"], document["budgets"], document["publish"]
     counts: dict[str, int] = {}
     for name in ("cores", "workers"):
@@ -159,7 +162,7 @@ def load_host(path: Path) -> Host:
         problems.append(_bad("host", "resources.workers", "workers exceeds cores", origins))
     if problems:
         raise Refusal(*problems)
-    return Host( cores=counts["cores"], workers=counts["workers"],
+    return Host( cores=counts["cores"], workers=counts["workers"], budget_dir=budget_dir,
         memory_parent_bytes=res["memory_parent_bytes"], memory_worker_bytes=res["memory_worker_bytes"],
         cache_max_bytes=document["cache"]["max_bytes"],
         toolchain_root=Path(document["toolchains"]["root"]), tools=tools, sdk_catalog=catalog,

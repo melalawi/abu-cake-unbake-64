@@ -49,7 +49,8 @@ def _member(name, kind="function", holders=("a", "b"), section=".text", size=8):
 @pytest.fixture
 def lane(tmp_path, monkeypatch):
     host = Host(2, 2, 1024, 1024, 1024, tmp_path / "tools",
-                {}, None, 2, 2, 0.8, 2, ("test", "test@invalid"), {}, "host")
+                {}, None, 2, 2, 0.8, 2, ("test", "test@invalid"), {}, "host",
+                    budget_dir=tmp_path / "budget")
     project = Project(tmp_path, "test", "test", "Test", ("a", "b"), "a", "test-tc",
                       {}, {}, {}, {}, 200, {}, "project")
     cfg = Config(project, host, "config")

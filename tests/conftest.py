@@ -70,6 +70,7 @@ def cfg(tmp_path: Path, toolchains: dict[str, Any]) -> Config:
 def _fresh_module_state():
     """Every test starts with empty process-wide caches, so xdist workers never share state between tests."""
     forget()
+    effort._config = None
     effort._memo.clear()
     effort._listeners.clear()
     pool._drop_executor()

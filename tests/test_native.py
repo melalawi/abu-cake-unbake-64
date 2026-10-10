@@ -40,7 +40,8 @@ def invocation():
 def case(tmp_path, monkeypatch, toolchains):
     root = tmp_path / "project"
     host = Host(2, 2, 1 << 30, 1 << 30, 1 << 30,
-                tmp_path / "toolchains", {}, None, 2, 2, 0.8, 2, ("test", "test"), {}, "host")
+                tmp_path / "toolchains", {}, None, 2, 2, 0.8, 2, ("test", "test"), {}, "host",
+                    budget_dir=tmp_path / "budget")
     project = Project(root, "fixture", "fixture", "Fixture", ("a", "b"), "a", "gcc-test",
                       {}, {}, {}, {"a": (), "b": ()}, 200, {}, "project")
     cfg = Config(project, host, "config")

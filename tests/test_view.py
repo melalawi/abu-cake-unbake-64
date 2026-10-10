@@ -50,7 +50,7 @@ def lane(tmp_path, monkeypatch):
         cache_max_bytes=1024, toolchain_root=tmp_path / "tools",
         tools={}, sdk_catalog=None, serial_seconds=2, serial_cores=2, pool_fill=0.8, pool_fanout=2,
         author=("test", "test@example.invalid"), origins={}, digest=digest("host"),
-    )
+        budget_dir=tmp_path / "budget")
     config = Config(project, host, digest("config"))
     unit = UnitSpec("src/unit.c", "c", "group", ("value",), "fake", {})
     layout = LayoutMap(200, {}, {}, {unit.path: unit}, digest("layout"), (), {})

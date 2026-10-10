@@ -72,6 +72,7 @@ class Host:
     author: tuple[str, str]  # (publish.author_name, publish.author_email) for journal commits
     origins: Mapping[str, Origin]
     digest: str
+    budget_dir: Path
 @dataclass(frozen=True)
 class Resident:
     start: int

@@ -11,7 +11,7 @@ from functools import cache
 from pathlib import Path
 from time import perf_counter_ns
 
-from unbake import effort
+from unbake import effort, store
 from unbake.contracts import Config, Finding, NativeResult, Refusal
 
 
@@ -142,7 +142,20 @@ def run(
             raise Refusal(Finding("native.exit", reason=f"{Path(executable).name} runs only with -j from host.workers"))
         try:
             tmp.mkdir(parents=True, exist_ok=True)
-            return _execute(name, argv, cwd, stdin, stdout_path, timeout, outputs, tmp)
+            config = effort.resources()
+            if config is None:
+                return _execute(name, argv, cwd, stdin, stdout_path, timeout, outputs, tmp)
+            parallel = next((i for i, arg in enumerate(argv) if str(arg).startswith("-j")), None)
+            with store.slots(config, config.host.workers if parallel is not None else 1) as width:
+                args = list(argv)
+                if parallel is not None:
+                    if args[parallel] == "-j":
+                        args[parallel + 1] = str(width)
+                    else:
+                        args[parallel] = f"-j{width}"
+                    if Path(executable).name == "make":
+                        args.append(f"JOBS={width}")
+                return _execute(name, args, cwd, stdin, stdout_path, timeout, outputs, tmp)
         except OSError as error:
             raise Refusal(Finding("native.exit", reason=str(error))) from error
 
