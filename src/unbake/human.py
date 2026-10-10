@@ -11,7 +11,6 @@ from unbake.contracts import Finding, Json, StageRecord
 _stream: TextIO | None = None
 _tty = False
 _live = False
-_last = ""
 
 
 def attach(stream: TextIO, tty: bool) -> None:
@@ -21,15 +20,15 @@ def attach(stream: TextIO, tty: bool) -> None:
 
 
 def _clear() -> None:
-    global _live, _last
+    global _live
     if _live and _stream is not None:
         _stream.write("\r\x1b[K")
         _stream.flush()
-    _live, _last = False, ""
+    _live = False
 
 
 def _event(event: str, body: Json) -> None:
-    global _live, _last
+    global _live
     if not _tty or _stream is None:
         return
     if event == "close" and len(body["path"]) == 1:
@@ -42,8 +41,7 @@ def _event(event: str, body: Json) -> None:
     else:
         return
     width = shutil.get_terminal_size().columns - 1
-    _last = text[:width]
-    _stream.write("\r\x1b[K" + _last)
+    _stream.write("\r\x1b[K" + text[:width])
     _stream.flush()
     _live = True
 

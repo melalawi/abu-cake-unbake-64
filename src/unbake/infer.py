@@ -294,8 +294,6 @@ def _masks(snapshot: Snapshot, wanted) -> dict[str, tuple[list[str], list[bytes]
     for (v, _), masks in zip(chunks, done, strict=True):
         out[v][1].extend(masks)
     return out
-def _align_job(item) -> dict[str, str]:
-    return _align((item[1:3], item[3:]))
 def _align(item) -> dict[str, str]:
     """Names of one version mapped to the other's. Equal masked code unique in both versions anchors the order;
     between two anchors the rest pair in order by the share of masked words they hold in common, identical code
@@ -325,12 +323,8 @@ def pairs(snapshot: Snapshot, directions: Sequence[tuple[str, str]]) -> dict[tup
     pool and cached on both versions' masked code."""
     with effort.stage("infer.pairs"):
         masks = _masks(snapshot, sorted({v for direction in directions for v in direction}))
-        found = pool.map(snapshot.config, "infer.align", _align_job,
-                         [(snapshot.config, masks[a][0], masks[a][1], masks[b][0], masks[b][1]) for a, b in directions],
-                         _align_key)
+        found = pool.map(snapshot.config, "infer.align", _align, [(masks[a], masks[b]) for a, b in directions], digest)
         return dict(zip(directions, found, strict=True))
-def _align_key(item: Any) -> str:
-    return digest(item[1:])
 def _votes_key(job: Any) -> str:
     return digest((job[0].digest, job[1], job[2], job[3]))
 def _votes_job(item) -> Counter:

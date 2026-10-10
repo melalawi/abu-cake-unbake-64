@@ -26,18 +26,16 @@ from unbake import (
     native,
     pool,
     process,
-    recipes,
     report,
     store,
     symbols,
     types,
     versions,
-    view,
 )
 from unbake import config as configuration
 from unbake.contracts import Config, Finding, Json, Plan, Refusal, Snapshot, digest
 
-_CODE = digest([Path(m.__file__).read_bytes() for m in (native, adapters, build, recipes, versions, view)])
+
 def _mask(word: int) -> int:
     opcode = rabbitizer.Instruction(word).getOpcodeName()
     if opcode in {"lui", "addiu", "ori", "lw", "sw", "lh", "sh", "lb", "sb", "lwc1", "swc1"}:
@@ -104,7 +102,6 @@ def _extras(rules: Json, title: str, versions: object) -> dict[str, bytes]:
     roms = "\n".join(f"- `roms/baserom.{v}.z64`" for v in versions)
     return {"CONTRIBUTING.md": _render("CONTRIBUTING.md.in", title=title, roms=roms), "types.toml": _EMPTY_TYPES,
             **{row["path"]: configuration.template(row["template"]).encode() for row in rules["sdk"]}}
-_write = store.write
 def _checked(result, key: str, name: str) -> None:
     if result.exit != 0 or result.signal is not None:
         tail = result.stderr.decode(errors="replace").splitlines()
@@ -140,7 +137,7 @@ def init(params: Json) -> Json:
         versions, rules = validate_roms(roms, params["names_from"]), configuration.load_resource("repo.toml")
         created, blocks = [], ["[resident]\n"]
         def write(path: str, value: bytes) -> None:
-            _write(root / path, value)
+            store.write(root / path, value)
             created.append(path)
         write(".gitignore", ("\n".join(rules["ignore"]) + "\n").encode())
         for v, source in sorted(roms.items()):
@@ -323,7 +320,7 @@ def setup(config: Config, params: Json) -> Json:
                 _checked(result, "setup.splat", f"extract {v}")
                 stamps[v] = _stamp(config, v)
             effort.forget("generated", "versions.read", "pin", "includes", "closure")
-            _write(project.root / ".unbake/extract.json", json.dumps(stamps, sort_keys=True).encode())
+            store.write(project.root / ".unbake/extract.json", json.dumps(stamps, sort_keys=True).encode())
             extracted.update(stale)
         with effort.stage("repo.setup.toolchains"):
             snapshot = layout.capture(config)
@@ -409,7 +406,7 @@ def setup(config: Config, params: Json) -> Json:
             if writes:
                 apply(_plan(snapshot, writes, "setup", "setup: repository files"))
             local = project.root / "local.mk"
-            if _write(local, build.local_mk(config)):
+            if store.write(local, build.local_mk(config)):
                 written.add("local.mk")
         with effort.stage("repo.setup.make"):
             make = build.make_check(config)
@@ -423,5 +420,5 @@ def setup(config: Config, params: Json) -> Json:
                 "debt": [*(f.reason for f in mapped.debt),
                         *(f"{f.reason}: " + "; ".join(f.missing) for f in conflicts)],
                 "commits": commits, "files": sorted(written), "make": make}
-        _write(done, json.dumps({"state": _state(config), "result": result}).encode())
+        store.write(done, json.dumps({"state": _state(config), "result": result}).encode())
         return result

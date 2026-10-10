@@ -67,19 +67,7 @@ def load_resource(name: str) -> Json:
     node = resources.files("unbake.resources") / "data" / name
     if not node.is_file():
         raise Refusal(Finding("config.resource", f"{name} is missing from the installed package", path=name))
-    text = node.read_text(encoding="utf-8")
-    if name.endswith(".jsonl"):
-        rows = [(i, json.loads(line)) for i, line in enumerate(text.splitlines(), 1) if line.strip()]
-        findings: list[Finding] = []
-        for number, row in rows:
-            try:
-                validate(SCHEMA_OF[name], row, f"{name}:{number}")
-            except Refusal as refusal:
-                findings.extend(refusal.findings)
-        if findings:
-            raise Refusal(*findings)
-        return {"rows": [row for _, row in rows]}
-    document = tomllib.loads(text)
+    document = tomllib.loads(node.read_text(encoding="utf-8"))
     validate(SCHEMA_OF[name], document, name)
     return document
 @cache

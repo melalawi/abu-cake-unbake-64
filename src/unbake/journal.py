@@ -1,11 +1,10 @@
 import base64
-import fcntl
 import json
 import os
 import tempfile
 from pathlib import Path
 
-from unbake import effort, process
+from unbake import effort, process, store
 from unbake.contracts import Config, Finding, Plan, Refusal
 
 
@@ -66,9 +65,7 @@ def apply(config: Config, plan: Plan, head: str) -> str:
             raise ValueError("A blocking plan cannot be applied.")
         root = config.project.root
         journal = root / ".unbake" / "journal.json"
-        journal.parent.mkdir(parents=True, exist_ok=True)
-        with (journal.parent / "journal.lock").open("a+b") as lock:
-            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        with store.exclusive(config, "journal", wait=True):
             _rollback(config)  # a drain no longer recovers first: whoever commits clears what a crash left behind
             paths = sorted(plan.writes)
             now = _git(config, "rev-parse", "HEAD").decode().strip()
@@ -117,9 +114,5 @@ def _rollback(config: Config) -> bool:
     _install(journal, None)
     return rollback
 def recover(config: Config) -> bool:
-    with effort.stage("journal.recover"):
-        lock = config.project.root / ".unbake" / "journal.lock"
-        lock.parent.mkdir(parents=True, exist_ok=True)
-        with lock.open("a+b") as handle:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
-            return _rollback(config)
+    with effort.stage("journal.recover"), store.exclusive(config, "journal", wait=True):
+        return _rollback(config)

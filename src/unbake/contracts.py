@@ -310,12 +310,6 @@ class Assembler(Protocol):
     def assemble(self, source: Path, recipe: Recipe, include: Sequence[Path], out: Path) -> NativeResult: ...
 class Linker(Protocol):
     def link(self, obj: Path, sections: Sequence[Placement], symbols: Path, work: Path, trim: bool) -> NativeResult:
-        """abucache link: ld and one objcopy per section, with only the symbols the object needs.
-        outputs[section] holds source-derived bytes for each owned .text/.rodata/.data section.
-        outputs[".bss"] is an ASCII size witness after the linker asserts its memory size.
-        A candidate is scored: ld keeps its ELF when a size assert fails, so the sizes and bytes are measured by the
-        caller. A failed command, a signal or a missing output refuses link.error. Build uses the same
-        link_script and link_commands. Native proofs aggregate all a member owns."""
         ...
 class Span(Protocol):
     def add(self, *, items: int = 0, findings: Sequence[Finding] = ()) -> None: ...

@@ -19,7 +19,7 @@ from typing import cast
 
 from abucache.store import ContentCache, open_cache
 
-from unbake import effort
+from unbake import effort, process
 from unbake.contracts import Config, Finding, Json, Refusal
 
 
@@ -129,9 +129,7 @@ def exclusive(config: Config, name: str, *, wait: bool) -> Iterator[bool]:
 @contextmanager
 def work(config: Config) -> Iterator[Path]:
     """Yield a fresh scratch directory under the host cache and remove it on exit."""
-    parent = config.project.root / ".unbake" / "tmp"
-    parent.mkdir(parents=True, exist_ok=True)
-    path = Path(tempfile.mkdtemp(dir=parent))
+    path = Path(tempfile.mkdtemp(dir=process.scratch(config.project.root)))
     try:
         yield path
     finally:

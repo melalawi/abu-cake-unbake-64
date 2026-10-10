@@ -121,8 +121,7 @@ def _unit_rules(snapshot: Snapshot, unit: UnitSpec, version: str) -> str:
     cfg, project = snapshot.config, snapshot.config.project
     recipe = recipes.resolve(cfg, unit, {})
     row = configuration.load_resource("toolchains.toml")["toolchain"][recipe.toolchain]
-    kind = configuration.load_resource("units.toml")["kind"][unit.kind]
-    phases = kind["phases"]
+    phases = configuration.load_resource("units.toml")["kind"][unit.kind]["phases"]
     home = Path("build") / version / Path(unit.path).with_suffix("")
     work = home / _TAG
     obj, current = work / "source.o", unit.path

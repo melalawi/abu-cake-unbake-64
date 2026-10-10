@@ -99,12 +99,10 @@ def _file_job(item) -> dict:
     defs = [(f[3], clean.count('\n', 0, f.start()) + 1, f'{f[2]} @{f[4]}') for f in found if not f[1]]  # file scope
     return {'declared': (_externs if source else _declared)(code), 'defined': [f[3] for f in found], 'defs': defs,
             'functions': _functions(code) if source else [], 'words': frozenset(re.findall(r'\w+', code))}
-def _file_key(item) -> str:
-    return digest(item)  # the file bytes and how it is read
 
 def _scanned(snapshot: Snapshot, paths: list[str]) -> list[dict]:
     return pool.map(snapshot.config, 'headers.catalog', _file_job,
-                    [(snapshot.read(path), path.endswith('.c')) for path in paths], _file_key)
+                    [(snapshot.read(path), path.endswith('.c')) for path in paths], digest)
 
 def landed(snapshot: Snapshot) -> dict[str, str]:
     """The head of every function a landed source defines (a fuzzy candidate is not landed)."""

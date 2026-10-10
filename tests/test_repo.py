@@ -13,7 +13,7 @@ import pytest
 import yaml
 
 from unbake import config as configuration
-from unbake import repo
+from unbake import recipes, repo
 from unbake.contracts import (
     Config,
     Finding,
@@ -365,7 +365,7 @@ def setup_case(snapshot, monkeypatch):
     monkeypatch.setattr(repo.layout, "overlay", lambda current, writes: current)
     monkeypatch.setattr(repo.layout, "asm_unit", lambda s, m, v: UnitSpec(
         f"asm/{v}/{m}.s", "asm", "code", (m,), "gcc-test", {}))
-    monkeypatch.setattr(repo.recipes, "resolve", lambda c, u, o: Recipe("gcc-test", (), (), (), "recipe"))
+    monkeypatch.setattr(recipes, "resolve", lambda c, u, o: Recipe("gcc-test", (), (), (), "recipe"))
     monkeypatch.setattr(repo.native, "prove", prove)
     monkeypatch.setattr(repo.pool, "map", pool_map)
     monkeypatch.setattr(repo.build, "install_toolchain", lambda c, i: events.append(("toolchain", i)))

@@ -57,10 +57,10 @@ def _assembled(result: NativeResult, source: Path) -> NativeResult:
     return result
 def _unknown(reason: str) -> Refusal:
     return Refusal(Finding("adapter.unknown", reason=reason))
-def _row(config: Config, id: str) -> Json:
+def row(id: str) -> Json:
     rows = configuration.load_resource("toolchains.toml")["toolchain"]
     if id not in rows:
-        raise _unknown(f"toolchain {id}")
+        raise _unknown(f"toolchain {id} is not in toolchains.toml")
     return rows[id]
 class GnuAssembler:
     def __init__(self, config: Config) -> None:
@@ -220,7 +220,7 @@ def check_abucache() -> None:
         raise Refusal(Finding("tool.version", path="pyproject.toml:dependencies",
                               reason=f"abucache version mismatch: expected {pin}, found {abucache.__version__}"))
 def toolchain(config: Config, id: str) -> TemplateToolchain:
-    return TemplateToolchain(config, id, _row(config, id))
+    return TemplateToolchain(config, id, row(id))
 def assembler(config: Config, kind: str) -> Assembler:
     kinds = {"gnu": GnuAssembler, "armips": Armips}
     if kind not in kinds:

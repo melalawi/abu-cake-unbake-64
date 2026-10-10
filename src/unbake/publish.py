@@ -178,9 +178,7 @@ def _append(old, folded):
     return ("\n".join(existing).rstrip() + "\n\n" + "\n".join(remaining).strip() + "\n").encode()
 def _generated(snapshot, writes):
     overlay = layout.overlay(snapshot, writes)
-    for path, data in repo.files(overlay).items():
-        if data != snapshot.peek(path):
-            writes[path] = data
+    writes.update({p: d for p, d in repo.files(overlay).items() if d != snapshot.peek(p)})
 def plans(snapshot: Snapshot, unit: UnitSpec, proposed: Snapshot, extras: Mapping[str, bytes]) -> Iterator[Plan]:
     """The publication layout options, each planned only when the caller asks for it: the first option that proves
     lands, so the others cost nothing. `extras` are a change set's other files, written in every plan."""

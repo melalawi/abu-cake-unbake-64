@@ -16,7 +16,6 @@ def _state(monkeypatch):
     monkeypatch.setattr(human, "_stream", None)
     monkeypatch.setattr(human, "_tty", False)
     monkeypatch.setattr(human, "_live", False)
-    monkeypatch.setattr(human, "_last", "")
     monkeypatch.setattr(human.config, "sentence", lambda key: "plain sentence")
 
 

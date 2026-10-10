@@ -302,7 +302,7 @@ def test_apply_holds_blocking_lock_through_git(repo, monkeypatch):
         lock_calls.append(operation)
         return real_flock(fd, operation)
 
-    monkeypatch.setattr(journal.fcntl, "flock", flock)
+    monkeypatch.setattr(journal.store.fcntl, "flock", flock)
     original_git = git.side_effect
 
     def check_lock(config_arg, *args):
@@ -315,7 +315,7 @@ def test_apply_holds_blocking_lock_through_git(repo, monkeypatch):
 
     git.side_effect = check_lock
     journal.apply(config, _plan({"a": b"new"}), state["head"])
-    assert lock_calls == [fcntl.LOCK_EX]
+    assert lock_calls == [fcntl.LOCK_EX | fcntl.LOCK_NB]
     with (config.project.root / ".unbake/journal.lock").open("a+b") as other:
         real_flock(other.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
 

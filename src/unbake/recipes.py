@@ -3,15 +3,10 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from unbake import config as config_module
+from unbake import adapters
 from unbake.contracts import Config, Finding, Json, Recipe, Refusal, UnitSpec, digest
 
 _KNOWN = frozenset({"toolchain", "add", "omit"})
-def _row(toolchain: str) -> Json:
-    rows = config_module.load_resource("toolchains.toml")["toolchain"]
-    if toolchain not in rows:
-        raise Refusal(Finding("adapter.unknown", f"toolchain {toolchain} is not in toolchains.toml"))
-    return rows[toolchain]
 def _groups(tokens: Sequence[str], paired: Sequence[str]) -> list[tuple[str, ...]]:
     out: list[tuple[str, ...]] = []
     index = 0
@@ -30,7 +25,7 @@ def _omit(lists: list[list[tuple[str, ...]]], omitted: Sequence[str]) -> list[li
     return lists
 def _make(toolchain: str, config: Config, cppflags: Sequence[str], cflags: Sequence[str]) -> Recipe:
     build = config.project.build
-    cppflags = (*cppflags, f"-D__UNBAKE_STDARG_{_row(toolchain)['family'].upper()}")
+    cppflags = (*cppflags, f"-D__UNBAKE_STDARG_{adapters.row(toolchain)['family'].upper()}")
     asflags = tuple(build["asflags"]) + tuple(build["gnu_asflags"])
     flags = tuple(cflags)
     return Recipe(toolchain, cppflags, flags, asflags, digest((toolchain, cppflags, flags, asflags)))
@@ -39,7 +34,7 @@ def resolve(config: Config, unit: UnitSpec, overrides: Json) -> Recipe:
         if key not in _KNOWN:
             raise Refusal(Finding("recipe.option", f"unknown override {key}", unit=unit.path))
     toolchain = overrides.get("toolchain") or unit.toolchain
-    row = _row(toolchain)
+    row = adapters.row(toolchain)
     paired = tuple(row["paired"])
     supported = set(_words(row["supported_options"]))
     adds = list(overrides.get("add", ()))
