@@ -73,21 +73,44 @@ def _reached(source: str, include: Sequence[str]) -> set[str]:
                 found.add(candidate)
                 pending.append(candidate)
     return found
-def headers(snapshot: Snapshot, unit: UnitSpec) -> tuple[str, ...]:
-    """The project files the unit's source can include, read through the snapshot so a planned file counts too."""
+_DIRECTIVE = re.compile(rb'^[ \t]*(?:#[ \t]*include|\.include)[ \t]*([<"])([^>"\n]+)[>"]', re.M)
+def headers(snapshot: Snapshot, unit: UnitSpec, argv: Sequence[str]) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """(the project files the unit can include, the paths a quoted or forced name found nowhere would be read from)
+    under the search flags of the command that reads the source (-iquote, -I, -isystem, -include, -imacros), read
+    through the snapshot so a planned file counts too. An unfound <name> is the toolchain's own; an unfound quoted
+    name is the caller's to cover, never dropped here."""
     def text(path: str) -> bytes | None:
         return cast("bytes | None", effort.memo(("includes", snapshot.digest, path), lambda: snapshot.peek(path)))
-    found, pending = {unit.path}, [unit.path]
+    dirs: dict[str, list[str]] = {"-iquote": [], "-I": [], "-isystem": []}
+    forced: list[str] = []
+    words = iter(argv)
+    for word in words:
+        flag = next((f for f in ("-include", "-imacros", "-iquote", "-isystem", "-I") if word.startswith(f)), None)
+        if flag is None or word == "-I-":
+            continue
+        value = word[len(flag):] or next(words, "")  # each of these flags takes the next word when bare
+        if value:
+            (forced if flag in ("-include", "-imacros") else dirs[flag]).append(value)
+    angle = (*dirs["-I"], *dirs["-isystem"])
+    found: set[str] = set()
+    missing: set[str] = set()
+    pending = [unit.path]
+    def reach(name: str, bases: Sequence[str], quoted: bool) -> None:
+        options = [os.path.normpath(os.path.join(base, name)) for base in bases]
+        candidate = next((c for c in options if text(c) is not None), None)
+        if candidate is None:
+            missing.update(options if quoted else ())
+        elif candidate not in found:
+            found.add(candidate)
+            pending.append(candidate)
+    for name in forced:  # searched first in the working directory, then as a quoted include of the source
+        reach(name, (".", os.path.dirname(unit.path), *dirs["-iquote"], *angle), True)
     while pending:
         path = pending.pop()
-        for name in _INCLUDE.findall(text(path) or b""):
-            bases = (os.path.dirname(path), "include", "src")
-            options = (os.path.normpath(os.path.join(base, name.decode())) for base in bases)
-            candidate = next((c for c in options if text(c) is not None), None)
-            if candidate and candidate not in found:
-                found.add(candidate)
-                pending.append(candidate)
-    return tuple(sorted(found - {unit.path}))
+        for delimiter, raw in _DIRECTIVE.findall(text(path) or b""):
+            quoted = delimiter == b'"'
+            reach(raw.decode(), (os.path.dirname(path), *dirs["-iquote"], *angle) if quoted else angle, quoted)
+    return tuple(sorted(found - {unit.path})), tuple(sorted(missing))
 def closure(snapshot: Snapshot, unit: UnitSpec, version: str) -> tuple[tuple[str, str], ...] | None:
     """(path, pin) of the unit's source and every project file it can reach. None when an overlay holds one of them."""
     return effort.memo(("closure", snapshot.digest, unit.path, version), lambda: _closure(snapshot, unit, version))

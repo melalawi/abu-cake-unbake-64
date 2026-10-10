@@ -11,12 +11,13 @@ import urllib.request
 from bisect import bisect_right
 from pathlib import Path
 from string import Template
+from typing import cast
 
 import yaml
 
 from unbake import adapters, effort, native, pool, process, recipes, store, symbols, view
 from unbake import config as configuration
-from unbake.contracts import Config, Finding, Json, NativeResult, Refusal, Snapshot, UnitSpec, digest
+from unbake.contracts import Config, Finding, Json, NativeResult, Recipe, Refusal, Snapshot, UnitSpec, digest
 
 _REPO = configuration.load_resource("repo.toml")
 _WORD = 0xFFFFFFFF
@@ -88,6 +89,32 @@ def install_toolchain(config: Config, id: str) -> Path:
         return dest
 def _shell(argv) -> str:
     return " ".join(shlex.quote(str(w)) for w in argv)
+def _values(snapshot: Snapshot, unit: UnitSpec, version: str, recipe: Recipe) -> dict[str, list[str]]:
+    project = snapshot.config.project
+    key = recipe.toolchain.replace("-", "_").replace(".", "_")
+    macros = _REPO["splat"]["options"]["generated_asm_macros_directory"].format(version=version, name=project.name)
+    return {**{k: [v] for k, v in _MAKE.items()}, "cc": [f"$(CC_{key})"], "as": [f"$(AS_{key})"],
+            "cppflags": list(recipe.cppflags), "codegen": list(recipe.cflags),
+            "asflags": list(recipe.asflags), "defines": list(project.version_macros[version]),
+            "includes": ["-Iinclude", f"-I{Path(unit.path).parent}", f"-I{macros}"], "name": [Path(unit.path).stem]}
+def _reading(snapshot: Snapshot, unit: UnitSpec, version: str) -> list[str]:
+    """The command line that reads the unit's source, whose search flags decide which headers it reaches."""
+    recipe = recipes.resolve(snapshot.config, unit, {})
+    row = configuration.load_resource("toolchains.toml")["toolchain"][recipe.toolchain]
+    phases = configuration.load_resource("units.toml")["kind"][unit.kind]["phases"]
+    values = {**_values(snapshot, unit, version, recipe), "source": [unit.path], "out": ["-"]}
+    if "preprocess" in phases:
+        return adapters.render(row["preprocess"], values)
+    if "assemble" in phases:
+        return adapters.render(adapters.assemble_template(row if "compile" in phases else None)[0], values)
+    return []  # armips: only file-relative includes, and an unfound one is covered by the caller
+def _headers(snapshot: Snapshot, unit: UnitSpec, version: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    def scan() -> tuple[tuple[str, ...], tuple[str, ...]]:
+        return view.headers(snapshot, unit, _reading(snapshot, unit, version))
+    return cast("tuple[tuple[str, ...], tuple[str, ...]]",
+                effort.memo(("unit-headers", snapshot.digest, unit.path, version), scan))
+def _versions(snapshot: Snapshot, unit: UnitSpec) -> list[str]:
+    return sorted({v for n in unit.members for v in snapshot.layout.members[n].holders()} - set(unit.withheld))
 def _unit_rules(snapshot: Snapshot, unit: UnitSpec, version: str) -> str:
     """The rules of one unit in one version. Their outputs live in a directory named by the digest of everything the
     recipe says, so a changed recipe has no outputs yet and the rules need not depend on the Makefile."""
@@ -102,11 +129,7 @@ def _unit_rules(snapshot: Snapshot, unit: UnitSpec, version: str) -> str:
     commands = [f"mkdir -p {shlex.quote(str(work))}",
                 f"find {shlex.quote(str(home))} -mindepth 1 -maxdepth 1 ! -name {_TAG} -exec rm -rf {{}} +"]
     key = recipe.toolchain.replace("-", "_").replace(".", "_")
-    macros = _REPO["splat"]["options"]["generated_asm_macros_directory"].format(version=version, name=project.name)
-    values = {**{k: [v] for k, v in _MAKE.items()}, "cc": [f"$(CC_{key})"], "as": [f"$(AS_{key})"],
-              "cppflags": recipe.cppflags, "codegen": recipe.cflags,
-              "asflags": recipe.asflags, "defines": project.version_macros[version],
-              "includes": ["-Iinclude", f"-I{Path(unit.path).parent}", f"-I{macros}"], "name": [Path(unit.path).stem]}
+    values = _values(snapshot, unit, version, recipe)
     for phase in phases:
         if phase == "preprocess":
             out = work / "source.i"
@@ -157,7 +180,10 @@ def _unit_rules(snapshot: Snapshot, unit: UnitSpec, version: str) -> str:
             else:
                 commands.append(f'test "$$(wc -c < {output})" -eq {placement.size}')
                 patches.append(f"{output}:{placement.rom_start}")
-    dependencies = [unit.path, f"versions/{version}/symbols.ld", *view.headers(snapshot, unit)]
+    found, missing = _headers(snapshot, unit, version)
+    dependencies = [unit.path, f"versions/{version}/symbols.ld", *found]
+    if missing:  # a quoted include found nowhere yet: wherever it appears, and any project header, may be it
+        dependencies.append("$(wildcard " + " ".join(missing) + " include/*.h include/*/*.h)")
     if "compile" in phases:
         dependencies.append(f"$(TOOLCHAIN_{key})")
     text = Template(configuration.template("unit.mk.in")).substitute(unit=unit.path, version=version,
@@ -171,12 +197,11 @@ def _unit_key(item) -> str:
     context = effort.memo(("unit-rules", snapshot.config.digest), lambda: digest((
         snapshot.config.project, configuration.load_resource("toolchains.toml"),
         configuration.load_resource("units.toml"), configuration.template("unit.mk.in"), _CODE)))
-    return digest((unit, [snapshot.layout.members[n] for n in unit.members], view.headers(snapshot, unit), context))
+    headers = [_headers(snapshot, unit, v) for v in _versions(snapshot, unit)]
+    return digest((unit, [snapshot.layout.members[n] for n in unit.members], headers, context))
 def _unit_job(item) -> list[str]:
     snapshot, unit = item
-    return [_unit_rules(snapshot, unit, v)
-            for v in sorted({v for n in unit.members for v in snapshot.layout.members[n].holders()}
-                            - set(unit.withheld))]
+    return [_unit_rules(snapshot, unit, v) for v in _versions(snapshot, unit)]
 def makefile(snapshot: Snapshot) -> bytes:
     with effort.stage("build.makefile"):
         cfg, project = snapshot.config, snapshot.config.project

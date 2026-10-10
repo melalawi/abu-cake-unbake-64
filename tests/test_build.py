@@ -269,6 +269,22 @@ def test_a_unit_depends_on_the_headers_it_can_reach_and_on_no_others(build_snaps
     assert "include/common/b.h include/new.h include/other.h" in build.makefile(including).decode()
 
 
+def test_headers_follow_the_search_flags_of_the_compile_line(build_snapshot, monkeypatch):
+    root = build_snapshot.config.project.root
+    files = {"src/group.c": '#include "deep.h"\n#include "nowhere.h"\n', "extra/deep.h": '#include <sys.h>\n',
+             "sys/sys.h": "", "forced/pre.h": "", "asm/a/include/macro.inc": ""}
+    for path, text in files.items():
+        (root / path).parent.mkdir(parents=True, exist_ok=True)
+        (root / path).write_text(text)
+    monkeypatch.setattr(recipes, "resolve", lambda cfg, unit, overrides: Recipe(
+        unit.toolchain, ("-I", "extra", "-isystem", "sys", "-include", "forced/pre.h"), ("-O2",), ("-EB",), "r"))
+    rule = re.search(r"build/a/src/group/\w{12}/text\.bin &:[^\n]*", build.makefile(build_snapshot).decode())[0]
+    for header in ("extra/deep.h", "sys/sys.h", "forced/pre.h"):  # reached only through a recipe flag
+        assert f" {header} " in rule
+    covered = re.search(r"\$\(wildcard ([^)]*)\)", rule)[1].split()  # an unfound quoted include is never dropped
+    assert {"src/nowhere.h", "extra/nowhere.h", "include/*.h", "include/*/*.h"} <= set(covered)
+
+
 def test_symbols_ld_sorted(build_snapshot):
     assert build.symbols_ld(build_snapshot, "a") == b"PROVIDE(a = 0x80000400);\nPROVIDE(z = 0x80000408);\n"
 
