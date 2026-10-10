@@ -99,15 +99,13 @@ def _job(function: Callable[[Any], Any], item: Any, floor: float) -> tuple[bool,
         "end_ns": time.monotonic_ns(),
     }
 _SNAPSHOTS: dict[str, Snapshot] = {}  # per worker: the snapshots it has loaded, by digest
-_STORED: set[str] = set()  # in the parent: the snapshots already in the content cache
 class _Pickler(pickle.Pickler):
     """Items travel without the snapshot they run against: it is stored once in the content cache by digest."""
     def persistent_id(self, obj: Any) -> tuple | None:
         if isinstance(obj, Snapshot):
             key = hashlib.sha256((str(obj.config.project.root) + obj.digest).encode()).hexdigest()
-            if key not in _STORED and store.get(obj.config, "snapshot", key) is None:
+            if store.get(obj.config, "snapshot", key) is None:
                 store.put(obj.config, "snapshot", key, pickle.dumps(obj, protocol=5))
-            _STORED.add(key)
             return ("snapshot", key, obj.config)
         return None
 class _Unpickler(pickle.Unpickler):

@@ -411,8 +411,10 @@ def _rename(name: str, old: int, new: int) -> str:
 def boundary_plan(snapshot: Snapshot) -> tuple[Plan, Json]:
     """The plan is a function of the snapshot and this code, so one computation serves every later command."""
     with effort.stage("layout.boundary_plan"):
-        return pickle.loads(store.cached(snapshot.config, "boundary", digest((snapshot.digest, _code())),
-                                         lambda: pickle.dumps(_boundary(snapshot))))
+        key = digest((dump_map(replace(snapshot.layout, fuzzy={})), snapshot.config.digest, snapshot.read(symbols.path()),
+                      [(v.id, v.rom_sha256, snapshot.read(v.split), version_data.facts_digest(v))
+                       for v in snapshot.versions.values()], _code()))
+        return pickle.loads(store.cached(snapshot.config, "boundary", key, lambda: pickle.dumps(_boundary(snapshot))))
 def _boundary(snapshot: Snapshot) -> tuple[Plan, Json]:
     assembly = _kinds()[1]
     counts: dict[str, Any] = {rule: {"proposed": 0, "applied": 0, "withheld": 0}

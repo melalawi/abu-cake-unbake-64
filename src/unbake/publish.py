@@ -17,6 +17,7 @@ from unbake import (
     pool,
     recipes,
     repo,
+    report,
     store,
     symptoms,
     types,
@@ -164,9 +165,6 @@ def _append(old, folded):
     existing[position:position] = list(dict.fromkeys(includes))
     remaining = [line for line in incoming if not line.lstrip().startswith("#include")]
     return ("\n".join(existing).rstrip() + "\n\n" + "\n".join(remaining).strip() + "\n").encode()
-def _generated(snapshot, writes):
-    overlay = layout.overlay(snapshot, writes)
-    writes.update({p: d for p, d in repo.files(overlay).items() if d != snapshot.peek(p)})
 def plans(snapshot: Snapshot, unit: UnitSpec, proposed: Snapshot, extras: Mapping[str, bytes]) -> Iterator[Plan]:
     """The publication layout options, each planned only when the caller asks for it: the first option that proves
     lands, so the others cost nothing. `extras` are a change set's other files, written in every plan."""
@@ -225,7 +223,7 @@ def _option_plan(snapshot: Snapshot, unit: UnitSpec, proposed: Snapshot, shared:
     scanned = types.scan(overlay)
     if scanned != snapshot.peek("types.toml"):
         writes["types.toml"] = scanned
-    _generated(snapshot, writes)
+    writes.update({p: d for p, d in repo.files(layout.overlay(snapshot, writes)).items() if d != snapshot.peek(p)})
     overlay = layout.overlay(snapshot, writes)
     group = proposed.layout.groups[unit.group]
     affected = {option.path, *extras.keys() & overlay.layout.units.keys()}
@@ -298,7 +296,7 @@ def land(config: Config, submission: Submission) -> Receipt:
             fuzzy = dict(snapshot.layout.fuzzy)
             fuzzy[member] = {"path": path, "scores": {p.version: p.score for p in proofs}}
             writes = {path: inbox.read_bytes(), "layout.toml": layout.dump_map(replace(snapshot.layout, fuzzy=fuzzy))}
-            _generated(snapshot, writes)
+            writes.update(report.files(layout.overlay(snapshot, writes)))
             plan = _plan("fuzzy", snapshot, writes, (), (), f"fuzzy {member} {score * 100:.1f}%")
         else:
             raise Refusal(Finding("land.request", "Unknown submission operation.", unit=member))
