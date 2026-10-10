@@ -11,7 +11,7 @@ import fixture
 import pytest
 
 from unbake import config as configuration
-from unbake import report
+from unbake import report, versions
 from unbake.contracts import (
     Config,
     Group,
@@ -33,6 +33,8 @@ def _member(name, *, size=16, address=0x80000400, kind="function", group="g",
     return Member(name, kind, state, group, tuple(
         Placement(v, section, 0x1000, 0x1000 + size, address) for v in versions
     ))
+
+_REAL_SPLIT_SLOT = report.split_slot
 
 
 def _unit(name, kind="c"):
@@ -386,3 +388,19 @@ def test_items_leave_out_fragments_whose_delay_slot_is_in_the_next_member(snapsh
     monkeypatch.setattr(report, "split_slot", lambda snap, name: "next" if name == "cut" else None)
     rows = report.items(snapshot_factory([_member("cut"), _member("whole", address=96)]), {})
     assert [r["member"] for r in rows] == ["whole"]
+
+
+def test_a_member_that_falls_through_is_a_fragment_and_so_is_its_successor(snapshot_factory, monkeypatch):
+    nop, jal, jr = 0, 0x0C000000, 0x03E00008
+    rom = {0x1000: [jal, nop], 0x1008: [jr, nop], 0x1010: [jr, nop]}
+    placed = lambda name, start, address: Member(name, "function", "asm", "g", (  # noqa: E731
+        Placement("a", ".text", start, start + 8, address),))
+    snapshot = snapshot_factory([placed("call", 0x1000, 0x80000400), placed("epilogue", 0x1008, 0x80000408),
+                                 placed("whole", 0x1010, 0x80000410)], versions=("a",))
+    words = {start + 4 * i: w for start, ws in rom.items() for i, w in enumerate(ws)}
+    monkeypatch.setattr(versions, "rom_bytes", lambda v, lo, hi: b"".join(words[a].to_bytes(4, "big")
+                                                                        for a in range(lo, hi, 4)))
+    monkeypatch.setattr(report, "split_slot", _REAL_SPLIT_SLOT)
+    assert report.split_slot(snapshot, "call") == "epilogue"
+    assert report.split_slot(snapshot, "epilogue") is None
+    assert [r["member"] for r in report.items(snapshot, {})] == ["whole"]

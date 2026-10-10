@@ -34,12 +34,19 @@ def _text_starts(snapshot: Snapshot) -> dict[tuple[str, int], str]:
                     starts.setdefault((p.version, p.rom_start), name)
         return starts
     return effort.memo(("text-starts", snapshot.digest), build)  # type: ignore[return-value]
+def _ends(word: int) -> bool:  # an unconditional jr, j or b, after which execution never reaches the next member
+    return (word >> 26 == 0 and word & 0x3F == 8) or word >> 26 == 2 or word >> 16 == 0x1000
 def split_slot(snapshot: Snapshot, member: str) -> str | None:
-    """The member holding the delay slot of `member`'s last instruction when that slot lies outside it."""
+    """The member that `member` runs into: the one holding the delay slot of its last instruction, or the one it
+    falls through into when its last instruction pair is not an unconditional jump."""
     for place in snapshot.layout.members[member].placements:
+        if place.section != ".text" or place.size < 4:
+            continue
         version = snapshot.versions[place.version]
-        if place.section == ".text" and place.size >= 4 and versions.delay_slot(
-                int.from_bytes(versions.rom_bytes(version, place.rom_end - 4, place.rom_end), "big")):
+        last = int.from_bytes(versions.rom_bytes(version, place.rom_end - 4, place.rom_end), "big")
+        pair = place.size >= 8 and int.from_bytes(
+            versions.rom_bytes(version, place.rom_end - 8, place.rom_end - 4), "big")
+        if versions.delay_slot(last) or (place.size >= 8 and not _ends(pair)):
             return _text_starts(snapshot).get((place.version, place.rom_end), "an unowned range")
     return None
 def _inventory(snapshot: Snapshot):
@@ -103,12 +110,13 @@ def items(snapshot: Snapshot, params: Json) -> list[Json]:
         if shard is not None and (not isinstance(shard, str) or not (m := re.fullmatch(r"([0-9]+)/([0-9]+)", shard))
                                   or not 0 <= (index := int(m[1])) < (modulus := int(m[2]))):
             raise Refusal(Finding("report.request", "shard must be I/K with 0 <= I < K"))
-        rows = []
-        for name, member, unit, matched, sid in _inventory(snapshot):
+        rows, inventory = [], list(_inventory(snapshot))
+        successors = {split_slot(snapshot, name) for name, member, *_ in inventory if member.kind == "function"}
+        for name, member, unit, matched, sid in inventory:
             sections = (".text",) if member.kind == "function" else (".data", ".rodata")
             if matched or not any(p.section in sections for p in member.placements):
                 continue
-            if member.kind == "function" and split_slot(snapshot, name) is not None:
+            if member.kind == "function" and (split_slot(snapshot, name) is not None or name in successors):
                 continue
             if segment is not None and sid != segment:
                 continue

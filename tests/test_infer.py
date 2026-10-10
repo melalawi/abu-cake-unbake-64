@@ -218,6 +218,19 @@ def test_correspondences_name_the_two_symbols_of_one_thing(tmp_path: Path, monke
 
 
 @pytest.mark.usefixtures("toolchains")
+def test_correspondences_dispatch_no_job_the_second_time(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    real, dispatched = pool.map, []
+    monkeypatch.setattr(pool, "map", lambda cfg, name, fn, items, key=None: real(
+        cfg, name, lambda i: dispatched.append(name) or fn(i), items, key))
+    monkeypatch.setattr(pool, "_in_worker", True)
+    snapshot = corresponding(tmp_path, [("foo_a", "foo_b")])
+    infer.correspondences(snapshot)
+    dispatched.clear()
+    infer.correspondences(snapshot)
+    assert "infer.votes" not in dispatched
+
+
+@pytest.mark.usefixtures("toolchains")
 def test_plan_writes_the_layout_and_no_symbols(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(pool, "map", lambda cfg, name, fn, items, key=None: [fn(i) for i in items])
     snapshot = corresponding(tmp_path, [("foo_a", "foo_b")])

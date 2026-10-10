@@ -299,7 +299,9 @@ def correspondences(snapshot: Snapshot) -> tuple[tuple[str, str, str, str], ...]
         jobs = [(snapshot, a, b, rows[i:i + 64]) for (a, b), found in pairs(snapshot, directions).items()
                 for rows in [list(found.items())] for i in range(0, len(rows), 64)]
         total: dict[tuple[str, str], Counter] = defaultdict(Counter)
-        for (_, a, b, _), part in zip(jobs, pool.map(snapshot.config, "infer.votes", _votes_job, jobs), strict=True):
+        parts = pool.map(snapshot.config, "infer.votes", _votes_job, jobs,
+                         lambda j: digest((j[0].digest, j[1], j[2], j[3], _CODE)))
+        for (_, a, b, _), part in zip(jobs, parts, strict=True):
             total[a, b].update(part)
         return tuple(sorted((x, a, y, b) for (a, b), merged in total.items()
                             for x, (y, _, _) in _agreed(snapshot, b, merged).items()))
