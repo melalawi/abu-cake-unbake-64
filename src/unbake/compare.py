@@ -98,7 +98,8 @@ def gaps(snapshot: Snapshot, unit: UnitSpec, proofs: Sequence[Proof]) -> tuple[F
                                     unit=name, versions=tuple(bad), missing=tuple(lost), symptoms=facts))
     return tuple(findings)
 
-def bind(snapshot: Snapshot, file: Path, function: str | None) -> tuple[UnitSpec, Snapshot]:
+def bind(snapshot: Snapshot, file: Path, function: str | None,
+         toolchain: str | None) -> tuple[UnitSpec, Snapshot]:
     root = snapshot.config.project.root.resolve()
     path = file.resolve()
     rel = path.relative_to(root).as_posix() if path.is_relative_to(root) else None
@@ -115,7 +116,7 @@ def bind(snapshot: Snapshot, file: Path, function: str | None) -> tuple[UnitSpec
     landed = next((u for u in units if member in u.members), None)
     if landed:  # a new text for source that is already landed replaces that unit's file
         return landed, layout.overlay(snapshot, {landed.path: file.read_bytes()})
-    options = layout.unit_options(snapshot, member, file.read_bytes())
+    options = layout.unit_options(snapshot, member, file.read_bytes(), toolchain)
     if not options:
         raise Refusal(Finding("land.request", reason=f"{member} has no standalone unit option",
                               action="pass --function NAME"))
@@ -125,7 +126,7 @@ def bind(snapshot: Snapshot, file: Path, function: str | None) -> tuple[UnitSpec
 def run(config: Config, params: Json) -> Json:
     with effort.stage("compare.run"):
         snapshot = layout.capture(config)
-        unit, bound = bind(snapshot, Path(params["file"]), params["function"])
+        unit, bound = bind(snapshot, Path(params["file"]), params["function"], params["toolchain"])
         overrides: dict[str, Any] = {"add": list(params["flag"]), "omit": list(params["omit_flag"])}
         if params["toolchain"]:
             overrides["toolchain"] = params["toolchain"]

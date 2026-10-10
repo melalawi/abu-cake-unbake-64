@@ -345,7 +345,7 @@ def test_results_validate(lane, monkeypatch, schema):
         monkeypatch.setattr(land.compare, "measure", measure)
         monkeypatch.setattr(land.compare, "gaps", gaps)
         result = land.submit_command(cfg, {"files": [str(file)], "function": None, "note": None})
-        binder.assert_called_once_with(snapshot, file, None)
+        binder.assert_called_once_with(snapshot, file, None, None)
         measure.assert_called_once_with(snapshot, unit, {"add": [], "omit": []}, None)
         gaps.assert_called_once_with(snapshot, unit, _proofs(unit))
         row = result["submissions"][0]

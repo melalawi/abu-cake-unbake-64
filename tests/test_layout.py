@@ -208,7 +208,7 @@ def test_asm_unit_paths_and_kind(scene, monkeypatch, version, grouped):
 def test_ungrouped_member_is_refused_by_name_when_a_unit_is_built(scene):
     snapshot = scene(grouped=False)
     with pytest.raises(Refusal) as caught:
-        layout.unit_options(snapshot, "func_80000400", b"source")
+        layout.unit_options(snapshot, "func_80000400", b"source", "gcc-test")
     finding = caught.value.findings[0]
     assert (finding.key, finding.unit, finding.action) == ("layout.member", "func_80000400", "run unbake setup")
 
@@ -248,7 +248,7 @@ def test_overlay_reloads_watched_files(scene, watched):
 
 def test_unit_options_standalone_and_overlay(scene):
     snapshot = scene()
-    options = layout.unit_options(snapshot, "func_80000400", b"void f(void) {}\n")
+    options = layout.unit_options(snapshot, "func_80000400", b"void f(void) {}\n", "gcc-test")
     assert len(options) == 1
     unit, writes = options[0]
     assert unit.path == "src/grp.c" and unit.members == ("func_80000400",)
@@ -261,6 +261,20 @@ def test_unit_options_standalone_and_overlay(scene):
         assert b", asm, func_80000400]" in snapshot.read(version.split)
 
 
+def test_a_new_unit_takes_the_toolchain_asked_for_else_its_groups_else_refuses(scene):
+    snapshot = scene()
+    assert layout.unit_options(snapshot, "func_80000400", b"x", "ido-7.1")[0][0].toolchain == "ido-7.1"
+    with pytest.raises(Refusal) as caught:
+        layout.unit_options(snapshot, "func_80000400", b"x", None)
+    assert (caught.value.findings[0].key, caught.value.findings[0].unit) == ("layout.toolchain", "func_80000400")
+    entries = (("first", "c", RETURN), ("target", "asm", RETURN))
+    sibling = replace(_unit(("first",)), toolchain="ido-5.3")
+    snapshot = scene(entries, units=(sibling,))
+    (snapshot.config.project.root / sibling.path).parent.mkdir(exist_ok=True)
+    (snapshot.config.project.root / sibling.path).write_bytes(b"first source")
+    assert layout.unit_options(snapshot, "target", b"x", None)[-1][0].toolchain == "ido-5.3"
+
+
 @pytest.mark.parametrize("adjacent", [True, False])
 def test_unit_options_append_requires_all_holders(scene, adjacent):
     entries = (("first", "c", RETURN), ("target", "asm", RETURN), ("gap", "asm", RETURN))
@@ -269,7 +283,7 @@ def test_unit_options_append_requires_all_holders(scene, adjacent):
     snapshot = scene(entries, other=other, units=(unit,))
     (snapshot.config.project.root / unit.path).parent.mkdir(exist_ok=True)
     (snapshot.config.project.root / unit.path).write_bytes(b"first source")
-    options = layout.unit_options(snapshot, "target", b"target source")
+    options = layout.unit_options(snapshot, "target", b"target source", "gcc-test")
     assert len(options) == (2 if adjacent else 1)
     assert options[-1][0].path == "src/target.c"
     if adjacent:
@@ -282,7 +296,7 @@ def test_unit_options_append_requires_all_holders(scene, adjacent):
 def test_unit_options_refuses(scene, state, member):
     snapshot = scene((("func_80000400", state, RETURN),))
     with pytest.raises(Refusal) as caught:
-        layout.unit_options(snapshot, member, b"source")
+        layout.unit_options(snapshot, member, b"source", "gcc-test")
     assert caught.value.findings[0].key == "layout.member"
 
 
@@ -477,7 +491,7 @@ def test_claim_rows_changes_nothing_where_the_rows_are_the_claims_and_refuses_a_
 
 def test_unit_options_data_member_gets_its_own_unit(scene):
     snapshot = scene((("func_80000400", "asm", RETURN), ("tbl", "rodata", (1, 2))))
-    unit, writes = layout.unit_options(snapshot, "tbl", b"const int tbl[] = {1, 2};\n")[0]
+    unit, writes = layout.unit_options(snapshot, "tbl", b"const int tbl[] = {1, 2};\n", "gcc-test")[0]
     assert unit.path == "src/tbl.c" and unit.members == ("tbl",) and unit.group == "grp"
     assert writes[unit.path] == b"const int tbl[] = {1, 2};\n"
     for version in snapshot.versions.values():
@@ -487,7 +501,7 @@ def test_unit_options_data_member_gets_its_own_unit(scene):
 def test_unit_options_data_member_refuses_compiled_state(scene):
     snapshot = scene((("func_80000400", "asm", RETURN), ("tbl", "c", RETURN)))
     with pytest.raises(Refusal) as caught:
-        layout.unit_options(snapshot, "tbl", b"x")
+        layout.unit_options(snapshot, "tbl", b"x", "gcc-test")
     assert caught.value.findings[0].key == "layout.member"
 
 
@@ -520,7 +534,7 @@ def _ungrouped_data(scene, entries):
 
 
 def _land_data(snapshot, name):
-    unit, writes = layout.unit_options(snapshot, name, b"const unsigned int d[2] = {1, 2};\n")[0]
+    unit, writes = layout.unit_options(snapshot, name, b"const unsigned int d[2] = {1, 2};\n", "gcc-test")[0]
     return unit, layout.overlay(snapshot, writes)
 
 

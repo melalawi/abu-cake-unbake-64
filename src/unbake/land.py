@@ -140,7 +140,7 @@ def submit_command(config: Config, params: Json) -> Json:
             snapshot = layout.capture(config)
             request = {"file": str(file), "function": params["function"], "overrides": {"add": [], "omit": []},
                        "note": params["note"] or ""}
-            unit, bound = compare.bind(snapshot, Path(file), params["function"])
+            unit, bound = compare.bind(snapshot, Path(file), params["function"], None)
             proofs = compare.measure(bound, unit, request["overrides"], None)
             request["function"] = request["function"] or unit.members[0]
             entry = submit(config, request, unit, proofs, Path(file).read_bytes(), "submit")

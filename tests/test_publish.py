@@ -327,7 +327,7 @@ def test_land_publish_commits_once(lane):
     plan = publish.journal.apply.call_args.args[1]
     publish.journal.apply.assert_called_once_with(lane["config"], plan, "current-head")
     assert receipt == Receipt("publish", "new-commit", plan.digest, lane["proofs"], 0, "invocation")
-    publish.compare.bind.assert_called_once_with(lane["snapshot"], lane["source"], "f")
+    publish.compare.bind.assert_called_once_with(lane["snapshot"], lane["source"], "f", None)
     assert publish.native.prove.call_count == 2
     assert [c.args[-1] for c in publish.native.prove.call_args_list] == [lane["work"] / "0", lane["work"] / "1"]
 
@@ -369,7 +369,7 @@ def test_land_replaces_the_untyped_source_of_a_landed_data_member_with_a_typed_o
         publish.journal.apply.assert_not_called()
     else:
         assert publish.land(lane["config"], lane["submission"]).operation == "publish"
-        publish.compare.bind.assert_called_once_with(snapshot, lane["source"], "f")
+        publish.compare.bind.assert_called_once_with(snapshot, lane["source"], "f", None)
 def test_land_not_exact_after_head_moved(lane, monkeypatch):
     snapshot = lane["snapshot"]
     plan = publish._plan("publish", snapshot, {"src/f.c": b"candidate"}, ("src/f.c",), (), "publish f")

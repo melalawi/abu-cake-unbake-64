@@ -76,7 +76,7 @@ def test_bind_known_unit(cfg: Config) -> None:
     u = unit("f", path="src/a.c")
     s = snap(cfg, {"f": member("f")}, (u,))
     file = cfg.project.root / "src/a.c"
-    assert compare.bind(s, file, None) == (u, s)
+    assert compare.bind(s, file, None, None) == (u, s)
 
 
 def test_bind_new_text_for_a_landed_member_replaces_its_unit_file(cfg: Config, tmp_path: Path,
@@ -89,19 +89,19 @@ def test_bind_new_text_for_a_landed_member_replaces_its_unit_file(cfg: Config, t
     writes = []
     monkeypatch.setattr(compare.layout, "overlay", lambda snapshot, w: writes.append(w) or over)
     monkeypatch.setattr(compare.layout, "unit_options", lambda *a: pytest.fail("a landed member needs no new unit"))
-    assert compare.bind(s, file, None) == (u, over)
+    assert compare.bind(s, file, None, None) == (u, over)
     assert writes == [{"src/a.c": b"int f;"}]
 def test_bind_missing_file_refused_by_name(cfg: Config, tmp_path: Path) -> None:
     s = snap(cfg, {"f": member("f")})
     with pytest.raises(Refusal) as error:
-        compare.bind(s, tmp_path / "absent.c", "f")
+        compare.bind(s, tmp_path / "absent.c", "f", None)
     assert error.value.findings[0].key == "land.request" and "absent.c" in error.value.findings[0].reason
 
 
 def test_bind_unknown_member_refused(cfg: Config) -> None:
     s = snap(cfg, {"f": member("f")})
     with pytest.raises(Refusal) as error:
-        compare.bind(s, Path("/elsewhere/nope.c"), None)
+        compare.bind(s, Path("/elsewhere/nope.c"), None, None)
     assert error.value.findings[0].key == "land.request"
 
 
@@ -111,9 +111,9 @@ def test_bind_function_names_member_and_overlays(cfg: Config, tmp_path: Path, mo
     file.write_bytes(b"int f;")
     u = unit("f")
     over = replace(s, digest="overlaid")
-    monkeypatch.setattr(compare.layout, "unit_options", lambda snapshot, name, source: [(None, {}), (u, {"x": b"1"})])
+    monkeypatch.setattr(compare.layout, "unit_options", lambda snapshot, name, source, toolchain: [(None, {}), (u, {"x": b"1"})])
     monkeypatch.setattr(compare.layout, "overlay", lambda snapshot, writes: over)
-    assert compare.bind(s, file, "f") == (u, over)
+    assert compare.bind(s, file, "f", None) == (u, over)
 
 
 def test_bind_no_options_refused(cfg: Config, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -122,7 +122,7 @@ def test_bind_no_options_refused(cfg: Config, tmp_path: Path, monkeypatch: pytes
     file.write_bytes(b"")
     monkeypatch.setattr(compare.layout, "unit_options", lambda *a: [])
     with pytest.raises(Refusal) as error:
-        compare.bind(s, file, None)
+        compare.bind(s, file, None, None)
     assert "no standalone unit option" in error.value.findings[0].reason
 
 
@@ -182,7 +182,7 @@ def mock_run(monkeypatch: pytest.MonkeyPatch, cfg: Config, u: UnitSpec, exact: b
     seen: list[Path] = []
     mock_measure(monkeypatch, seen, exact)
     monkeypatch.setattr(compare.layout, "capture", lambda config: s)
-    monkeypatch.setattr(compare, "bind", lambda snapshot, file, function: (u, snapshot))
+    monkeypatch.setattr(compare, "bind", lambda snapshot, file, function, toolchain: (u, snapshot))
     def fake_submit(config: Config, request: dict[str, Any], spec: UnitSpec, proofs: Any,
                     source: bytes, origin: str) -> Any:
         calls["submit"] = (request, origin, source)
