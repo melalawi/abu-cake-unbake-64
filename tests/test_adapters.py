@@ -236,6 +236,12 @@ def test_link_script_asserts_ownership():
     assert 'ASSERT(SIZEOF(.unowned) == 0, "unowned section")' in script
 
 
+def test_link_script_discards_the_standard_mips_sections_from_abucache_alone():
+    script = adapters.link_script([Placement("a", ".text", 0x1000, 0x1008, 0x80000400)], Path("symbols.ld"))
+    assert ("/DISCARD/ : { *(.MIPS.abiflags .reginfo .pdr .mdebug* .options .debug* .comment .note* .gnu.attributes) }"
+            in script.splitlines())
+
+
 def _link_inputs(tmp_path):
     obj, symbols = tmp_path / "source.o", tmp_path / "symbols.ld"
     obj.write_bytes(fixture.elf_object(["f"]))
@@ -334,11 +340,11 @@ def test_a_failed_chain_step_is_refused_as_the_direct_calls_refuse(adapter_confi
 
 def test_abucache_must_be_the_version_this_unbake_requires(monkeypatch):
     adapters.check_abucache()
-    monkeypatch.setattr(adapters.abucache, "__version__", "0.2.0")
+    monkeypatch.setattr(adapters.abucache, "__version__", "0.1.0")
     with pytest.raises(Refusal) as caught:
         adapters.check_abucache()
     finding, = caught.value.findings
-    assert (finding.key, finding.reason) == ("tool.version", "abucache version mismatch: expected 0.1.0, found 0.2.0")
+    assert (finding.key, finding.reason) == ("tool.version", "abucache version mismatch: expected 0.2.1, found 0.1.0")
 
 
 def test_unused_tools_not_resolved(adapter_config, toolchains):
