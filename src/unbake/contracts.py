@@ -146,7 +146,6 @@ class Group:
     members: tuple[str, ...]  # address order of names_from version, then others
     evidence: str  # "authored" | "proven" | "inferred"
     signals: tuple[str, ...]
-    subsystem: str  # id from resources/data/subsystems.toml ("unknown" is a row there)
     sdk: bool  # every member identified by the SDK signature catalog
 @dataclass(frozen=True)
 class UnitSpec:

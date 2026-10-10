@@ -396,7 +396,7 @@ def setup(config: Config, params: Json) -> Json:
         type_map, conflicts = types.load(snapshot), types.conflicts(snapshot)
         result = {"toolchains": toolchains, "extracted": sorted(extracted), "proof": proof,
                 "groups": len(snapshot.layout.groups),
-                "subsystems": dict(Counter(g.subsystem for g in snapshot.layout.groups.values())),
+                "segments": dict(Counter(g.segment for g in snapshot.layout.groups.values())),
                 "types": {plural: len(type_map[key]) for plural, key in
                           (("functions", "function"), ("globals", "global"), ("structs", "struct"))},
                 "boundary": boundary, "joined": joined, "units": _built(snapshot),

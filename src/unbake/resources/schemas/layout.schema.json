@@ -44,10 +44,6 @@
        "minLength": 1
       }
      },
-     "subsystem": {
-      "type": "string",
-      "minLength": 1
-     },
      "sdk": {
       "type": "boolean"
      }
@@ -58,7 +54,6 @@
      "members",
      "evidence",
      "signals",
-     "subsystem",
      "sdk"
     ],
     "additionalProperties": false

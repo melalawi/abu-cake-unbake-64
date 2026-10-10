@@ -47,7 +47,7 @@
    "type": "integer",
    "minimum": 0
   },
-  "subsystems": {
+  "segments": {
    "type": "object",
    "additionalProperties": {
     "type": "integer",
@@ -229,7 +229,7 @@
   "extracted",
   "proof",
   "groups",
-  "subsystems",
+  "segments",
   "types",
   "boundary",
   "joined",

@@ -379,7 +379,7 @@ def _data_group(snapshot: Snapshot, member: str) -> tuple[str, Group | None]:
     name = f"data_{chunk[0][2].vram:08X}"
     segment = next(s[0] for s in version.segments if s[1] <= chunk[0][2].rom_start < s[2])
     return name, None if name in layout.groups else Group(name, segment, tuple(r[0] for r in chunk), "inferred",
-                                                          ("adjacent",), "unknown", False)
+                                                          ("adjacent",), False)
 def _decoded(snapshot: Snapshot, version: Version, rows: list) -> tuple[dict[str, tuple[int, ...]], frozenset[int]]:
     def decode() -> tuple[dict[str, tuple[int, ...]], frozenset[int]]:
         addresses = {p.vram for _, _, p in rows if p.section == ".text"}

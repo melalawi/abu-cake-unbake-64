@@ -1,4 +1,4 @@
-"""Infer object groups, advisory subsystems, and cross-version symbol addresses."""
+"""Infer object groups and cross-version symbol addresses."""
 from __future__ import annotations
 
 import json
@@ -188,32 +188,8 @@ def groups(snapshot: Snapshot) -> tuple[Group, ...]:
                 for names, signals in _partition(list(run), evidence, cap):
                     first = _placement(snapshot, snapshot.layout.members[names[0]])
                     result.append(Group(f"code_{first.vram:08X}", segment, names,
-                                        "inferred", signals, "unknown", False))
+                                        "inferred", signals, False))
         return tuple(result)
-def subsystems(snapshot: Snapshot, groups: Sequence[Group]) -> dict[str, str]:
-    with effort.stage("infer.subsystems"):
-        rows = [r for r in config.load_resource("subsystems.toml")["subsystem"] if r["weight"] > 0]
-        symbols = defaultdict(list)
-        for name, address in snapshot.versions[snapshot.config.project.names_from].symbols.items():
-            symbols[address].append(name)
-        result = {}
-        for group in groups:
-            scores = {r["id"]: 0.0 for r in rows}
-            for m in (snapshot.layout.members[n] for n in group.members):
-                if m.kind != "function":
-                    continue
-                p = _placement(snapshot, m)
-                for i, (w, ins) in enumerate(_code(snapshot, p)):
-                    mnemonic = ins.getOpcodeName()
-                    target = ((p.vram + i * 4) & 0xF0000000) | ((w & 0x03FFFFFF) << 2)
-                    for r in rows:
-                        scores[r["id"]] += r["weight"] * ((mnemonic in r["mnemonics"]) / 4 +
-                            (mnemonic == "lui" and (w & 65535) in r["lui"]) +
-                            (mnemonic == "jal" and any(re.search(c, n) for c in r["calls"] for n in symbols[target])))
-            rank = {r["id"]: r["rank"] for r in rows}
-            winner = min(scores, key=lambda key: (-scores[key], rank[key]), default=None)
-            result[group.name] = winner if winner and scores[winner] >= 1.0 else "unknown"
-        return result
 def sdk(snapshot: Snapshot) -> frozenset[str]:
     with effort.stage("infer.sdk"):
         path = snapshot.config.host.sdk_catalog
@@ -337,9 +313,9 @@ def plan(snapshot: Snapshot) -> Plan:
                                          lambda: pickle.dumps(_plan(snapshot))))
 def _plan(snapshot: Snapshot) -> Plan:
     base, inferred = snapshot.digest, groups(snapshot)
-    labels, identified = subsystems(snapshot, inferred), sdk(snapshot)
+    identified = sdk(snapshot)
     updated = {g.name: g if g.evidence in {"authored", "proven"} else replace(
-        g, subsystem=labels[g.name], sdk=bool(g.members) and all(
+        g, sdk=bool(g.members) and all(
             n in identified for n in g.members if snapshot.layout.members[n].kind == "function")) for g in inferred}
     updated |= {g.name: replace(g, members=live) for g in snapshot.layout.groups.values()  # data modules outlive it
                 if g.name not in updated and (live := tuple(n for n in g.members if n in snapshot.layout.members))

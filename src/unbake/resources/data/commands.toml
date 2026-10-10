@@ -81,11 +81,11 @@ params = [
 ]
 
 [command.report]
-help = "Progress per version, kind and subsystem; or the ordered work list."
+help = "Progress per version, kind and segment; or the ordered work list."
 handler = "report.run"
 params = [
   { name = "next", kind = "flag", type = "str", required = false, multiple = false, help = "print the ordered work list instead" },
   { name = "count", kind = "option", type = "int", required = false, multiple = false, help = "work items to list (with --next)" },
   { name = "shard", kind = "option", type = "str", required = false, multiple = false, help = "I/K: only items whose stable hash mod K is I" },
-  { name = "subsystem", kind = "option", type = "str", required = false, multiple = false, help = "only items of this subsystem id" },
+  { name = "segment", kind = "option", type = "str", required = false, multiple = false, help = "only items of this segment" },
 ]
