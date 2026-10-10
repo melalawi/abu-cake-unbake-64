@@ -427,32 +427,32 @@ def test_claims_let_a_function_unit_take_bytes_before_an_unowned_data_unit(monke
     assert order == ["src/f.c", "src/data.c"]
 
 
-def test_ownership_dispatches_each_holder_and_regroups_units_without_merging_paths(monkeypatch):
+def test_ownership_dispatches_one_keyed_job_per_unit_not_one_per_holder(monkeypatch):
     members = {"f": member("f", "function", ".text", ("a", "b", "c"))}
     snapshot = SimpleNamespace(config=None, versions={"a": None, "b": None, "c": None},
                                layout=LayoutMap(32, {}, members, {}, "d", (), {}))
     units = [unit("f"), replace(unit("f"), toolchain="other")]
-    batches = []
-    def run(cfg, label, function, jobs, key):
-        batches.append([(u.toolchain, v) for _, u, v in jobs])
-        return [{v: {"toolchain": u.toolchain}} for _, u, v in jobs]
-    monkeypatch.setattr(ownership.pool, "map", run)
-    assert ownership._collect(snapshot, units, "test") == [
-        {v: {"toolchain": u.toolchain} for v in ("a", "b", "c")} for u in units]
-    assert batches == [[(u.toolchain, v) for u in units for v in ("a", "b", "c")]]
-    assert ownership._collect(snapshot, units, "test", "b") == [
-        {"b": {"toolchain": u.toolchain}} for u in units]
-    assert batches[-1] == [(u.toolchain, "b") for u in units]
-
-
-def test_ownership_jobs_are_keyed_by_the_build_stamp_so_unchanged_units_dispatch_nothing(monkeypatch):
-    members = {"f": member("f", "function", ".text", ("a",))}
-    snapshot = SimpleNamespace(config=None, versions={"a": None}, layout=LayoutMap(32, {}, members, {}, "d", (), {}))
     seen = []
-    monkeypatch.setattr(ownership.pool, "map", lambda cfg, label, function, jobs, key: seen.append((function, key))
-                        or [{"a": {}} for _ in jobs])
-    ownership._collect(snapshot, [unit("f")], "test")
-    assert seen == [(ownership._job, ownership._job_key)]
-    monkeypatch.setattr(ownership.native, "stamp", lambda *item: "stamp")
+    def run(cfg, label, function, jobs, key):
+        seen.append((function, key, jobs))
+        return [{} for _ in jobs]
+    monkeypatch.setattr(ownership.pool, "map", run)
+    monkeypatch.setattr(ownership, "_derived", lambda snap, u, result: (snap, u))
+    ownership.derive_many(snapshot, units)
+    (function, key, jobs), = seen
+    assert (function, key) == (ownership._job, ownership._job_key) and len(jobs) == len(units)  # not 3 per unit
+    assert [job[2] for job in jobs] == [None, None]  # each job covers every holder of its unit
+
+
+def test_ownership_keys_name_the_stamp_of_every_holder_so_an_unchanged_unit_dispatches_nothing(monkeypatch):
+    members = {"f": member("f", "function", ".text", ("a", "b"))}
+    snapshot = SimpleNamespace(config=None, versions={"a": None, "b": None},
+                               layout=LayoutMap(32, {}, members, {}, "d", (), {}))
+    stamps = []
+    def stamp(snap, u, v):
+        stamps.append(v)
+        return f"stamp-{v}"
+    monkeypatch.setattr(ownership.native, "stamp", stamp)
     monkeypatch.setattr(ownership, "_index", lambda snap, version: INDEXES["a"])
-    assert ownership._job_key((snapshot, unit("f"), "a")) == ownership._job_key((snapshot, unit("f"), "a"))
+    assert ownership._job_key((snapshot, unit("f"), None)) == ownership._job_key((snapshot, unit("f"), None))
+    assert stamps == ["a", "b", "a", "b"]
