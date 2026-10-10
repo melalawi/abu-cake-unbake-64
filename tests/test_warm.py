@@ -6,7 +6,7 @@ import tomllib
 from unittest.mock import Mock
 
 from unbake import config as configuration
-from unbake import effort, layout, pool, store, view
+from unbake import effort, layout, pool, store, versions, view
 from unbake.contracts import digest
 
 
@@ -83,3 +83,15 @@ def test_the_capture_pins_follow_contents_not_modification_times(cfg) -> None:
     assert layout._pins(cfg, ["f.txt"]) == first  # rewritten identically: still warm
     (root / "f.txt").write_text("other")
     assert layout._pins(cfg, ["f.txt"]) != first
+
+
+def test_a_split_file_is_parsed_once_across_commands(cfg) -> None:
+    parses = []
+    def parse(data: bytes) -> list:
+        parses.append(1)
+        return [data]
+    cached = store.content(cfg).cached
+    for _ in range(2):
+        effort._memo.clear()
+        assert versions._parsed("document", b"x", parse, cached) == [b"x"]
+    assert len(parses) == 1

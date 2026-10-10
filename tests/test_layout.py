@@ -43,7 +43,7 @@ def scene(tmp_path, monkeypatch):
     config = Config(project, host, "config")
     blobs = {}
 
-    def rows(version, reader):
+    def rows(version, reader, cache=None):
         subs = yaml.safe_load(reader(version.split))["segments"][0]["subsegments"]
         return [(row[2], row[1], Placement(version.id, ".text" if row[1] in ("asm", "c") else ".data",
                 row[0], subs[i + 1][0], BASE + row[0] - 0x1000))
@@ -349,7 +349,7 @@ def test_boundary_merge_guards(scene, monkeypatch, guard):
     if guard == "gap":
         original = layout.version_data.rows
 
-        def rows(version, reader):
+        def rows(version, reader, cache=None):
             result = original(version, reader)
             name, state, placement = result[0]
             result[0] = (name, state, replace(placement, rom_end=placement.rom_end - 4))
@@ -433,7 +433,7 @@ def claim_scene(scene, monkeypatch, hand):
     lines = "".join(f'      - [0x{s:X}, rodata, "{n}"]\n' for n, s, _ in hand)
     text = f"segments:\n  - name: m\n    subsegments:\n{lines}      - [0x{hand[-1][2]:X}]\n".encode()
     rows = [(n, "rodata", Placement("a", ".rodata", s, e, 0x800C0000 + s - 0x1000)) for n, s, e in hand]
-    monkeypatch.setattr(layout.version_data, "rows", lambda v, reader: rows)
+    monkeypatch.setattr(layout.version_data, "rows", lambda v, reader, cache=None: rows)
     monkeypatch.setattr(layout.version_data, "section_of", lambda v, kind, where: ".rodata")
     return replace(snapshot, overlays={version.split: text}), version.split
 

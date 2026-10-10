@@ -23,11 +23,18 @@ from unbake import config as configuration
 from unbake import effort, pool, store, symbols
 from unbake.contracts import Config, Finding, Placement, Refusal, Version, digest
 
+_FILE = digest(Path(__file__).read_bytes())  # a cached parse is only as true as this module
+Cached = Callable[[str, str, Callable[[], bytes]], bytes]  # store.content(config).cached
 _SYMBOL = re.compile(r"^\s*([\w.$]+)\s*=\s*(0x[0-9A-Fa-f]+)\s*;")
 _ROMS: dict[str, tuple[Any, mmap.mmap]] = {}
-def _parsed(path: str, data: bytes, parse: Callable[[bytes], Any]) -> Any:
-    """What a parse of the file's bytes gives, once per command."""
-    return effort.memo((path, hashlib.sha256(data).hexdigest()), lambda: parse(data))
+def _parsed(path: str, data: bytes, parse: Callable[[bytes], Any], cache: Cached | None = None) -> Any:
+    """What a parse of the bytes gives: once per command, and with the content cache once per distinct content."""
+    sha = hashlib.sha256(data).hexdigest()
+    def produce() -> Any:
+        if cache is None:
+            return parse(data)
+        return pickle.loads(cache("parsed", digest((path, sha, _FILE)), lambda: pickle.dumps(parse(data), protocol=5)))
+    return effort.memo((path, sha), produce)
 def _entry(raw: Any) -> dict[str, Any]:
     """Normalise a splat segment or subsegment (list or mapping form) to a mapping."""
     if isinstance(raw, Mapping):
@@ -40,9 +47,9 @@ def _document(data: bytes, file: str) -> list[dict[str, Any]]:
         return [_entry(s) for s in document["segments"]]
     except (yaml.YAMLError, KeyError, TypeError, IndexError) as error:
         raise Refusal(Finding("version.split", reason=f"{file} is not a splat yaml: {error}", path=file)) from error
-def _segment_rows(data: bytes) -> tuple[tuple[str, int, int, int], ...]:
+def _segment_rows(data: bytes, cache: Cached | None = None) -> tuple[tuple[str, int, int, int], ...]:
     """(name, start, next start, vram or 0) per segment; the last segment ends at its own start (caller widens)."""
-    segments = _parsed("document", data, partial(_document, file="split"))
+    segments = _parsed("document", data, partial(_document, file="split"), cache)
     out = []
     for index, seg in enumerate(segments):
         end = segments[index + 1]["start"] if index + 1 < len(segments) else seg["start"]
@@ -111,7 +118,6 @@ def _generated(config: Config, vid: str, files: tuple[list[str], list[str]], par
             if name not in declared:
                 facts[name] = address
     return facts, frozenset(code)
-_FILE = digest(Path(__file__).read_bytes())
 def _generated_key(config: Config, vid: str, files: tuple[list[str], list[str]], declared: Mapping[str, int]) -> str:
     """What _generated reads: the auto symbol files, the spim contexts, each asm file's stat, the declared names."""
     root = config.project.root
@@ -132,7 +138,8 @@ def read(config: Config, reader: Callable[[str], bytes], only: Collection[str] |
          reuse: Mapping[str, Version] | None = None) -> dict[str, Version]:
     with effort.stage("versions.read"):
         root, table = config.project.root, config.project.version_files
-        named = symbols.load(reader, table, store.content(config).cached)
+        cached = store.content(config).cached
+        named = symbols.load(reader, table, cached)
         wanted = [v for v in table if only is None or v in only]
         key = digest((str(root), wanted, [(reader(table[v].split), reader(table[v].symbols)) for v in wanted],
                       reader(symbols.path())))  # files the command rewrites itself drop the memos (effort.forget)
@@ -160,7 +167,7 @@ def read(config: Config, reader: Callable[[str], bytes], only: Collection[str] |
             for vid in wanted:
                 facts, code, declared = built[vid]
                 row, rom = table[vid], root / table[vid].baserom
-                segments = _parsed(row.split, reader(row.split), _segment_rows)
+                segments = _parsed(row.split, reader(row.split), partial(_segment_rows, cache=cached))
                 if segments:  # the last segment runs to the end of the ROM
                     name, start, _, vram = segments[-1]
                     segments = (*segments[:-1], (name, start, max(start, rom.stat().st_size), vram))
@@ -174,9 +181,10 @@ def section_of(version: Version, kind: str, where: str) -> str:
     if section is None:
         raise Refusal(Finding("version.split", reason=f"{where} has unknown type {kind!r}", path=version.split))
     return section
-def rows(version: Version, reader: Callable[[str], bytes]) -> list[tuple[str, str, Placement]]:
+def rows(version: Version, reader: Callable[[str], bytes],
+         cache: Cached | None = None) -> list[tuple[str, str, Placement]]:
     with effort.stage("versions.rows") as span:
-        segments = _parsed("document", reader(version.split), partial(_document, file=version.split))
+        segments = _parsed("document", reader(version.split), partial(_document, file=version.split), cache)
         ends = {name: end for name, _, end, _ in version.segments}
         out: list[tuple[str, str, Placement]] = []
         for seg in segments:

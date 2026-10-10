@@ -26,8 +26,9 @@ def _schema(name: str) -> Json:
     if not node.is_file():
         raise Refusal(Finding("config.resource", f"schema {name} is not packaged", path=f"schemas/{name}.schema.json"))
     return json.loads(node.read_text(encoding="utf-8"))
+Cached = Callable[[str, str, Callable[[], bytes]], bytes]  # store.content(config).cached
 def toml(schema: str, data: bytes, file: str, key: str = "config.schema",
-         cache: Callable[[str, str, Callable[[], bytes]], bytes] | None = None) -> Json:
+         cache: Cached | None = None) -> Json:
     """The schema-valid document of TOML bytes; text that is not TOML is a finding under `key`. With a project, a
     document valid once is read back from its content cache: a megabyte table is parsed and
     checked once, not per run."""

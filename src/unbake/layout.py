@@ -27,6 +27,7 @@ from unbake.contracts import (
     Json,
     LayoutMap,
     Member,
+    Placement,
     Plan,
     Refusal,
     Snapshot,
@@ -117,6 +118,8 @@ def _overlay(snapshot: Snapshot, writes: Mapping[str, bytes | None]) -> Snapshot
             new = replace(new, versions=vers, layout=layout,
                           digest=digest((_content(snapshot.config, layout, vers, new.read), others)))
         return new
+def _rows(snapshot: Snapshot, version: Version) -> list[tuple[str, str, Placement]]:
+    return version_data.rows(version, snapshot.read, store.content(snapshot.config).cached)
 def load_map(config: Config, versions: Mapping[str, Version], text: bytes, reader: Callable[[str], bytes]) -> LayoutMap:
     with effort.stage("layout.load_map"):
         doc = configuration.toml("layout", text, "layout.toml", "layout.map", store.content(config).cached)
@@ -124,7 +127,7 @@ def load_map(config: Config, versions: Mapping[str, Version], text: bytes, reade
                   for r in doc["group"]}
         collected = {}
         for key in sorted(versions):
-            for name, state, placement in version_data.rows(versions[key], reader):
+            for name, state, placement in version_data.rows(versions[key], reader, store.content(config).cached):
                 collected.setdefault(name, []).append((state, placement))
         datum = _kinds()[2]
         members = {}
@@ -273,8 +276,8 @@ def claim_rows(snapshot: Snapshot, claims: Sequence[Claim]) -> dict[str, bytes]:
         writes = {}
         for vid in sorted({c.version for c in claims}):
             version, text = snapshot.versions[vid], snapshot.read(snapshot.versions[vid].split).decode()
-            rows = [[p.rom_start, p.rom_end, p.vram, n, k, n, True] for n, k, p in version_data.rows(
-                version, snapshot.read) if p.section in (".rodata", ".data")]
+            rows = [[p.rom_start, p.rom_end, p.vram, n, k, n, True] for n, k, p in _rows(snapshot, version)
+                    if p.section in (".rodata", ".data")]
             origin, names = {r[3]: (r[0], r[4], r[3]) for r in rows}, {r[3] for r in rows}
             changed = [_claim_row(version, rows, names, c) for c in sorted(
                 (c for c in claims if c.version == vid), key=lambda c: c.start)]
@@ -296,7 +299,7 @@ def _options(snapshot: Snapshot, member: str, source: bytes) -> list[tuple[UnitS
         holder_rows = {}
         for holder in item.holders():
             version = snapshot.versions[holder]
-            rows = version_data.rows(version, snapshot.read)
+            rows = _rows(snapshot, version)
             state = next((s for n, s, p in rows if n == member and p.section == ".text"), item.state)
             if state != assembly:
                 raise Refusal(Finding("layout.member", reason=f"{member} is {state}, not {assembly}", unit=member))
@@ -331,7 +334,7 @@ def _data_option(snapshot: Snapshot, member: str, source: bytes, kind: str) -> t
     raw = frozenset(t for row in sections.values() for t in row["types"] if not t.startswith("."))
     for holder in item.holders():
         version = snapshot.versions[holder]
-        state = next((s for n, s, _ in version_data.rows(version, snapshot.read) if n == member), item.state)
+        state = next((s for n, s, _ in _rows(snapshot, version) if n == member), item.state)
         if state not in raw:
             raise Refusal(Finding("layout.member", reason=f"{member} is {state} in {holder}, not extracted data",
                                   unit=member, versions=(holder,)))
@@ -357,7 +360,7 @@ def _data_group(snapshot: Snapshot, member: str) -> tuple[str, Group | None]:
         return layout.members[owner].group, None
     version = snapshot.versions[item.reference(snapshot.config.project.names_from)]
     section, run = next(p.section for p in item.placements if p.version == version.id), []
-    for row in sorted(version_data.rows(version, snapshot.read), key=lambda r: r[2].rom_start):
+    for row in sorted(_rows(snapshot, version), key=lambda r: r[2].rom_start):
         free = row[2].section == section and (row[0] == member or version_data.unowned(row[0]))
         if not (free and run and run[-1][2].rom_end == row[2].rom_start):
             if any(r[0] == member for r in run):
@@ -404,7 +407,7 @@ def _boundary(snapshot: Snapshot) -> tuple[Plan, Json]:
     protected = {row["name"] for row in snapshot.layout.authored}
     candidates, placements = {}, {}
     for holder, version in sorted(snapshot.versions.items()):
-        rows = version_data.rows(version, snapshot.read)
+        rows = _rows(snapshot, version)
         words, references = _decoded(snapshot, version, rows)
         text_rows = sorted((r for r in rows if r[2].section == ".text"), key=lambda r: r[2].rom_start)
         segment_starts = {start for _, start, _, _ in version.segments}
