@@ -495,10 +495,23 @@ def _boundary(snapshot: Snapshot) -> tuple[Plan, Json]:
         if name in table and drop and table[name].keys() <= {"kind"}:
             del table[name]
     landed = {m for u in snapshot.layout.units.values() for m in u.members}
+    data = {}  # the data rows as they will be: one that starts between words has its first bytes cut off
+    for holder, version in sorted(snapshot.versions.items()):
+        data[holder] = []
+        for name, state, p in _rows(snapshot, version):
+            gap = -p.vram % 4
+            data[holder].append((name, state, p))
+            if p.section in (".data", ".rodata") and version_data.unowned(name) and 0 < gap < p.rom_end - p.rom_start:
+                fresh = f"{version_data.section_of(version, state, name)[1:]}/unresolved/{p.vram + gap:08X}"
+                writes[version.split] = _edit(writes.get(version.split, snapshot.read(version.split)), name,
+                                              additions=((p.rom_start + gap, fresh),))
+                data[holder][-1:] = [(name, state, replace(p, rom_end=p.rom_start + gap)),
+                                     (fresh, state, replace(p, rom_start=p.rom_start + gap, vram=p.vram + gap))]
+                counts["align"] += 1
     reference, spelled = snapshot.config.project.names_from, defaultdict(list)  # one symbol names one data member
     for holder in sorted(snapshot.versions, key=lambda v: (v != reference, v)):
         at = {a: n for n, a in snapshot.versions[holder].symbols.items()}
-        for name, _, p in _rows(snapshot, snapshot.versions[holder]):
+        for name, _, p in data[holder]:
             if p.section in (".data", ".rodata") and (symbol := at.get(p.vram)):
                 spelled[symbol].append((holder, name))
     moves = {}
@@ -507,8 +520,7 @@ def _boundary(snapshot: Snapshot) -> tuple[Plan, Json]:
         held_by = snapshot.layout.members[keep].holders() if keep in landed else None
         moves.update({(h, n): keep for h, n in names
                       if n != keep and n not in landed and (held_by is None or h in held_by)})
-    now: dict[tuple[str, str], str] = {}
-    held = {h: {n for n, _, _ in _rows(snapshot, snapshot.versions[h])} for h in snapshot.versions}
+    held = {h: {n for n, _, _ in rows} for h, rows in data.items()}
     while step := [(h, n, k) for (h, n), k in moves.items() if k not in held[h]]:  # a row takes only a free name
         for holder, name, keep in step:
             held[holder] -= {name}
@@ -519,15 +531,6 @@ def _boundary(snapshot: Snapshot) -> tuple[Plan, Json]:
                 writes[split] = _edit(writes.get(split, snapshot.read(split)), name, rename=keep)
                 replacements[name] = (keep,)
                 counts["join"] += 1
-                now[holder, name] = keep
-    for holder, version in sorted(snapshot.versions.items()):  # words, pointers and tables start on a word
-        for name, state, p in _rows(snapshot, version):
-            name, gap = now.get((holder, name), name), -p.vram % 4
-            if p.section in (".data", ".rodata") and version_data.unowned(name) and 0 < gap < p.rom_end - p.rom_start:
-                fresh = f"{version_data.section_of(version, state, name)[1:]}/unresolved/{p.vram + gap:08X}"
-                writes[version.split] = _edit(writes.get(version.split, snapshot.read(version.split)), name,
-                                              additions=((p.rom_start + gap, fresh),))
-                counts["align"] += 1
     # the symbol files follow the table
     wanted = symbols.files(table, {v.id: v.symbols_file for v in snapshot.versions.values()})
     writes.update({path: text for path, text in wanted.items() if text != snapshot.read(path)})
