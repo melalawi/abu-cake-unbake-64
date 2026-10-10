@@ -434,7 +434,7 @@ def test_a_masked_jump_table_word_names_the_label_of_its_target(tmp_path):
              "    /* E1E2C 800E122C 0000000C */ .word 0x0000000C\nenddlabel jtbl_800DD1F8\n"
              "dlabel D_800E1254\n    /* E1E54 800E1254 00414E98 */ .word 0x00414E98\nenddlabel D_800E1254\n")
     (tmp_path / "t.s").write_text(table)
-    segments = [{"start": 0x1000, "vram": 0x80200400}, {"start": 0x400000}, {"start": 0x500000}]
+    segments = [{"start": 0x1000, "vram": 0x80200400}, {"start": 0x400000}, [0x500000]]
     build._label_tables(tmp_path, segments, 0x1FFFFFFF)
     text = (tmp_path / "t.s").read_text()
     assert ".word .Lauto_80414E54" in text and ".word 0x0000000C" in text and ".word 0x00414E98" in text

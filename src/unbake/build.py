@@ -13,7 +13,7 @@ from bisect import bisect_right
 from itertools import pairwise
 from pathlib import Path
 from string import Template
-from typing import cast
+from typing import Any, cast
 
 import yaml
 
@@ -306,11 +306,12 @@ def _publish(stage: Path, root: Path, owned: Path) -> None:
         store.write(target, source.read_bytes().replace(old, new))
     for stale in (p for p in (root / owned).rglob("*") if p.is_file() and p not in written):
         stale.unlink()
-def _label_tables(asm: Path, segments: list[Json], mask: int) -> None:
+def _label_tables(asm: Path, segments: list[Any], mask: int) -> None:
     """A jump table word that lies in a segment under the project's text mask names the label of its target, as the
     function's own assembly spells it, so a reader of the table needs no knowledge of the mask."""
-    spans = [((s["vram"] & mask), (s["vram"] & mask) + n["start"] - s["start"], s["vram"] & ~mask)
-             for s, n in pairwise(segments) if s.get("vram")]
+    start = lambda s: s["start"] if isinstance(s, dict) else s[0]  # noqa: E731  (a segment may be written as a list)
+    spans = [((s["vram"] & mask), (s["vram"] & mask) + start(n) - start(s), s["vram"] & ~mask)
+             for s, n in pairwise(segments) if isinstance(s, dict) and s.get("vram")]
     def label(word: re.Match[str]) -> str:
         value = int(word[2], 16)
         high = next((h for lo, hi, h in spans if lo <= value < hi), None)
