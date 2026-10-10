@@ -185,6 +185,7 @@ def asm_unit(snapshot: Snapshot, member: str, version: str) -> UnitSpec:
         if item is None or not any(p.version == version and p.section == ".text" for p in item.placements):
             raise Refusal(Finding("layout.member", reason="member has no text placement in this version",
                                   unit=member, versions=(version,)))
+        _grouped(item)
         config = snapshot.config
         path = version_data.asm_path(config, version, member).relative_to(config.project.root).as_posix()
         return UnitSpec(path, _kinds()[1], item.group, (member,), config.project.toolchain, {"add": [], "omit": []})
@@ -290,6 +291,10 @@ def claim_rows(snapshot: Snapshot, claims: Sequence[Claim]) -> dict[str, bytes]:
             if any(changed):
                 writes[version.split] = _claim_text(text, rows, origin).encode()
         return writes
+def _grouped(item: Member) -> None:
+    if not item.group:
+        raise Refusal(Finding("layout.member", reason=f"{item.name} belongs to no group", unit=item.name,
+                              action="run unbake setup"))
 def unit_options(snapshot: Snapshot, member: str, source: bytes) -> list[tuple[UnitSpec, dict[str, bytes | None]]]:
     return effort.memo(("unit_options", snapshot.digest, member, digest(source)),
                        lambda: _options(snapshot, member, source))
@@ -301,6 +306,7 @@ def _options(snapshot: Snapshot, member: str, source: bytes) -> list[tuple[UnitS
         compiled, assembly, datum = _kinds()
         if item.kind != "function":
             return [_data_option(snapshot, member, source, datum)]
+        _grouped(item)
         split_writes = {}
         holder_rows = {}
         for holder in item.holders():

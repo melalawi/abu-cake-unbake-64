@@ -180,15 +180,17 @@ def groups(snapshot: Snapshot) -> tuple[Group, ...]:
                     inserts[segment] += 1
                 else:
                     inserts[segment] = line.index(m) + 1
-        result = list(kept)
+        result, taken = list(kept), {g.name for g in kept}
         for segment in sorted(placed):
             for protected, run in groupby(placed[segment], key=lambda m: m.name in excluded):
                 if protected:
                     continue
                 for names, signals in _partition(list(run), evidence, cap):
                     first = _placement(snapshot, snapshot.layout.members[names[0]])
-                    result.append(Group(f"code_{first.vram:08X}", segment, names,
-                                        "inferred", signals, False))
+                    base = f"code_{first.vram:08X}"  # one address can open runs in two segments: names stay unique
+                    name = next(n for n in (base, *(f"{base}_{i}" for i in range(2, len(taken) + 3))) if n not in taken)
+                    taken.add(name)
+                    result.append(Group(name, segment, names, "inferred", signals, False))
         return tuple(result)
 def sdk(snapshot: Snapshot) -> frozenset[str]:
     with effort.stage("infer.sdk"):

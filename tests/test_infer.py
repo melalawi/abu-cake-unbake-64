@@ -107,6 +107,19 @@ def test_authored_group_kept_and_excluded_from_inference(tmp_path: Path) -> None
 
 
 @pytest.mark.usefixtures("toolchains")
+def test_every_function_gets_a_group_with_a_unique_name(tmp_path: Path) -> None:
+    taken = {"name": f"code_{vram(0x1010):08X}", "segment": "main", "members": ["f0"], "evidence": "authored",
+             "signals": [], "sdk": False}  # the name inference would give f1's run
+    snapshot = chain(tmp_path, [LEAF, LEAF, LEAF], groups=[taken])
+    result = infer.groups(snapshot)
+    assert sorted(m for g in result for m in g.members) == ["f0", "f1", "f2"]
+    assert len({g.name for g in result}) == len(result)
+    planned = infer.plan(snapshot)
+    value = layout.load_map(snapshot.config, snapshot.versions, planned.writes["layout.toml"], snapshot.read)
+    assert [n for n, m in value.members.items() if m.kind == "function" and not m.group] == []
+
+
+@pytest.mark.usefixtures("toolchains")
 def test_cap_limits_group_size(tmp_path: Path) -> None:
     snapshot = chain(tmp_path, [calls(1), calls(2), calls(3), LEAF])
     capped = replace(snapshot, layout=replace(snapshot.layout, cap=2))
