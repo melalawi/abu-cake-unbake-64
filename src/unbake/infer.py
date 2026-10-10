@@ -34,39 +34,87 @@ def _masked(code) -> bytes:
                            0xFFFFFFFF)).to_bytes(4, "big") for w, ins in code)
 def _segment(snapshot: Snapshot, p: Placement) -> str:
     return next(name for name, start, end, _ in snapshot.versions[p.version].segments if start <= p.rom_start < end)
-def _scan_job(item) -> list[tuple[str, frozenset[int], frozenset[str], bool]]:
-    """Per function of one chunk: the rodata addresses it loads, the functions it calls and whether padding ends it."""
+_WIDTH = {"lb": 1, "lbu": 1, "sb": 1, "lh": 2, "lhu": 2, "sh": 2, "lw": 4, "sw": 4, "lwc1": 4, "swc1": 4,
+          "ld": 8, "sd": 8, "ldc1": 8, "sdc1": 8}
+def _scan_job(item) -> list[tuple[str, frozenset[int], frozenset[str], bool, dict[str, list]]]:
+    """Per function of one chunk: the rodata addresses it loads, the functions it calls, whether padding ends it and
+    its usage: accesses (address, width, mnemonic, how, base), calls (callee, ((argument, value),)), argument
+    accesses (argument, offset, width) and steps (base address or "aN", constant) of incremented registers."""
     snapshot, version, rows, addresses, spans = item
     gp = snapshot.versions[version].symbols.get("_gp")
     out = []
     for name, p in rows:
         code = _code(snapshot, p)
         registers = {0: 0, **({28: gp} if gp is not None else {})}
+        tags = {28: "full"}  # "hi" after a lui, "full" for an address built on one; read only while a register is known
+        args, indexed, stale, pending, pending_target = {4 + n: (n, 0) for n in range(4)}, {}, set(), None, ""
         loads, callees = set(), set()
+        use: dict[str, set] = {"accesses": set(), "calls": set(), "args": set(), "steps": set()}
         for i, (w, ins) in enumerate(code):
             op, rs, rt, imm = w >> 26, (w >> 21) & 31, (w >> 16) & 31, w & 65535
-            mnemonic, address = ins.getOpcodeName(), None
+            mnemonic, address, signed = ins.getOpcodeName(), None, imm if imm < 32768 else imm - 65536
+            dest, width = (w >> 11) & 31 if op == 0 else rt, _WIDTH.get(mnemonic)
+            store = bool(width) and mnemonic[0] == "s"
+            if width and rs in registers and tags.get(rs) in {"hi", "full"}:
+                high = tags[rs] == "hi"
+                use["accesses"].add(((registers[rs] + signed) & 0xFFFFFFFF, width, mnemonic,
+                                     "abs" if high else "based", None if high else registers[rs]))
+            elif width and rs in indexed:
+                use["accesses"].add(((indexed[rs] + signed) & 0xFFFFFFFF, width, mnemonic, "indexed", indexed[rs]))
+            elif width and rs in args:
+                use["args"].add((args[rs][0], args[rs][1] + signed, width))
+            if store and rt in registers and tags.get(rt) == "full":
+                use["accesses"].add((registers[rt], 4, mnemonic, "taken", None))
+            full = rs in registers and tags.get(rs) == "full"
+            if mnemonic == "addiu" and rs == rt != 0 and (rs in args or full):
+                use["steps"].add((f"a{args[rs][0]}" if rs in args else registers[rs], signed))
+            moved = indexing = None
+            if op == 0 and w & 63 in {0x21, 0x25}:  # addu or or: a move, or a full address plus an index register
+                pairs = ((rs, rt), (rt, rs))
+                moved = next((args[r] for r, o in pairs if o == 0 and r in args), None)
+                indexing = next((registers[r] for r, o in pairs if tags.get(r) == "full" and r in registers
+                                 and o not in registers), None)
+            elif mnemonic == "addiu" and rs in args:
+                moved = (args[rs][0], args[rs][1] + signed)
+            if not (store or op in {1, 2, 3, 4, 5, 6, 7}):
+                args.pop(dest, None)
+                indexed.pop(dest, None)
+                stale.discard(dest)
+                if moved:
+                    args[dest] = moved
+                if indexing is not None:
+                    indexed[dest] = indexing
             target = addresses.get(((p.vram + i * 4) & 0xF0000000) | ((w & 0x03FFFFFF) << 2)) if op == 3 else None
             if target not in {None, name}:
                 callees.add(target)
             if mnemonic == "lui":
-                registers[rt] = imm << 16
+                registers[rt], tags[rt] = imm << 16, "hi"
             elif mnemonic in _IMMEDIATE and rs in registers:
                 address = ((registers[rs] | imm) if mnemonic == "ori" else
-                           registers[rs] + (imm if imm < 32768 else imm - 65536)) & 0xFFFFFFFF
+                           registers[rs] + signed) & 0xFFFFFFFF
                 if mnemonic in {"addiu", "ori"}:
+                    tags[rt] = "full" if tags.get(rs) in {"hi", "full"} else ""
                     registers[rt] = address
                 elif mnemonic.startswith("l"):
                     registers.pop(rt, None)
             elif op not in {2, 3, 4, 5, 6, 7}:
-                registers.pop((w >> 11) & 31 if op == 0 else rt, None)
+                registers.pop(dest, None)
             registers[0] = 0
             if address is not None and any(a <= address < b for a, b in spans):
                 loads.add(address)
+            if pending == i:  # the delay slot of a call has run: the argument registers are as the callee sees them
+                values = {n: registers[4 + n] for n in range(4) if 4 + n in registers and 4 + n not in stale}
+                use["calls"].add((pending_target, tuple(sorted(values.items()))))
+                use["accesses"].update((values[n], 0, "jal", "taken", None) for n in values
+                                       if tags.get(4 + n) == "full")
+                stale.update(range(4, 8))
+            if target is not None:
+                pending, pending_target = i + 1, target
         words = [w for w, _ in code]
         zeros = len(words) - next((i for i, w in enumerate(reversed(words)) if w), len(words))
         padding = len(words) - zeros - (1 if zeros and words[zeros - 1] == 0x03E00008 else 0)
-        out.append((name, frozenset(loads), frozenset(callees), bool(zeros and padding > 0)))
+        out.append((name, frozenset(loads), frozenset(callees), bool(zeros and padding > 0),
+                    {key: sorted(found, key=repr) for key, found in use.items()}))
     return out
 def _evidence(snapshot, functions, version, cap, scanned):
     held = [(m, p) for m in functions for p in m.placements if p.version == version and p.section == ".text"]
@@ -74,12 +122,12 @@ def _evidence(snapshot, functions, version, cap, scanned):
     order = {m.name: i for i, (m, _) in enumerate(held)}
     segments = {m.name: _segment(snapshot, p) for m, p in held}
     loads, callers = defaultdict(set), defaultdict(set)
-    for name, addresses, callees, _ in scanned:
+    for name, addresses, callees, *_ in scanned:
         for address in addresses:
             loads[address].add(name)
         for callee in callees:
             callers[callee].add(name)
-    padded = {name: pad for name, _, _, pad in scanned}
+    padded = {row[0]: row[3] for row in scanned}
     joins, cuts = [], set()
     for names, signal, reach in [(n, "rodata", cap) for n in loads.values() if len(n) > 1] + [
             (n | {callee}, "callee", min(cap, 16)) for callee, n in callers.items()]:
@@ -161,7 +209,7 @@ def groups(snapshot: Snapshot) -> tuple[Group, ...]:
                      and any(r.start <= p.rom_start < r.end for r in snapshot.config.project.resident[v])]
             chunks += [(snapshot, v, [(name, p) for _, name, p in rows[i:i + 128]], addresses, spans)
                        for i in range(0, len(rows), 128)]
-        done = pool.map(snapshot.config, "infer.evidence", _scan_job, chunks)
+        done = pool.map(snapshot.config, "infer.evidence", _scan_job, chunks, _scan_key)
         scanned = defaultdict(list)
         for chunk, rows in zip(chunks, done, strict=True):
             scanned[chunk[1]].extend(rows)
@@ -223,6 +271,10 @@ _PASSES = 3  # rows from claims, claims on those rows, and one pass that proves 
 def _mask_job(item) -> list[bytes]:
     snapshot, placements = item
     return [_masked(_code(snapshot, p)) for p in placements]
+def _scan_key(item) -> str:
+    snapshot, version, rows, addresses, spans = item
+    return digest((snapshot.versions[version].rom_sha256, snapshot.versions[version].symbols.get("_gp"), rows,
+                   addresses, spans, _CODE))
 def _mask_key(item) -> str:
     snapshot, placements = item
     return digest((placements, sorted({snapshot.versions[p.version].rom_sha256 for p in placements}), _CODE))

@@ -304,3 +304,23 @@ def masks(*functions: tuple[int, ...]) -> tuple[list[str], list[bytes]]:
 )
 def test_align_pairs_by_anchors_order_and_shared_words(left: tuple, right: tuple, expected: dict) -> None:
     assert infer._align((masks(*left), masks(*right))) == expected
+
+
+@pytest.mark.usefixtures("toolchains")
+def test_scan_records_accesses_calls_argument_accesses_and_steps(tmp_path: Path) -> None:
+    body = (0x8CAB0004, 0x24A5000C,  # lw $t3, 4($a1); addiu $a1, $a1, 0xC
+            0x3C018010, 0x24300100, 0x8E080010,  # lui/addiu $s0 = 0x80100100; lw $t0, 0x10($s0)
+            0x3C048011, 0x24840040,  # $a0 = 0x80110040
+            jal(vram(0x1000 + 4 * 15)), 0x24060100,  # jal f1 with $a2 = 0x100 in the delay slot
+            0x2610000C,  # addiu $s0, $s0, 0xC: a pointer stepped by 0xC
+            0x3C018012, 0x8C290020,  # lui $at; lw $t1, 0x20($at): an access with %lo on itself
+            JR_RA, NOP)
+    snapshot = chain(tmp_path, [body, LEAF])
+    placement = infer._placement(snapshot, snapshot.layout.members["f0"])
+    (_, loads, callees, _, use), = infer._scan_job((snapshot, "a", [("f0", placement)], {vram(0x1000 + 60): "f1"}, []))
+    assert callees == {"f1"} and not loads
+    assert use["accesses"] == [(0x80100110, 4, "lw", "based", 0x80100100), (0x80110040, 0, "jal", "taken", None),
+                               (0x80120020, 4, "lw", "abs", None)]
+    assert use["calls"] == [("f1", ((0, 0x80110040), (2, 0x100)))]
+    assert use["args"] == [(1, 4, 4)]
+    assert sorted(use["steps"], key=repr) == [("a1", 12), (0x80100100, 12)]

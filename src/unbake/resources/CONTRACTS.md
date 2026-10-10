@@ -119,7 +119,7 @@ Tracked generated files (repo.files): `Makefile`, `versions/<v>/symbols.ld`, `ve
 - deathwatch: 6
 - view: 137
 - layout: 380
-- infer: 420
+- infer: 470
 - ownership: 330
 - types: 150
 - native: 210
