@@ -16,7 +16,6 @@ from unbake import adapters, effort, pool, store
 from unbake import config as configuration
 from unbake.contracts import Finding, Recipe, Refusal, Snapshot, SourceView, UnitSpec, digest
 
-_CODE = digest(Path(__file__).read_bytes())  # a view is only as true as the dependency rules that pinned it
 
 def _sha(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
@@ -132,7 +131,7 @@ def get(snapshot: Snapshot, unit: UnitSpec, version: str, recipe: Recipe, *, lin
             raise Refusal(Finding("preprocess.error", "Source file is missing.", path=unit.path)) from None
         # every file the build can reach, pinned; an overlay holding one makes the snapshot itself the pin
         reads = closure(snapshot, unit, version)
-        key = digest((unit.path, source_hash, recipe.digest, version, config.project.version_macros[version], _CODE,
+        key = digest((unit.path, source_hash, recipe.digest, version, config.project.version_macros[version],
                       snapshot.digest if reads is None else reads))
         def produce() -> bytes:
             if overlay is not None:

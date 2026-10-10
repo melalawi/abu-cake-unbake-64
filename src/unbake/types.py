@@ -5,7 +5,6 @@ import pickle
 import re
 from bisect import bisect_right
 from collections import defaultdict
-from pathlib import Path
 from typing import Any
 
 from unbake import config, effort, headers, infer, store
@@ -29,7 +28,6 @@ def _dump(doc):  # inline tables written directly: the document is megabytes and
     return ("\n".join(lines) + "\n").encode()
 _KEYWORDS = frozenset(("extern", "const", "volatile", "unsigned", "signed", "char", "short", "int", "long", "float",
                        "double", "void", "struct", "union", "enum"))
-_CODE = digest([Path(f).read_bytes() for f in (__file__, infer.__file__)])  # a cache is valid for its code only
 def scan(snapshot: Snapshot) -> bytes:
     """Setup's type map: globals from data placements, the prototypes and type definitions the headers declare
     (authored) and the landed definitions. Cached on the inputs it reads."""
@@ -39,7 +37,7 @@ def scan(snapshot: Snapshot) -> bytes:
         except FileNotFoundError:
             load(snapshot)  # refuses by name
             raise
-        key = digest((snapshot.layout.digest, snapshot.config.project.names_from, current, _CODE,
+        key = digest((snapshot.layout.digest, snapshot.config.project.names_from, current,
                       [(p, digest(snapshot.read(p))) for p in headers.sources(snapshot)],
                       [(p, digest(snapshot.read(p))) for p in headers.sources(snapshot, "src", ".c")]))
         return store.cached(snapshot.config, "types-scan", key, lambda: _scan(snapshot))
@@ -81,7 +79,7 @@ def _tables(snapshot: Snapshot, version: str) -> tuple[dict[str, Json], dict[int
             for address, width, _, how, base in use["accesses"]:
                 readers[address].append((name, how, width, base))
         return pickle.dumps((uses, dict(readers)))
-    key = digest((snapshot.layout.digest, snapshot.versions[version].rom_sha256, version, _CODE))
+    key = digest((snapshot.layout.digest, snapshot.versions[version].rom_sha256, version))
     found = pickle.loads(store.cached(snapshot.config, "usage", key, produce))
     return found  # type: ignore[no-any-return]
 def _spans(use: Json) -> list[list[int]]:

@@ -240,7 +240,7 @@ def test_dependency_order_and_cache_keys(lane):
             (lane.unit.path, "include/active.h", "include/z.h")]
     reads = view.closure(lane.snapshot, lane.unit, "a")  # what the build can reach, pinned: the one key
     key = digest((lane.unit.path, _sha(lane.snapshot.read(lane.unit.path)), lane.recipe.digest, "a",
-                  lane.snapshot.config.project.version_macros["a"], view._CODE, reads))
+                  lane.snapshot.config.project.version_macros["a"], reads))
     assert result.dependencies == tuple(deps)
     assert result.key == key
     assert json.loads(lane.cache["view", key]) == {"text": lane.text, "deps": [list(row) for row in deps]}

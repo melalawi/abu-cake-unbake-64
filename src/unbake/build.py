@@ -191,13 +191,12 @@ def _unit_rules(snapshot: Snapshot, unit: UnitSpec, version: str) -> str:
         outputs=" ".join(outputs), dependencies=" ".join(dependencies),
         commands=" && ".join(commands), rom=f"build/{version}/{project.name}.z64", patches=" ".join(patches))
     return text.replace(_TAG, digest(text)[:12])
-_CODE = digest([Path(m.__file__).read_bytes() for m in (adapters, native, recipes)] + [Path(__file__).read_bytes()])
 def _unit_key(item) -> str:
     """A unit's rules read its own rows, text, headers and recipe, never another unit's: one changed unit, one key."""
     snapshot, unit = item
     context = effort.memo(("unit-rules", snapshot.config.digest), lambda: digest((
         snapshot.config.project, configuration.load_resource("toolchains.toml"),
-        configuration.load_resource("units.toml"), configuration.template("unit.mk.in"), _CODE)))
+        configuration.load_resource("units.toml"), configuration.template("unit.mk.in"))))
     headers = [_headers(snapshot, unit, v) for v in _versions(snapshot, unit)]
     return digest((unit, [snapshot.layout.members[n] for n in unit.members], headers, context))
 def _unit_job(item) -> list[str]:
