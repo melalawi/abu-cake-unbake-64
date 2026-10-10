@@ -582,11 +582,24 @@ def _joined(scene, landed_names):
             for k, v in snapshot.versions.items() if v.split in plan.writes}, counts
 
 
-def test_boundary_join_keeps_the_name_a_landed_unit_owns(scene):
-    names, counts = _joined(scene, ("rodata_b",))
-    assert names == {"a": ["func_80000400", "rodata_b"]} and counts["join"] == 1
+@pytest.mark.parametrize("landed", [("rodata_a",), ("rodata_b",)])
+def test_boundary_join_never_gives_a_landed_member_another_version(scene, landed):
+    names, counts = _joined(scene, landed)
+    assert names == {} and counts["join"] == 0
 
 
 def test_boundary_join_never_renames_a_row_between_two_landed_names(scene):
     names, counts = _joined(scene, ("rodata_a", "rodata_b"))
     assert names == {} and counts["join"] == 0
+
+
+def test_boundary_splits_an_unowned_data_row_that_starts_between_words(scene, monkeypatch):
+    monkeypatch.setattr(layout.symbols, "edit", lambda snapshot: {})
+    snapshot = scene((("func_80000400", "asm", RETURN), ("rodata/unresolved/80000408", "data", (1, 2, 3))))
+    for vid in ("a", "b"):
+        path = snapshot.config.project.root / f"versions/{vid}/Game.yaml"
+        path.write_text(path.read_text().replace("0x1008", "0x1009"))
+    plan, counts = layout.boundary_plan(snapshot)
+    rows = [r[:3] for r in yaml.safe_load(plan.writes["versions/a/Game.yaml"])["segments"][0]["subsegments"][:-1]]
+    assert counts["align"] == 2 and rows[1:] == [[0x1009, "data", "rodata/unresolved/80000408"],
+                                                 [0x100C, "data", "data/unresolved/8000040C"]]
