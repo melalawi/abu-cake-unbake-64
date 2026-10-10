@@ -547,3 +547,9 @@ def test_data_named_for_its_function_joins_that_functions_module(scene):
     snapshot = _ungrouped_data(scene, entries)
     unit, landed = _land_data(snapshot, "rodata/func_80000400/80000408")
     assert unit.group == "grp" and landed.layout.groups == snapshot.layout.groups
+
+
+def test_unit_options_keeps_the_signature_recipe_calls() -> None:
+    import inspect
+    assert str(inspect.signature(layout.unit_options)) == (
+        "(snapshot: 'Snapshot', member: 'str', source: 'bytes') -> 'list[tuple[UnitSpec, dict[str, bytes | None]]]'")
