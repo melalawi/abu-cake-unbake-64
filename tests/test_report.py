@@ -167,6 +167,7 @@ def test_items_order_size_then_address(snapshot_factory):
     assert [r["member"] for r in rows] == ["sdk_creative", "large", "a_tie", "z_tie", "late",
                                            "creative", "fuzzy", "tool"]  # biggest first, sub-16-byte fragments last
     assert {r["segment"] for r in rows} == {"sdk", "math"}
+    assert all(r["member"] and r["member"] in snapshot.layout.members for r in rows)
     assert all(set(r) == {"member", "kind", "segment", "size", "address"} for r in rows)
     assert [r["member"] for r in report.items(snapshot, {"segment": "sdk"})] == ["sdk_creative"]
 
