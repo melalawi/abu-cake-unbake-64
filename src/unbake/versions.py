@@ -22,6 +22,7 @@ from unbake import config as configuration
 from unbake import effort, pool, store, symbols
 from unbake.contracts import Config, Finding, Placement, Refusal, Version, digest
 
+_FILE = digest(Path(__file__).read_bytes())  # a cached parse is only as true as this module
 Cached = Callable[[str, str, Callable[[], bytes]], bytes]  # store.content(config).cached
 _SYMBOL = re.compile(r"^\s*([\w.$]+)\s*=\s*(0x[0-9A-Fa-f]+)\s*;")
 _ROMS: dict[str, tuple[Any, mmap.mmap]] = {}
@@ -31,7 +32,7 @@ def _parsed(path: str, data: bytes, parse: Callable[[bytes], Any], cache: Cached
     def produce() -> Any:
         if cache is None:
             return parse(data)
-        return pickle.loads(cache("parsed", digest((path, sha)), lambda: pickle.dumps(parse(data), protocol=5)))
+        return pickle.loads(cache("parsed", digest((path, sha, _FILE)), lambda: pickle.dumps(parse(data), protocol=5)))
     return effort.memo((path, sha), produce)
 def _entry(raw: Any) -> dict[str, Any]:
     """Normalise a splat segment or subsegment (list or mapping form) to a mapping."""
@@ -120,7 +121,7 @@ def _generated_key(config: Config, vid: str, files: tuple[list[str], list[str]],
     root = config.project.root
     contexts = sorted((root / ".unbake" / "symbols" / vid).glob("spim_context*.csv"))
     return digest((vid, [(p, (root / p).read_bytes()) for p in files[0]], [p.read_bytes() for p in contexts],
-                   [_asm_key((str(root), rel)) for rel in files[1]], declared))
+                   [_asm_key((str(root), rel)) for rel in files[1]], declared, _FILE))
 def unowned(name: str) -> bool:  # a data row no function has claimed
     return re.match(r"\w+/unresolved/", name) is not None
 def facts_digest(version: Version) -> str:

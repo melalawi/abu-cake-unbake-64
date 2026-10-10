@@ -105,7 +105,7 @@ class _Pickler(pickle.Pickler):
     def persistent_id(self, obj: Any) -> tuple | None:
         if isinstance(obj, Snapshot):
             key = hashlib.sha256((str(obj.config.project.root) + obj.digest).encode()).hexdigest()
-            if key not in _STORED and ("snapshot", key) not in store.content(obj.config):
+            if key not in _STORED and f"snapshot:{key}" not in store.content(obj.config)._cache:
                 store.put(obj.config, "snapshot", key, pickle.dumps(obj, protocol=5))
             _STORED.add(key)
             return ("snapshot", key, obj.config)

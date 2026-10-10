@@ -9,6 +9,7 @@ from collections import Counter, defaultdict
 from collections.abc import Sequence
 from dataclasses import replace
 from itertools import groupby, pairwise
+from pathlib import Path
 from typing import Any
 
 import rabbitizer
@@ -281,11 +282,12 @@ def sdk(snapshot: Snapshot) -> frozenset[str]:
                 found.add(m.name)
         return frozenset(found)
 # cached results are only valid for the code that made them
+_CODE = digest([Path(f).read_bytes() for f in (__file__, ownership.__file__)])
 _PASSES = 3  # rows from claims, claims on those rows, and one pass that proves they agree
 def _scan_key(item) -> str:
     snapshot, version, rows, addresses, spans = item
     return digest((snapshot.versions[version].rom_sha256, snapshot.versions[version].symbols.get("_gp"), rows,
-                   addresses, spans, [_asm(snapshot, version, n) for n, _ in rows]))
+                   addresses, spans, [_asm(snapshot, version, n) for n, _ in rows], _CODE))
 def _masks(snapshot: Snapshot, wanted) -> dict[str, tuple[list[str], list[bytes]]]:
     return {v: ([r[0] for r in rows], [r[4]["mask"] for r in rows])
             for v, rows in scan(snapshot).items() if v in wanted}
@@ -366,7 +368,7 @@ def _tree(snapshot: Snapshot) -> str:
                    for place in ("src", "include") for p in sorted((root / place).rglob("*")) if p.is_file()])
 def plan(snapshot: Snapshot) -> Plan:
     with effort.stage("infer.plan"):
-        key = digest((snapshot.digest, _tree(snapshot)))
+        key = digest((snapshot.digest, _CODE, _tree(snapshot)))
         return pickle.loads(store.cached(snapshot.config, "infer", key,
                                          lambda: pickle.dumps(_plan(snapshot))))
 def _plan(snapshot: Snapshot) -> Plan:
@@ -412,7 +414,7 @@ def _plan(snapshot: Snapshot) -> Plan:
     return Plan("layout", base, writes, (), (), debt, message, digest((base, writes, message)))
 
 def _evidence_key(item) -> str:
-    return native.stamp(*item)
+    return digest((native.stamp(*item), _CODE))  # everything the unit's build and the ROM text it reads are
 def _evidence_job(item) -> dict[str, tuple[set[int], bool]]:
     snapshot, unit, version = item
     members, record = snapshot.layout.members, snapshot.versions[version]

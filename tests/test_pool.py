@@ -10,6 +10,7 @@ from concurrent.futures.process import BrokenProcessPool
 from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from test_effort import _config
@@ -355,11 +356,11 @@ def test_snapshot_transport_restores_an_evicted_entry(tmp_path, monkeypatch):
     from unbake.contracts import LayoutMap, Snapshot
     snapshot = Snapshot(config, "commit", LayoutMap(1, {}, {}, {}, "layout", (), {}), {}, {}, "snapshot")
     kept, writes = {}, []
-    monkeypatch.setattr(pool.store, "content", lambda cfg: kept)
+    monkeypatch.setattr(pool.store, "content", lambda cfg: SimpleNamespace(_cache=kept))
     monkeypatch.setattr(pool.store, "get", lambda *args: pytest.fail("presence must not read snapshot bytes"))
     def put(cfg, kind, key, value):
         writes.append(key)
-        kept[kind, key] = value
+        kept[f"{kind}:{key}"] = value
     monkeypatch.setattr(pool.store, "put", put)
     pickler = pool._Pickler(io.BytesIO(), protocol=5)
     first = pickler.persistent_id(snapshot)

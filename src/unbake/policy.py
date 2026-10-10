@@ -7,10 +7,13 @@ import re
 from bisect import bisect_left
 from collections.abc import Collection, Sequence
 from dataclasses import replace
+from pathlib import Path
 
 from unbake import config, effort, native, pool, recipes, store, types
 from unbake import view as _view
 from unbake.contracts import Finding, Snapshot, SourceView, UnitSpec, digest
+
+_CODE = digest(Path(__file__).read_bytes())
 
 
 def _numbered(text: str):
@@ -182,7 +185,7 @@ def _census_unit(item: tuple[Snapshot, UnitSpec]) -> tuple[Finding, ...]:
     text = snapshot.read(unit.path).decode()
     # evaluate reads the unit text and the active lines of the unit and its headers: other edits keep the verdict warm
     files = [unit.path, *(p for p, _ in source.dependencies if p.endswith(".h"))]
-    key = digest((text, sdk, config.load_resource("rules.toml"), [_active(source, p) for p in files]))
+    key = digest((text, sdk, config.load_resource("rules.toml"), _CODE, [_active(source, p) for p in files]))
     return pickle.loads(store.cached(snapshot.config, "census", key,
                                      lambda: pickle.dumps(evaluate(snapshot, unit.path, text, source, sdk))))
 def _census_warnings(item: tuple[Snapshot, UnitSpec]) -> tuple[Finding, ...]:

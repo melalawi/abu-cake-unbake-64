@@ -8,16 +8,18 @@ import os
 import pickle
 import re
 import struct
+import sys
 from collections import defaultdict
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import asdict, replace
-from functools import partial
+from functools import cache, partial
 from itertools import chain, pairwise
+from pathlib import Path
 from typing import Any, cast
 
 from unbake import config as configuration
-from unbake import effort, process, store, symbols
+from unbake import contracts, effort, process, store, symbols
 from unbake import versions as version_data
 from unbake.contracts import (
     Claim,
@@ -45,10 +47,13 @@ def _kinds() -> tuple[str, str, str]:
     assembly = next(k for k, r in rows.items() if r["credit"] == "code" and "compile" not in r["phases"])
     datum = next(k for k, r in rows.items() if r["credit"] != "code" and "compile" in r["phases"])
     return compiled, assembly, datum
+@cache
+def _code() -> str:  # the capture is pickled objects of these modules, so their source is part of its key
+    return digest([Path(m.__file__).read_bytes() for m in (contracts, sys.modules[__name__], version_data)])
 def _content(config: Config, layout: LayoutMap, vers: Mapping[str, Version], read: Callable[[str], bytes]) -> str:
     """What a snapshot is: the map, the version files, the symbol table and the facts read from extraction. Two
     snapshots with equal content are equal, whichever way they were made (read from disk or proposed by a plan)."""
-    return digest((layout.digest, config.digest, read(symbols.path()),
+    return digest((layout.digest, config.digest, _code(), read(symbols.path()),
                    [(v.id, v.rom_sha256, read(v.split), read(v.symbols_file), version_data.facts_digest(v))
                     for v in sorted(vers.values(), key=lambda v: v.id)]))
 def _load(config: Config, key: str, produce: Callable[[], bytes]) -> tuple:
@@ -85,7 +90,7 @@ def capture(config: Config) -> Snapshot:
                          for p in config.project.root.glob(".unbake/symbols/*/*.csv"))
             pins = _pins(config, sorted(paths))
             # the root keeps copies of one project apart; not the commit: caches stay warm across setup's own
-            key = digest((str(config.project.root), config.digest, pins))
+            key = digest((str(config.project.root), config.digest, pins, _code()))
             def produce():
                 vers = version_data.read(config, reader)
                 return pickle.dumps((vers, load_map(config, vers, reader("layout.toml"), reader)))
@@ -411,7 +416,7 @@ def boundary_plan(snapshot: Snapshot) -> tuple[Plan, Json]:
                       snapshot.config.digest,
                       snapshot.read(symbols.path()),
                       [(v.id, v.rom_sha256, snapshot.read(v.split), version_data.facts_digest(v))
-                       for v in snapshot.versions.values()]))
+                       for v in snapshot.versions.values()], _code()))
         return pickle.loads(store.cached(snapshot.config, "boundary", key, lambda: pickle.dumps(_boundary(snapshot))))
 def _boundary(snapshot: Snapshot) -> tuple[Plan, Json]:
     assembly = _kinds()[1]

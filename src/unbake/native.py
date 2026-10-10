@@ -57,6 +57,7 @@ def sections(snapshot: Snapshot, unit: UnitSpec, version: str) -> tuple[Placemen
         output.append(Placement(version, section, first.rom_start, last.rom_end, vram,
                                 sum(p.size for p in placements) if section == ".bss" else 0))
     return tuple(output)
+_CODE = digest([Path(m.__file__).read_bytes() for m in (adapters, build, symptoms, versions, view)])
 def stamp(snapshot: Snapshot, unit: UnitSpec, version: str) -> str:
     """Everything a proof reads, named without building: unit, reachable files by content, rows, version facts and
     tools."""
@@ -67,7 +68,7 @@ def stamp(snapshot: Snapshot, unit: UnitSpec, version: str) -> str:
     return digest((replace(unit, withheld=()), reach, recipe.digest, _held(snapshot, unit, version),
                    [snapshot.layout.members[n].state for n in unit.members], record.rom_sha256,
                    versions.facts_digest(record), cfg.project.build, cfg.project.version_macros[version],
-                   tools, abucache.__version__))
+                   tools, abucache.__version__, _CODE))
 def _gaps(snapshot: Snapshot, unit: UnitSpec, version: str, recipe: Recipe,
           object_sha: str, missing: tuple[str, ...]) -> tuple[Proof, ...]:
     source_sha = sha256(snapshot.read(unit.path)).hexdigest()

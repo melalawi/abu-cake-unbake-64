@@ -14,14 +14,13 @@ import uuid
 from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
-from functools import cache
 from pathlib import Path
 from typing import cast
 
-from abucache.store import ContentCache
+from abucache.store import ContentCache, open_cache
 
 from unbake import effort, process
-from unbake.contracts import Config, Finding, Json, Refusal, digest
+from unbake.contracts import Config, Finding, Json, Refusal
 
 
 def write(path: Path, content: bytes) -> bool:
@@ -38,26 +37,9 @@ def write(path: Path, content: bytes) -> bool:
     part.replace(path)
     effort.forget("pin", "includes", "closure", "listing")  # the memoised reads of project files are stale now
     return True
-_PACKAGE = Path(__file__).parent
-CODE = digest([(p.relative_to(_PACKAGE).as_posix(), p.read_bytes()) for p in sorted(_PACKAGE.rglob('*'))
-                if p.is_file() and '__pycache__' not in p.parts])
-class _Content(ContentCache):
-    def cached(self, kind: str, key: str, produce: Callable[[], bytes]) -> bytes:
-        return super().cached(kind, f"{CODE}:{key}", produce)
-    def get(self, kind: str, key: str) -> bytes | None:
-        return super().get(kind, f"{CODE}:{key}")
-    def put(self, kind: str, key: str, value: bytes) -> None:
-        super().put(kind, f"{CODE}:{key}", value)
-    def put_many(self, items: Iterable[tuple[str, str, bytes]]) -> None:
-        super().put_many((kind, f"{CODE}:{key}", value) for kind, key, value in items)
-    def __contains__(self, item: tuple[str, str]) -> bool:
-        return f"{item[0]}:{CODE}:{item[1]}" in self._cache
-@cache
-def _content(directory: Path, limit: int) -> _Content:
-    return _Content(directory, limit, effort.count)
-def content(config: Config) -> _Content:
-    """The size-limited project cache, namespaced by installed package content for every kind."""
-    return _content(config.project.root / ".unbake" / "cache", config.host.cache_max_bytes)
+def content(config: Config) -> ContentCache:
+    """The project's content cache, in .unbake/cache, limited by the host's cache.max_bytes."""
+    return open_cache(config.project.root / ".unbake" / "cache", config.host.cache_max_bytes, effort.count)
 @contextmanager
 def _flock(path: Path, flags: int, *, wait: bool = True) -> Iterator[int | None]:
     """Hold the lock; a contended lock yields None when `wait` is false, else blocks and records the wait."""

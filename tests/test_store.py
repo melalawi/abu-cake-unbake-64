@@ -48,25 +48,6 @@ def test_cached_counts_and_put_overwrites(cfg: Config) -> None:
     assert effort.counters()["kind"] == (after[0] + 1, after[1])
 
 
-def test_all_content_entry_points_key_the_installed_code(cfg: Config, monkeypatch) -> None:
-    cache = store.content(cfg)
-    for code in ("code-a", "code-b"):
-        monkeypatch.setattr(store, "CODE", code)
-        assert cache.get("externs", "same") is None
-        assert ("externs", "same") not in cache
-        assert cache.cached("externs", "same", lambda value=code: value.encode()) == code.encode()
-        assert ("externs", "same") in cache
-        assert cache.get("externs", "same") == code.encode()
-        cache.put("single", "same", code.encode())
-        cache.put_many([("batch", "same", code.encode())])
-    monkeypatch.setattr(store, "CODE", "code-a")
-    assert cache.cached("externs", "same", lambda: pytest.fail("code-a must hit")) == b"code-a"
-    assert store.get(cfg, "single", "same") == b"code-a"
-    assert store.get(cfg, "batch", "same") == b"code-a"
-    assert set(cache._cache) == {f"{kind}:{code}:same" for kind in ("externs", "single", "batch")
-                               for code in ("code-a", "code-b")}
-
-
 def test_append_rows_roundtrip(cfg: Config) -> None:
     store.append(cfg, "attempts/f", {"b": 1, "a": "é"})
     store.append(cfg, "attempts/f", {"n": [1, 2]})
