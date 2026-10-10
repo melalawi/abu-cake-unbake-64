@@ -10,6 +10,7 @@ import resource
 import shutil
 import signal
 import tempfile
+import threading
 import time
 import traceback
 from collections.abc import Callable, Sequence
@@ -28,6 +29,7 @@ _AHEAD = 3  # chunks queued per worker, so a worker that finishes one starts the
 _executor: ProcessPoolExecutor | None = None
 _host_digest: str | None = None
 _in_worker = False
+_creating = threading.Lock()
 def _init(limit: int) -> None:
     global _in_worker
     resource.setrlimit(resource.RLIMIT_DATA, (limit, limit))
@@ -54,20 +56,24 @@ def _drop_executor() -> None:
         executor.shutdown(wait=True, cancel_futures=True)
 def _get_executor(config: Config) -> ProcessPoolExecutor:
     global _executor, _host_digest
-    if _executor is not None and _host_digest != config.host.digest:
-        _drop_executor()
-    if _executor is None:
-        _short_socket_dir()
-        context = get_context("forkserver")
-        context.set_forkserver_preload(["unbake.deathwatch"])  # the server dies with this process, the workers with it
-        _executor = ProcessPoolExecutor(
-            max_workers=config.host.workers,
-            mp_context=context,
-            initializer=_init,
-            initargs=(config.host.memory_worker_bytes,),
-        )
-        _host_digest = config.host.digest
-    return _executor
+    held = _executor
+    if held is not None and _host_digest == config.host.digest:
+        return held
+    with _creating:  # two threads asking at once make one executor, not two
+        if _executor is not None and _host_digest != config.host.digest:
+            _drop_executor()
+        if _executor is None:
+            _short_socket_dir()
+            context = get_context("forkserver")
+            context.set_forkserver_preload(["unbake.deathwatch"])  # the server and the workers die with this process
+            _executor = ProcessPoolExecutor(
+                max_workers=config.host.workers,
+                mp_context=context,
+                initializer=_init,
+                initargs=(config.host.memory_worker_bytes,),
+            )
+            _host_digest = config.host.digest
+        return _executor
 def _job(function: Callable[[Any], Any], item: Any, floor: float) -> tuple[bool, Any, Json]:
     start_ns = time.monotonic_ns()
     before = resource.getrusage(resource.RUSAGE_SELF)

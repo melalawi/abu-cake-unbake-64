@@ -2,6 +2,8 @@
 import os
 import pickle
 import sys
+import threading
+import time
 from concurrent.futures import Future
 from concurrent.futures.process import BrokenProcessPool
 from dataclasses import replace
@@ -137,6 +139,25 @@ def test_executor_reuse_and_host_change(tmp_path, monkeypatch):
     assert second.kwargs["max_workers"] == config.host.workers
     assert second.kwargs["mp_context"].get_start_method() == "forkserver"
     assert second.kwargs["initargs"] == (config.host.memory_worker_bytes,)
+
+
+def test_threads_asking_at_once_create_one_executor(tmp_path, monkeypatch):
+    made = []
+    class Executor:
+        def __init__(self, **kwargs):
+            time.sleep(0.05)  # long enough for every other thread to arrive while this one is creating
+            made.append(self)
+        def shutdown(self, **kwargs):
+            pass
+    monkeypatch.setattr(pool, "ProcessPoolExecutor", Executor)
+    config = _config(tmp_path)
+    got = []
+    threads = [threading.Thread(target=lambda: got.append(pool._get_executor(config))) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert len(made) == 1 and got == made * 8
 
 
 def test_real_forkserver_map(tmp_path, monkeypatch):
