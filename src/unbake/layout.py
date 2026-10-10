@@ -9,6 +9,7 @@ import pickle
 import re
 import struct
 import sys
+from collections import defaultdict
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import asdict, replace
@@ -493,14 +494,17 @@ def _boundary(snapshot: Snapshot) -> tuple[Plan, Json]:
                 table.setdefault(new, {"kind": "function"})[holder] = p.vram + offset
         if name in table and drop and table[name].keys() <= {"kind"}:
             del table[name]
-    taken: dict[str, str] = {}
-    reference, moves = snapshot.config.project.names_from, {}  # one symbol names one data member
+    landed = {m for u in snapshot.layout.units.values() for m in u.members}
+    reference, spelled = snapshot.config.project.names_from, defaultdict(list)  # one symbol names one data member
     for holder in sorted(snapshot.versions, key=lambda v: (v != reference, v)):
         at = {a: n for n, a in snapshot.versions[holder].symbols.items()}
         for name, _, p in _rows(snapshot, snapshot.versions[holder]):
-            if p.section in (".data", ".rodata") and (symbol := at.get(p.vram)) and (
-                    keep := taken.setdefault(symbol, name)) != name:
-                moves[holder, name] = keep
+            if p.section in (".data", ".rodata") and (symbol := at.get(p.vram)):
+                spelled[symbol].append((holder, name))
+    moves = {}
+    for names in spelled.values():  # a landed name is authoritative: it is the one kept and is never renamed
+        keep = next((n for _, n in names if n in landed), names[0][1])
+        moves.update({(h, n): keep for h, n in names if n != keep and n not in landed})
     held = {h: {n for n, _, _ in _rows(snapshot, snapshot.versions[h])} for h in snapshot.versions}
     while step := [(h, n, k) for (h, n), k in moves.items() if k not in held[h]]:  # a row takes only a free name
         for holder, name, keep in step:
