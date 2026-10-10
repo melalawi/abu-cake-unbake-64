@@ -416,7 +416,7 @@ def boundary_plan(snapshot: Snapshot) -> tuple[Plan, Json]:
 def _boundary(snapshot: Snapshot) -> tuple[Plan, Json]:
     assembly = _kinds()[1]
     counts: Json = {rule: {"proposed": 0, "applied": 0, "withheld": 0} for rule in ("prelude", "split", "merge")}
-    counts["withheld_reasons"], counts["join"], counts["align"] = {}, 0, 0
+    counts["withheld_reasons"], counts["join"], counts["align"], counts["retype"] = {}, 0, 0, 0
     protected = {row["name"] for row in snapshot.layout.authored}
     candidates, placements = {}, {}
     for holder, version in sorted(snapshot.versions.items()):
@@ -498,16 +498,24 @@ def _boundary(snapshot: Snapshot) -> tuple[Plan, Json]:
     data: dict[str, list[tuple[str, str, Placement]]] = {}  # the rows as they will be, misaligned ones cut
     for holder, version in sorted(snapshot.versions.items()):
         data[holder] = []
+        tables = [a for n, a in version.symbols.items() if n.startswith("jtbl_") and n in table]
         for name, state, p in _rows(snapshot, version):
             gap = -p.vram % 4
+            cut = p.section in (".data", ".rodata") and version_data.unowned(name) and 0 < gap < p.size
+            retype = state == "data" and version_data.unowned(name) and any(p.vram <= a < p.vram + p.size
+                                                                              for a in tables)
+            state = "rodata" if retype else state  # only read-only data has its jump table words labelled
             data[holder].append((name, state, p))
-            if p.section in (".data", ".rodata") and version_data.unowned(name) and 0 < gap < p.rom_end - p.rom_start:
+            if cut or retype:
                 fresh = f"{version_data.section_of(version, state, name)[1:]}/unresolved/{p.vram + gap:08X}"
                 writes[version.split] = _edit(writes.get(version.split, snapshot.read(version.split)), name,
-                                              additions=((p.rom_start + gap, fresh),))
+                                              state=state if retype else None, types=frozenset({"data"}),
+                                              additions=((p.rom_start + gap, fresh),) if cut else ())
+            if cut:
                 data[holder][-1:] = [(name, state, replace(p, rom_end=p.rom_start + gap)),
                                      (fresh, state, replace(p, rom_start=p.rom_start + gap, vram=p.vram + gap))]
-                counts["align"] += 1
+            counts["align"] += cut
+            counts["retype"] += retype
     reference, spelled = snapshot.config.project.names_from, defaultdict[str, list[tuple[str, str]]](list)
     for holder in sorted(snapshot.versions, key=lambda v: (v != reference, v)):
         at = {a: n for n, a in snapshot.versions[holder].symbols.items()}
@@ -544,6 +552,6 @@ def _boundary(snapshot: Snapshot) -> tuple[Plan, Json]:
         for old, row in snapshot.layout.fuzzy.items():
             fuzzy.setdefault(expanded((old,))[0], {**row, "scores": {}})["scores"].update(row["scores"])
         writes["layout.toml"] = dump_map(replace(snapshot.layout, groups=groups, units=units, fuzzy=fuzzy))
-    message = f"layout: {applied + counts['join'] + counts['align']} boundary edits"
+    message = f"layout: {applied + counts['join'] + counts['align'] + counts['retype']} boundary edits"
     return Plan("layout", snapshot.digest, writes, (), (), (), message,
                 digest(("layout", snapshot.digest, writes, message))), counts

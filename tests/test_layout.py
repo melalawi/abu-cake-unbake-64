@@ -619,3 +619,13 @@ def test_boundary_does_not_join_rows_on_a_name_only_the_versions_generated(scene
     generated = {"D_auto_80000408": BASE + 8}
     snapshot = replace(snapshot, versions={k: replace(v, symbols=generated) for k, v in snapshot.versions.items()})
     assert layout.boundary_plan(snapshot)[1]["join"] == 0
+
+
+def test_boundary_types_an_unowned_data_row_holding_a_jump_table_as_read_only_data(scene, monkeypatch):
+    monkeypatch.setattr(layout.symbols, "edit", lambda snapshot: {"jtbl_80000408": {"kind": "data"}})
+    snapshot = scene((("func_80000400", "asm", RETURN), ("rodata/unresolved/80000408", "data", (1, 2, 3))))
+    snapshot = replace(snapshot, versions={k: replace(v, symbols={"jtbl_80000408": BASE + 8})
+                                           for k, v in snapshot.versions.items()})
+    plan, counts = layout.boundary_plan(snapshot)
+    rows = [r[:3] for r in yaml.safe_load(plan.writes["versions/a/Game.yaml"])["segments"][0]["subsegments"][:-1]]
+    assert counts["retype"] == 2 and rows[1] == [0x1008, "rodata", "rodata/unresolved/80000408"]
