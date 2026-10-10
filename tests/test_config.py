@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import fixture
+import psutil
 import pytest
 
 from unbake import config as configuration
@@ -58,10 +60,41 @@ def test_sentence_known() -> None:
 
 def test_host_auto_resolves(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(os, "sched_getaffinity", lambda pid: set(range(12)))
+    monkeypatch.setattr(configuration, "_cgroup_memory_max", lambda: "max")
+    monkeypatch.setattr(psutil, "virtual_memory", lambda: SimpleNamespace(total=64 << 30))
     loaded = configuration.load_host(fixture.host(tmp_path, **{"resources.cores": "auto", "resources.workers": "auto"}))
     assert (loaded.cores, loaded.workers) == (12, 12)
     for key in ("resources.cores", "resources.workers"):
         assert loaded.origins[key].note == "auto: os.sched_getaffinity -> 12"
+
+
+def _auto_host(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cpus: int, cgroup: str, total: int,
+               **extra: Any) -> Any:
+    monkeypatch.setattr(os, "sched_getaffinity", lambda pid: set(range(cpus)))
+    monkeypatch.setattr(configuration, "_cgroup_memory_max", lambda: cgroup)
+    monkeypatch.setattr(psutil, "virtual_memory", lambda: SimpleNamespace(total=total))
+    overrides = {"resources.cores": "auto", "resources.workers": "auto",
+                 "resources.memory_parent_bytes": 2 << 30, "resources.memory_worker_bytes": 1 << 30, **extra}
+    return configuration.load_host(fixture.host(tmp_path, **overrides))
+
+
+def test_host_auto_workers_memory_bound(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    loaded = _auto_host(tmp_path, monkeypatch, 16, str(12 << 30), 256 << 30)
+    assert (loaded.cores, loaded.workers) == (16, 10)
+    assert loaded.origins["resources.workers"].note == "auto: min(16 cpus, 10 by memory) -> 10"
+    assert loaded.origins["resources.cores"].note == "auto: os.sched_getaffinity -> 16"
+
+
+def test_host_auto_workers_cpu_bound(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    loaded = _auto_host(tmp_path, monkeypatch, 64, "max", 128 << 30)
+    assert (loaded.cores, loaded.workers) == (64, 64)
+    assert loaded.origins["resources.workers"].note == "auto: os.sched_getaffinity -> 64"
+
+
+def test_host_numeric_workers_untouched(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    loaded = _auto_host(tmp_path, monkeypatch, 16, str(4 << 30), 4 << 30, **{"resources.workers": 8})
+    assert loaded.workers == 8
+    assert not loaded.origins["resources.workers"].note
 
 
 def test_host_explicit_keeps_ints(tmp_path: Path) -> None:

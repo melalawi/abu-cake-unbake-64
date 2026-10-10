@@ -12,6 +12,7 @@ from importlib import resources
 from pathlib import Path
 from typing import Any
 
+import psutil  # type: ignore[import-untyped]
 from jsonschema import Draft202012Validator
 
 from unbake.contracts import Config, Finding, Host, Json, Origin, Project, Refusal, Resident, VersionFiles, digest
@@ -126,6 +127,12 @@ def _read(path: Path, file: str) -> tuple[dict[str, Any], str, dict[str, Origin]
     return document, sha, origins
 def _bad(file: str, key: str, reason: str, origins: dict[str, Origin]) -> Finding:
     return Finding("config.file", reason, path=f"{file}:{key}", origin=origins.get(key))
+def _cgroup_memory_max() -> str:
+    file = Path("/sys/fs/cgroup/memory.max")
+    return file.read_text(encoding="utf-8").strip() if file.is_file() else "max"
+def _usable_memory() -> int:
+    limit = _cgroup_memory_max()
+    return int(limit) if limit.isdigit() else psutil.virtual_memory().total
 def load_host(path: Path) -> Host:
     document, _, origins = _read(path, "host")
     problems: list[Finding] = []
@@ -158,8 +165,14 @@ def load_host(path: Path) -> Host:
         key, value = f"resources.{name}", res[name]
         if value == "auto":
             counts[name] = len(os.sched_getaffinity(0))
+            note = f"auto: os.sched_getaffinity -> {counts[name]}"
+            if name == "workers":
+                by_memory = max(1, (_usable_memory() - res["memory_parent_bytes"]) // res["memory_worker_bytes"])
+                if by_memory < counts[name]:
+                    note = f"auto: min({counts[name]} cpus, {by_memory} by memory) -> {by_memory}"
+                    counts[name] = by_memory
             old = origins[key]
-            origins[key] = Origin(key, old.file, old.sha256, note=f"auto: os.sched_getaffinity -> {counts[name]}")
+            origins[key] = Origin(key, old.file, old.sha256, note=note)
         else:
             counts[name] = value
     if counts["workers"] > counts["cores"]:
