@@ -57,13 +57,11 @@ def sections(snapshot: Snapshot, unit: UnitSpec, version: str) -> tuple[Placemen
         output.append(Placement(version, section, first.rom_start, last.rom_end, vram,
                                 sum(p.size for p in placements) if section == ".bss" else 0))
     return tuple(output)
-def stamp(snapshot: Snapshot, unit: UnitSpec, version: str) -> str | None:
-    """Everything a proof reads, named without building: unit, reachable files, rows, version facts and tools. None
-    when a build must answer (an overlay holds one of the files)."""
+def stamp(snapshot: Snapshot, unit: UnitSpec, version: str) -> str:
+    """Everything a proof reads, named without building: unit, reachable files by content, rows, version facts and
+    tools."""
     cfg, recipe = snapshot.config, recipes.resolve(snapshot.config, unit, {})
     reach, record = view.closure(snapshot, unit, version), snapshot.versions[version]
-    if reach is None:
-        return None
     tools = effort.memo(("tools", recipe.toolchain), lambda: (adapters.host_tools(cfg), adapters.tool_identity(
         cfg, recipe.toolchain)))
     return digest((replace(unit, withheld=()), reach, recipe.digest, _held(snapshot, unit, version),

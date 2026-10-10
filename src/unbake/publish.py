@@ -102,15 +102,6 @@ def _regressions(snapshot: Snapshot, gaps: tuple[Finding, ...], own: Sequence[st
                 path=head.path, unit=g.unit, versions=g.versions, missing=g.missing, symptoms=g.symptoms,
                 action=f"make the declaration agree with {head.path}, or change both"))
     return tuple(kept)
-def _consumers(snapshot: Snapshot, changed: Sequence[str]) -> tuple[str, ...]:
-    """Units whose include search can reach a changed header, including a header removed by the change set."""
-    if not changed:
-        return ()
-    def touched(unit: UnitSpec) -> bool:
-        recipe = recipes.resolve(snapshot.config, unit, {})
-        found, missing = view.headers(snapshot, unit, ("-Iinclude", "-Isrc", *recipe.cppflags))
-        return bool(set(changed) & {*found, *missing})
-    return tuple(u.path for u in snapshot.layout.units.values() if touched(u))
 def admit(snapshot: Snapshot, request: Json, partial: bool = False) -> tuple[UnitSpec, Snapshot, tuple[Proof, ...]]:
     with effort.stage("publish.admit"):
         with effort.stage("publish.admit.1"):
@@ -228,7 +219,7 @@ def _option_plan(snapshot: Snapshot, unit: UnitSpec, proposed: Snapshot, shared:
     group = proposed.layout.groups[unit.group]
     affected = {option.path, *extras.keys() & overlay.layout.units.keys()}
     edited = [p for p, data in writes.items() if p.endswith(".h") and data != snapshot.peek(p)]
-    affected.update(_consumers(overlay, edited))
+    affected.update(headers.consumers(overlay, edited))
     before, after = [], []
     for path, data in writes.items():
         if Path(path).suffix not in (".c", ".h"):

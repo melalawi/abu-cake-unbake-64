@@ -164,11 +164,10 @@ def _vram_of(index: tuple, offset: int) -> int:
     rows = index[1]
     i = bisect_right(rows, (offset, _WORD)) - 1
     return rows[i][4] + offset - rows[i][0]
-def _job_key(item: tuple[Snapshot, UnitSpec, str]) -> str | None:
+def _job_key(item: tuple[Snapshot, UnitSpec, str]) -> str:
     """The build and ROM rows of one unit holder."""
     snapshot, unit, version = item
-    stamp = native.stamp(snapshot, unit, version)
-    return None if stamp is None else digest((stamp, _index(snapshot, version)[4]))
+    return digest((native.stamp(snapshot, unit, version), _index(snapshot, version)[4]))
 def _job(item: tuple[Snapshot, UnitSpec, str]) -> dict[str, dict | str]:
     snapshot, unit, version = item
     cfg, recipe = snapshot.config, recipes.resolve(snapshot.config, unit, {})
@@ -351,7 +350,7 @@ def _derived(snapshot: Snapshot, unit: UnitSpec, result: dict[str, Any]) -> tupl
         snapshot = layout.overlay(snapshot, {**rows, "layout.toml": layout.dump_map(replace(snapshot.layout,
                                                                                           units=units))})
     return snapshot, owned
-def _stamp_key(item: tuple[Snapshot, UnitSpec, str]) -> str | None:
+def _stamp_key(item: tuple[Snapshot, UnitSpec, str]) -> str:
     return native.stamp(*item)
 def _exact_job(item: tuple[Snapshot, UnitSpec, str]) -> str:
     proofs = native.prove_job(item)

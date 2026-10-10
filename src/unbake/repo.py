@@ -199,7 +199,7 @@ def files(snapshot: Snapshot) -> dict[str, bytes]:
         return wanted
 def _extract_job(job):
     return build.extract(*job)
-def _prove_key(job: Any) -> str | None:
+def _prove_key(job: Any) -> str:
     return native.stamp(*job)
 def _prove(snapshot: Snapshot, versions) -> dict:
     owned = {m for unit in snapshot.layout.units.values() for m in unit.members}

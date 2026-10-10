@@ -193,12 +193,11 @@ def _census_warnings(item: tuple[Snapshot, UnitSpec]) -> tuple[Finding, ...]:
         return ()
     return (Finding("land.view-conversion", f"{len(found)} integer-pointer conversions the compiler reports",
                     path=unit.path, missing=found, action="type each variable as the pointer it holds"),)
-def _census_key(item: tuple[Snapshot, UnitSpec]) -> str | None:
+def _census_key(item: tuple[Snapshot, UnitSpec]) -> str:
     """Everything a build of the unit reads: warm while none of it changed, so the pool dispatches nothing."""
     snapshot, unit = item
     reads = _view.closure(snapshot, unit, _census_version(snapshot, unit))
-    return None if reads is None else digest((reads, snapshot.layout.groups[unit.group].sdk,
-                                              config.load_resource("rules.toml")))
+    return digest((reads, snapshot.layout.groups[unit.group].sdk, config.load_resource("rules.toml")))
 def _census_header(item: tuple[Snapshot, str, bool]) -> tuple[Finding, ...]:
     snapshot, path, sdk = item  # a header is judged by its text alone, so one verdict serves every unit
     return evaluate(snapshot, path, snapshot.read(path).decode(), None, sdk)
@@ -215,7 +214,7 @@ def census(snapshot: Snapshot) -> tuple[Finding, ...]:
                  and "compile" in kinds[unit.kind]["phases"]]
         unique, headers = {}, {}
         for _, unit in items:  # a header is judged once, as SDK only when every unit that reads it is
-            for path, _ in _view.closure(snapshot, unit, _census_version(snapshot, unit)) or ():
+            for path, _ in _view.closure(snapshot, unit, _census_version(snapshot, unit)):
                 if path.endswith(".h"):
                     headers[path] = headers.get(path, True) and snapshot.layout.groups[unit.group].sdk
         found = pool.gather(snapshot.config, [

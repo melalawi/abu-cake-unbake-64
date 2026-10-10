@@ -411,7 +411,7 @@ def _plan(snapshot: Snapshot) -> Plan:
     message = f"infer: {len(updated)} groups, {sdk_units} sdk units, {len(cut_writes)} files cut"
     return Plan("layout", base, writes, (), (), debt, message, digest((base, writes, message)))
 
-def _evidence_key(item) -> str | None:
+def _evidence_key(item) -> str:
     return native.stamp(*item)
 def _evidence_job(item) -> dict[str, tuple[set[int], bool]]:
     snapshot, unit, version = item

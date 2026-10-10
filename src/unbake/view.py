@@ -40,11 +40,11 @@ def _path(marker: str, root: Path, overlay: Path | None, real: bool = True) -> t
             return path.relative_to(base).as_posix(), True
     return str(path), False
 _DIRECTIVE = re.compile(rb'^[ \t]*(?:#[ \t]*include|\.include)[ \t]*([<"])([^>"\n]+)[>"]', re.M)
-def _directives(content: bytes) -> tuple[tuple[bytes, bytes], ...]:
+def directives(content: bytes) -> tuple[tuple[bytes, bytes], ...]:
     return tuple(_DIRECTIVE.findall(content))
 def _link_relative(overlay: Path, root: Path, path: str, content: bytes) -> None:
     """A quoted include is found beside the file naming it: link such files of the real tree into the overlay."""
-    for _, name in _directives(content):
+    for _, name in directives(content):
         relative = os.path.normpath(Path(path).parent / name.decode())
         real, target = root / relative, overlay / relative
         if not relative.startswith("..") and real.is_file() and not (target.exists() or target.is_symlink()):
@@ -63,7 +63,7 @@ def headers(snapshot: Snapshot, unit: UnitSpec, argv: Sequence[str]) -> tuple[tu
         """What one file includes, read and parsed once per snapshot."""
         def read() -> tuple[tuple[bytes, bytes], ...] | None:
             content = snapshot.peek(path)
-            return None if content is None else _directives(content)
+            return None if content is None else directives(content)
         return cast("tuple[tuple[bytes, bytes], ...] | None", effort.memo(("includes", snapshot.digest, path), read))
     dirs: dict[str, list[str]] = {"-iquote": [], "-I": [], "-isystem": []}
     forced: list[str] = []
@@ -95,16 +95,16 @@ def headers(snapshot: Snapshot, unit: UnitSpec, argv: Sequence[str]) -> tuple[tu
             quoted = delimiter == b'"'
             reach(raw.decode(), (os.path.dirname(path), *dirs["-iquote"], *angle) if quoted else angle, quoted)
     return tuple(sorted(found - {unit.path})), tuple(sorted(missing))
-def closure(snapshot: Snapshot, unit: UnitSpec, version: str) -> tuple[tuple[str, str], ...] | None:
-    """(path, pin) of the unit's source and every project file it can reach. None when an overlay holds one of them."""
+def closure(snapshot: Snapshot, unit: UnitSpec, version: str) -> tuple[tuple[str, str], ...]:
+    """(path, pin) of the unit's source and every project file it can reach, pinned by content as the snapshot reads it,
+    so two snapshots that give the unit the same files share every cache entry built from them."""
     return effort.memo(("closure", snapshot.digest, unit.path, version), lambda: _closure(snapshot, unit, version))
 def _search(snapshot: Snapshot, version: str) -> list[str]:
     cfg = snapshot.config
     macros = configuration.load_resource("repo.toml")["splat"]["options"]["generated_asm_macros_directory"]
     return ["-Iinclude", "-Isrc", "-I" + macros.format(version=version, name=cfg.project.name)]
-def _closure(snapshot: Snapshot, unit: UnitSpec, version: str) -> tuple[tuple[str, str], ...] | None:
-    names = [unit.path, *headers(snapshot, unit, _search(snapshot, version))[0]]
-    return None if snapshot.overlays.keys() & set(names) else tuple((n, _pin(snapshot, n)) for n in names)
+def _closure(snapshot: Snapshot, unit: UnitSpec, version: str) -> tuple[tuple[str, str], ...]:
+    return tuple((n, _pin(snapshot, n)) for n in [unit.path, *headers(snapshot, unit, _search(snapshot, version))[0]])
 def _lines(text: str, root: Path, overlay: Path | None, source: str):
     lines, files = [], {source}
     current, number = source, 1
@@ -124,15 +124,17 @@ def get(snapshot: Snapshot, unit: UnitSpec, version: str, recipe: Recipe, *, lin
     with effort.stage("view.get"):
         config = snapshot.config
         root = config.project.root.resolve()
-        overlay = root / "build" / "views" / snapshot.digest[:16] if snapshot.overlays else None
         try:
             source_hash = _sha(snapshot.read(unit.path))
         except FileNotFoundError:
             raise Refusal(Finding("preprocess.error", "Source file is missing.", path=unit.path)) from None
-        # every file the build can reach, pinned; an overlay holding one makes the snapshot itself the pin
+        # every file the build can reach, pinned; a view that reads an overlaid file is made in a directory named by
+        # that key, so every snapshot giving the unit the same files gets the same bytes
         reads = closure(snapshot, unit, version)
-        key = digest((unit.path, source_hash, recipe.digest, version, config.project.version_macros[version],
-                      snapshot.digest if reads is None else reads))
+        overlaid = bool(snapshot.overlays.keys() & {name for name, _ in reads})
+        key = digest((unit.path, source_hash, recipe.digest, version, config.project.version_macros[version], reads,
+                      overlaid))
+        overlay = root / "build" / "views" / key[:16] if overlaid else None
         def produce() -> bytes:
             if overlay is not None:
                 for path, content in snapshot.overlays.items():
@@ -146,7 +148,7 @@ def get(snapshot: Snapshot, unit: UnitSpec, version: str, recipe: Recipe, *, lin
             if overlay is not None:
                 include = [overlay / "include", include[0], overlay / "src", include[1]]
             source = (overlay if overlay is not None and unit.path in snapshot.overlays else root) / unit.path
-            work = root / "build" / "views" / snapshot.digest[:16] / ".work" / key
+            work = root / "build" / "views" / key[:16] / ".work"
             work.mkdir(parents=True, exist_ok=True)
             out = work / "view.i"
             toolchain = adapters.toolchain(config, recipe.toolchain)

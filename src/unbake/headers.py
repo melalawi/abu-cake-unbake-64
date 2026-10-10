@@ -1,6 +1,7 @@
 """Catalogue header declarations and fold candidate declarations into their owners."""
 
 import pickle
+import posixpath
 import re
 from collections import defaultdict
 from collections.abc import Collection
@@ -9,7 +10,7 @@ from copy import deepcopy
 from pycparser import CParser, c_ast, c_generator
 from pycparser.c_parser import ParseError
 
-from unbake import effort, pool, store, types
+from unbake import effort, pool, store, types, view
 from unbake.contracts import Finding, Refusal, Snapshot, SourceView, UnitSpec, digest
 
 
@@ -22,6 +23,33 @@ def sources(snapshot: Snapshot, place: str = 'include', suffix: str = '.h') -> l
     paths = {p.relative_to(root).as_posix() for p in (root / place).rglob('*' + suffix)}
     paths.update(p for p in snapshot.overlays if p.startswith(place + '/') and p.endswith(suffix))
     return sorted(p for p in paths if p not in snapshot.overlays or snapshot.overlays[p] is not None)
+
+def _quoted(content: bytes) -> tuple[str, ...]:
+    return tuple(name.decode(errors="replace") for delimiter, name in view.directives(content) if delimiter == b'"')
+def consumers(snapshot: Snapshot, changed: Collection[str]) -> tuple[str, ...]:
+    """Every unit, of any group, that includes a changed header directly or through other headers. A quote include
+    names a file beside the including one, else under include/ or src/; taking every one that exists
+    over-approximates. The include graph is one fact of the snapshot: each file is read once, however many units ask,
+    and its includes are kept by its content."""
+    if not changed:
+        return ()
+    def graph() -> dict[str, set[str]]:
+        known = {*sources(snapshot), *snapshot.layout.units, *changed}
+        included_by: dict[str, set[str]] = defaultdict(set)
+        for path in known:
+            content = snapshot.peek(path) or b""
+            for name in effort.memo(("quoted", digest(content)), lambda content=content: _quoted(content)):
+                for base in (posixpath.dirname(path), "include", "src"):
+                    if (target := posixpath.normpath(posixpath.join(base, name))) in known:
+                        included_by[target].add(path)
+        return included_by
+    included_by = effort.memo(("included-by", snapshot.digest, tuple(sorted(changed))), graph)
+    reached, todo = set(), list(changed)
+    while todo:
+        new = included_by.get(todo.pop(), set()) - reached
+        reached |= new
+        todo.extend(new)
+    return tuple(path for path in reached if path in snapshot.layout.units)
 
 def _statements(text):
     clean = re.sub(r'^\s*#.*$', lambda m: re.sub(r'[^\n]', ' ', m[0]), _blank(text), flags=re.M)
