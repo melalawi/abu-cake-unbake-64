@@ -94,7 +94,7 @@ def _file_job(item) -> dict:
     code = text.decode(errors='replace')
     defined = _DEFINITION.findall(_blank(code)) if source else []
     return {'declared': (_externs if source else _declared)(code), 'defined': defined,
-            'functions': _functions(code) if source else []}
+            'functions': _functions(code) if source else [], 'words': frozenset(re.findall(r'\w+', code))}
 def _file_key(item) -> str:
     return digest(item)  # the file bytes and how it is read
 
@@ -140,10 +140,9 @@ def _unnamed(spelled: str) -> str:
 def _normal(spelled: str) -> str:
     return ' '.join(re.sub(r'\b\w+\b', lambda w: _SYNONYMS.get(w[0], w[0]), spelled).split())
 
-def _consumers(snapshot: Snapshot, paths: list[str], name: str, rows: Collection[str]) -> int:
+def _consumers(words: list[frozenset[str]], paths: list[str], name: str, rows: Collection[str]) -> int:
     """The landed files, besides the ones that declare or define the name, that mention it."""
-    pattern = re.compile(rf'\b{re.escape(name)}\b')
-    return sum(1 for path in paths if path not in rows and pattern.search(snapshot.read(path).decode(errors='replace')))
+    return sum(1 for path, used in zip(paths, words, strict=True) if path not in rows and name in used)
 
 def disagreements(snapshot: Snapshot, defined: Collection[str] = ()) -> tuple[dict[str, str], list[Finding]]:
     """The one type each declared name has where every landed declaration of it agrees (and no source defines it),
@@ -154,7 +153,9 @@ def disagreements(snapshot: Snapshot, defined: Collection[str] = ()) -> tuple[di
         paths = [*sources(snapshot), *sources(snapshot, 'src', '.c')]
         found: dict[str, list[tuple[str, int, str]]] = {}
         owned, definitions = set(defined), {}
-        for path, scanned in zip(paths, _scanned(snapshot, paths), strict=True):
+        scans = _scanned(snapshot, paths)
+        words = [scanned['words'] for scanned in scans]
+        for path, scanned in zip(paths, scans, strict=True):
             owned.update(scanned['defined'])
             if not path.startswith('src/fuzzy/'):  # a fuzzy candidate is not landed
                 definitions.update({name: (path, line, text) for name, line, text in scanned['functions']})
@@ -172,7 +173,7 @@ def disagreements(snapshot: Snapshot, defined: Collection[str] = ()) -> tuple[di
                         'types.conflict', f"{name} is defined as {text} but declared another way", path=path, line=line,
                         unit=name, missing=shown, blocking=False, action=f"declare it as its definition in {path} does",
                         symptoms={'definition': {'path': path, 'line': line, 'signature': text},
-                                  'consumers': _consumers(snapshot, paths, name, {p for p, _, _ in rows} | {path})}))
+                                  'consumers': _consumers(words, paths, name, {p for p, _, _ in rows} | {path})}))
                 continue
             if name in owned:
                 continue
