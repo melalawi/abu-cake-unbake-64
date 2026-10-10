@@ -96,23 +96,6 @@ def finish(command: str, result: Json | None, findings: Sequence[Finding]) -> No
     if _stream is None:
         return
     lines = [finding(f) for f in sorted(findings, key=lambda f: not f.blocking)]
-    if result is not None:
-        feedback = result.get("feedback")
-        label = result.get("label", feedback.get("label") if feedback else None)
-        member = result.get("member", feedback.get("member") if feedback else "")
-        if label in ("CRACKED", "NEEDS CREATIVE"):
-            colour = "32" if label == "CRACKED" else "33"
-            rendered = f"\x1b[{colour}m{label}\x1b[0m" if _tty else label
-            lines.append(f"{member}: {rendered}")
-        if result.get("compile_error"):
-            lines.append(f"{member}: the draft does not compile: {result['compile_error'].splitlines()[0]}")
-        if feedback is not None:
-            lines.append(f"{member} ({feedback['subsystem']}): {feedback['score_before'] * 100:.1f}% -> "
-                         f"{feedback['score_after'] * 100:.1f}% ({feedback['outcome']})")
-            for hint in feedback["hints"]:
-                lines.append(f"  hint {hint['id']}: {hint['technique']}")
-                lines.extend(f"    because {key}={value}" for key, value in hint["because"].items())
-            lines.append(f"  next: {feedback['next']}")
     lines.extend(summary(effort.closed()))
     for line in lines:
         _stream.write(line + "\n")
