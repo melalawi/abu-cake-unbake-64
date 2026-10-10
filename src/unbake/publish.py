@@ -1,5 +1,4 @@
 """Admission, submission landing and withdrawal."""
-import json
 import posixpath
 import re
 from collections import defaultdict
@@ -9,7 +8,6 @@ from pathlib import Path
 
 from unbake import (
     compare,
-    crack,
     effort,
     headers,
     journal,
@@ -219,20 +217,6 @@ def plans(snapshot: Snapshot, unit: UnitSpec, proposed: Snapshot) -> list[Plan]:
             raise Refusal(*last or (Finding("land.request", "No publication layout option is available.",
                                             path=unit.path),))
         return result
-def _learned(snapshot, unit, member, note, plan):
-    attempts = [a for a in crack.history(snapshot.config, member) if a.outcome != "exact"]
-    facts = attempts[-1].symptoms if attempts else {}
-    group = snapshot.layout.groups.get(unit.group)
-    row = {"id": f"learned-{member}", "subsystem": group.subsystem if group else "unknown",
-           "detect": "", "match": {k: ({"eq": v} if isinstance(v, bool) else {"gte": v})
-                                   for k, v in facts.items() if k != "score" and v not in (False, 0)},
-           "technique": note, "example": "", "scope": "ordinary", "qualifier_effect": "none"}
-    configuration.validate("hint", row, "hints.jsonl")
-    writes = dict(plan.writes)
-    old = layout.overlay(snapshot, writes).peek("hints.jsonl") or b""
-    writes["hints.jsonl"] = old + (b"\n" if old and not old.endswith(b"\n") else b"") + (
-        json.dumps(row, sort_keys=True) + "\n").encode()
-    return _plan(plan.operation, snapshot, writes, plan.affected, plan.debt, plan.message)
 def land(config: Config, submission: Submission) -> Receipt:
     with effort.stage("publish.land"):
         snapshot = layout.capture(config)
@@ -250,8 +234,6 @@ def land(config: Config, submission: Submission) -> Receipt:
                 proofs, gaps = _proofs(layout.overlay(snapshot, plan.writes), plan.affected)
                 gaps = _regressions(snapshot, gaps, unit.members)
                 if not gaps:
-                    if submission.note:
-                        plan = _learned(snapshot, unit, member, submission.note, plan)
                     commit = journal.apply(config, plan, snapshot.commit)
                     return Receipt("publish", commit, plan.digest, proofs, len(plan.debt), effort.invocation())
             raise Refusal(*gaps)
