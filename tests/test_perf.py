@@ -85,8 +85,8 @@ def test_budget_flags_a_stage_that_closes_twice(cfg):
     assert not first.findings and [f.key for f in second.findings] == ["budget.repeated"]
 
 
-@pytest.mark.parametrize("tool", ["make", "permuter"])
-def test_process_refuses_a_parallel_tool_without_jobs(tmp_path, tool):
+def test_process_refuses_make_without_jobs(tmp_path):
+    tool = "make"
     executable = tmp_path / tool
     executable.write_text("#!/bin/sh\n")
     executable.chmod(0o755)

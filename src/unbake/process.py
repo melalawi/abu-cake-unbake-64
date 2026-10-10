@@ -111,7 +111,7 @@ def run(
             raise Refusal(Finding(
                 "native.missing_tool", reason="the tool is not an executable file", path=executable,
             ))
-        if Path(executable).name in ("make", "permuter") and "-j" not in [a[:2] for a in argv[1:]]:
+        if Path(executable).name == "make" and "-j" not in [a[:2] for a in argv[1:]]:
             raise Refusal(Finding("native.exit", reason=f"{Path(executable).name} runs only with -j from host.workers"))
         try:
             tmp.mkdir(parents=True, exist_ok=True)
