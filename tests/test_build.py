@@ -245,12 +245,28 @@ def test_unit_fragment_placeholders_and_dependencies(build_snapshot):
         assert f"# src/group.c ({v})" in text
         assert re.search(rf"build/{v}/src/group/\w{{12}}/text\.bin &: src/group.c versions/{v}/symbols.ld", text)
         rule = re.search(rf"build/{v}/src/group/\w{{12}}/text\.bin &:[^\n]*", text)[0]
-        assert rule.endswith(f"versions/{v}/symbols.ld $(wildcard include/*.h include/*/*.h) $(TOOLCHAIN_gcc_test)")
+        assert rule.endswith(f"versions/{v}/symbols.ld $(TOOLCHAIN_gcc_test)")
         assert f"-Iinclude -Isrc -Iasm/{v}/include" in text
         assert re.search(rf"build/{v}/fixture.z64: PATCHES \+= build/{v}/src/group/\w{{12}}/text.bin:4096", text)
     assert "'$(LD)'" in text and "n64link place" not in text.lower() and " place " not in text and "SUBALIGN(4)" in text
     assert "set-section-flags" not in text and "normal.o" not in text and "placed.o" not in text
     assert all("--rom" not in line and "--map" not in line for line in text.splitlines())
+
+
+def test_a_unit_depends_on_the_headers_it_can_reach_and_on_no_others(build_snapshot):
+    root = build_snapshot.config.project.root
+    for path, text in {"src/group.c": '#include "a.h"\n', "include/a.h": '#include "common/b.h"\n',
+                       "include/common/b.h": "", "include/other.h": ""}.items():
+        (root / path).parent.mkdir(parents=True, exist_ok=True)
+        (root / path).write_text(text)
+    rule = re.search(r"build/a/src/group/\w{12}/text\.bin &:[^\n]*", build.makefile(build_snapshot).decode())[0]
+    assert "src/group.c versions/a/symbols.ld include/a.h include/common/b.h $(TOOLCHAIN_gcc_test)" in rule
+    planned = {"include/other.h": b'#include "new.h"\n', "include/new.h": b""}
+    unrelated = replace(build_snapshot, overlays=planned, digest="unrelated")
+    assert build.makefile(unrelated) == build.makefile(build_snapshot)  # a header it never includes changes nothing
+    including = replace(build_snapshot, digest="including",
+                        overlays={**planned, "src/group.c": b'#include "a.h"\n#include "other.h"\n'})
+    assert "include/common/b.h include/new.h include/other.h" in build.makefile(including).decode()  # planned files count
 
 
 def test_symbols_ld_sorted(build_snapshot):

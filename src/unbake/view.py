@@ -73,6 +73,21 @@ def _reached(source: str, include: Sequence[str]) -> set[str]:
                 found.add(candidate)
                 pending.append(candidate)
     return found
+def headers(snapshot: Snapshot, unit: UnitSpec) -> tuple[str, ...]:
+    """The project files the unit's source can include, read through the snapshot so a planned file counts too."""
+    def text(path: str) -> bytes | None:
+        return cast("bytes | None", effort.memo(("includes", snapshot.digest, path), lambda: snapshot.peek(path)))
+    found, pending = {unit.path}, [unit.path]
+    while pending:
+        path = pending.pop()
+        for name in _INCLUDE.findall(text(path) or b""):
+            bases = (os.path.dirname(path), "include", "src")
+            options = (os.path.normpath(os.path.join(base, name.decode())) for base in bases)
+            candidate = next((c for c in options if text(c) is not None), None)
+            if candidate and candidate not in found:
+                found.add(candidate)
+                pending.append(candidate)
+    return tuple(sorted(found - {unit.path}))
 def closure(snapshot: Snapshot, unit: UnitSpec, version: str) -> tuple[tuple[str, str], ...] | None:
     """(path, pin) of the unit's source and every project file it can reach. None when an overlay holds one of them."""
     return effort.memo(("closure", snapshot.digest, unit.path, version), lambda: _closure(snapshot, unit, version))

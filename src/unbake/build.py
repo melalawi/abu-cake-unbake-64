@@ -14,7 +14,7 @@ from string import Template
 
 import yaml
 
-from unbake import adapters, effort, native, pool, process, recipes, store, symbols
+from unbake import adapters, effort, native, pool, process, recipes, store, symbols, view
 from unbake import config as configuration
 from unbake.contracts import Config, Finding, Json, NativeResult, Refusal, Snapshot, UnitSpec, digest
 
@@ -157,7 +157,7 @@ def _unit_rules(snapshot: Snapshot, unit: UnitSpec, version: str) -> str:
             else:
                 commands.append(f'test "$$(wc -c < {output})" -eq {placement.size}')
                 patches.append(f"{output}:{placement.rom_start}")
-    dependencies = [unit.path, f"versions/{version}/symbols.ld", "$(wildcard include/*.h include/*/*.h)"]
+    dependencies = [unit.path, f"versions/{version}/symbols.ld", *view.headers(snapshot, unit)]
     if "compile" in phases:
         dependencies.append(f"$(TOOLCHAIN_{key})")
     text = Template(configuration.template("unit.mk.in")).substitute(unit=unit.path, version=version,
@@ -166,12 +166,12 @@ def _unit_rules(snapshot: Snapshot, unit: UnitSpec, version: str) -> str:
     return text.replace(_TAG, digest(text)[:12])
 _CODE = digest([Path(m.__file__).read_bytes() for m in (adapters, native, recipes)] + [Path(__file__).read_bytes()])
 def _unit_key(item) -> str:
-    """A unit's rules read its own rows, text and recipe, never another unit's: one changed unit, one changed key."""
+    """A unit's rules read its own rows, text, headers and recipe, never another unit's: one changed unit, one key."""
     snapshot, unit = item
     context = effort.memo(("unit-rules", snapshot.config.digest), lambda: digest((
         snapshot.config.project, configuration.load_resource("toolchains.toml"),
         configuration.load_resource("units.toml"), configuration.template("unit.mk.in"), _CODE)))
-    return digest((unit, [snapshot.layout.members[n] for n in unit.members], context))
+    return digest((unit, [snapshot.layout.members[n] for n in unit.members], view.headers(snapshot, unit), context))
 def _unit_job(item) -> list[str]:
     snapshot, unit = item
     return [_unit_rules(snapshot, unit, v)
