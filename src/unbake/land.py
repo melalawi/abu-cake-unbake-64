@@ -53,7 +53,7 @@ def submit(config: Config, request: Json, unit: UnitSpec, proofs: Sequence[Proof
     """One submission. `extras` makes it a change set: project-relative path -> new text, landed with the source as one
     plan and one commit, every touched unit proved exact or the whole set refused. Only exact sets are submitted.
     `withhold` lets a single file whose proofs are exact in only some versions land as exact there, withheld in the
-    others; with no exact version it is refused."""
+    others; with no exact version it measures and reports as without the flag."""
     with effort.stage("land.submit"):
         member = request["function"] or unit.members[0]
         snapshot = layout.capture(config)
@@ -65,11 +65,7 @@ def submit(config: Config, request: Json, unit: UnitSpec, proofs: Sequence[Proof
                 and not extras):
             return None
         exact = {p.version for p in proofs if all(q.exact for q in proofs if q.version == p.version)}
-        withheld = sorted({p.version for p in proofs} - exact) if withhold and proofs and not extras else []
-        if withhold and proofs and not exact:
-            raise Refusal(Finding("land.no_exact_version", f"{member} is exact in no version, so none can land.",
-                                  unit=member, versions=tuple(sorted({p.version for p in proofs})),
-                                  action="make the source byte-exact in at least one version"))
+        withheld = sorted({p.version for p in proofs} - exact) if withhold and exact and not extras else []
         if proofs and (all(p.exact for p in proofs) or withheld):
             operation = "publish"
         else:

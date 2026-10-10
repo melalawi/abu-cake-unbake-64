@@ -98,10 +98,6 @@ sentence = "the candidate stops another landed file from building exactly"
 owner = "compare"
 sentence = "the build does not match the ROM in every holding version"
 
-[key."land.no_exact_version"]
-owner = "land"
-sentence = "the source is byte-exact in no version, so no partial landing is possible"
-
 [key."land.request"]
 owner = "compare"
 sentence = "the request does not name a publishable function"

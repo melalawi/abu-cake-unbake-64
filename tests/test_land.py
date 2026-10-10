@@ -402,9 +402,8 @@ def test_submit_without_withhold_keeps_the_fuzzy_rule(lane):
     assert entry.operation == "fuzzy" and entry.withheld == ()
 
 
-def test_submit_withhold_refuses_when_no_version_is_exact(lane):
+def test_submit_withhold_with_no_exact_version_is_the_plain_not_exact_result(lane):
     cfg, unit = lane[:2]
-    with pytest.raises(Refusal) as error:
-        land.submit(cfg, _request(), unit, _proofs(unit, False, 0.9), b"candidate", "submit", withhold=True)
-    assert error.value.findings[0].key == "land.no_exact_version"
-    assert not (cfg.project.root / ".unbake/inbox").exists()
+    plain = land.submit(cfg, _request(), unit, _proofs(unit, False, 0.9), b"candidate", "submit")
+    held = land.submit(cfg, _request(), unit, _proofs(unit, False, 0.9), b"candidate", "submit", withhold=True)
+    assert held == plain and (held is None or held.withheld == ())
