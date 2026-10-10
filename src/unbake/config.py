@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import pickle
 import tomllib
 from functools import cache, partial
 from importlib import resources
@@ -11,6 +12,8 @@ from pathlib import Path
 from typing import Any
 
 from jsonschema import Draft202012Validator
+
+from unbake import store
 
 from unbake.contracts import Config, Finding, Host, Json, Origin, Project, Refusal, Resident, VersionFiles, digest
 
@@ -24,14 +27,20 @@ def _schema(name: str) -> Json:
     if not node.is_file():
         raise Refusal(Finding("config.resource", f"schema {name} is not packaged", path=f"schemas/{name}.schema.json"))
     return json.loads(node.read_text(encoding="utf-8"))
-def toml(schema: str, data: bytes, file: str, key: str = "config.schema") -> Json:
-    """The schema-valid document of TOML bytes; text that is not TOML is a finding under `key`."""
-    try:
-        document = tomllib.loads(data.decode())
-    except (tomllib.TOMLDecodeError, UnicodeDecodeError) as error:
-        raise Refusal(Finding(key, str(error), path=file)) from error
-    validate(schema, document, file)
-    return document
+def toml(schema: str, data: bytes, file: str, key: str = "config.schema", cache: Config | None = None) -> Json:
+    """The schema-valid document of TOML bytes; text that is not TOML is a finding under `key`. With a project, a
+    document valid once is read back from its content cache: a megabyte table is parsed and checked once, not per run."""
+    def read() -> Json:
+        try:
+            document = tomllib.loads(data.decode())
+        except (tomllib.TOMLDecodeError, UnicodeDecodeError) as error:
+            raise Refusal(Finding(key, str(error), path=file)) from error
+        validate(schema, document, file)
+        return document
+    if cache is None:
+        return read()
+    return pickle.loads(store.cached(cache, "toml", digest((schema, data, _schema(schema))),
+                                     lambda: pickle.dumps(read(), protocol=5)))
 def validate(schema: str, value: Json, file: str) -> None:
     """Raise one Refusal listing every schema error of value, sorted by path."""
     errors = sorted( Draft202012Validator(_schema(schema)).iter_errors(value),

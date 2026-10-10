@@ -10,21 +10,20 @@ from typing import Any, Protocol
 
 Json = Mapping[str, Any]  # a document already validated by config.load_resource against its schema
 def digest(value: Any) -> str:
-    """sha256 hex of canonical JSON (sorted keys, no spaces); dataclasses, paths, bytes and tuples are normalised."""
-    def norm(item: Any) -> Any:
+    """sha256 hex of canonical JSON (sorted keys, no spaces); dataclasses, paths, bytes and sets are normalised."""
+    def norm(item: Any) -> Any:  # only what JSON cannot write itself reaches here, so a long list of tuples stays native
         if is_dataclass(item):
-            return norm(asdict(item))
+            return asdict(item)
         if isinstance(item, Mapping):
-            return {str(k): norm(v) for k, v in sorted(item.items(), key=lambda kv: str(kv[0]))}
-        if isinstance(item, (list, tuple, frozenset, set)):
-            seq = [norm(v) for v in item]
-            return sorted(seq, key=json.dumps) if isinstance(item, (set, frozenset)) else seq
+            return {str(k): v for k, v in item.items()}
+        if isinstance(item, (frozenset, set)):
+            return sorted(item, key=lambda v: json.dumps(v, sort_keys=True, default=norm))
         if isinstance(item, Path):
             return str(item)
         if isinstance(item, bytes):
             return hashlib.sha256(item).hexdigest()
-        return item
-    text = json.dumps(norm(value), sort_keys=True, separators=(",", ":"))
+        raise TypeError(f"cannot digest {type(item).__name__}")
+    text = json.dumps(value, sort_keys=True, separators=(",", ":"), default=norm)
     return hashlib.sha256(text.encode()).hexdigest()
 # ---------------------------------------------------------------- findings and refusals
 @dataclass(frozen=True)

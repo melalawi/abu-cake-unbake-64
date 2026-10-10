@@ -19,13 +19,13 @@ _CODE = digest(Path(__file__).read_bytes())  # a view is only as true as the dep
 def _sha(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
 def _pin(snapshot: Snapshot, path: str) -> str:
-    """The hash of a project file as the snapshot reads it; a file on disk is hashed once per command."""
+    """The hash of a project file as the snapshot reads it; a file on disk is hashed once per command, until
+    store.write replaces one."""
     try:
         if path in snapshot.overlays:
             return _sha(snapshot.read(path))
-        full = snapshot.config.project.root / path
-        stat = full.stat()
-        return effort.memo(("pin", str(full), stat.st_mtime_ns, stat.st_size), lambda: _sha(full.read_bytes()))
+        full = f"{snapshot.config.project.root}/{path}"
+        return effort.memo(("pin", full), lambda: _sha(Path(full).read_bytes()))
     except FileNotFoundError:
         return "missing"
 def _path(marker: str, root: Path, overlay: Path | None, real: bool = True) -> tuple[str, bool]:
@@ -39,10 +39,8 @@ def _path(marker: str, root: Path, overlay: Path | None, real: bool = True) -> t
             return path.relative_to(base).as_posix(), True
     return str(path), False
 _INCLUDE = re.compile(rb'^[ \t]*(?:#[ \t]*include|\.include)[ \t]*[<"]([^>"\n]+)[>"]', re.M)
-def _included(path: Path) -> tuple[bytes, ...]:
-    stat = path.stat()
-    return effort.memo(("includes", str(path), stat.st_mtime_ns, stat.st_size),
-                       lambda: tuple(_INCLUDE.findall(path.read_bytes())))
+def _included(path: str) -> tuple[bytes, ...]:
+    return effort.memo(("includes", path), lambda: tuple(_INCLUDE.findall(Path(path).read_bytes())))
 def _link_relative(overlay: Path, root: Path, path: str, content: bytes) -> None:
     """A quoted include is found beside the file naming it: link such files of the real tree into the overlay."""
     for name in _INCLUDE.findall(content):
@@ -52,20 +50,27 @@ def _link_relative(overlay: Path, root: Path, path: str, content: bytes) -> None
             target.parent.mkdir(parents=True, exist_ok=True)
             target.symlink_to(real)
             _link_relative(overlay, root, relative, real.read_bytes())
-def _reached(source: Path, include: Sequence[Path]) -> set[Path]:
+def _edges(path: str, include: tuple[str, ...]) -> tuple[str, ...]:
+    """The files one file names, found beside it or in the include directories: resolved once per command."""
+    def resolve() -> tuple[str, ...]:
+        found = []
+        for name in _included(path):
+            for base in (os.path.dirname(path), *include):
+                candidate = os.path.join(base, name.decode())
+                if os.path.isfile(candidate):
+                    found.append(candidate)
+                    break
+        return tuple(found)
+    return effort.memo(("edges", path, include), resolve)
+def _reached(source: str, include: Sequence[str]) -> set[str]:
     """Every file the source can include. The preprocessor's line markers are what dependencies were read from, and
     a flag such as -P removes them, so the include graph is read from the sources instead (a superset is safe)."""
     found, pending = set(), [source]
     while pending:
-        current = pending.pop()
-        for name in _included(current):
-            for base in (current.parent, *include):
-                candidate = base / name.decode()
-                if candidate.is_file():
-                    if candidate not in found:
-                        found.add(candidate)
-                        pending.append(candidate)
-                    break
+        for candidate in _edges(pending.pop(), tuple(include)):
+            if candidate not in found:
+                found.add(candidate)
+                pending.append(candidate)
     return found
 def closure(snapshot: Snapshot, unit: UnitSpec, version: str) -> tuple[tuple[str, str], ...] | None:
     """(path, pin) of the unit's source and every project file it can reach. None when an overlay holds one of them."""
@@ -74,9 +79,11 @@ def _closure(snapshot: Snapshot, unit: UnitSpec, version: str) -> tuple[tuple[st
     cfg = snapshot.config
     root = cfg.project.root.resolve()
     macros = configuration.load_resource("repo.toml")["splat"]["options"]["generated_asm_macros_directory"]
-    include = [root / "include", root / "src", root / macros.format(version=version, name=cfg.project.name)]
+    include = [f"{root}/include", f"{root}/src", f"{root}/" + macros.format(version=version, name=cfg.project.name)]
     try:
-        names = [unit.path, *sorted(_path(str(p), root, None, False)[0] for p in _reached(root / unit.path, include))]
+        base = f"{root}/"
+        names = [unit.path, *sorted(n[len(base):] if n.startswith(base) else n for n in
+                                    {os.path.normpath(p) for p in _reached(base + unit.path, include)})]
     except FileNotFoundError:
         return None
     return None if snapshot.overlays.keys() & set(names) else tuple((n, _pin(snapshot, n)) for n in names)
@@ -141,8 +148,8 @@ def get(snapshot: Snapshot, unit: UnitSpec, version: str, recipe: Recipe, *, lin
                 raise Refusal(*findings)
             text = out.read_text()
             _, files = _lines(text, root, overlay, unit.path)
-            for reached in sorted(_reached(source, include)):
-                name, project_file = _path(str(reached), root, overlay)
+            for reached in sorted(_reached(str(source), [str(i) for i in include])):
+                name, project_file = _path(reached, root, overlay)
                 if project_file and name not in files:
                     files.append(name)
             deps = [(path, _pin(snapshot, path)) for path in files]

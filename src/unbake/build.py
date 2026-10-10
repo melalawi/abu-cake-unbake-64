@@ -230,7 +230,7 @@ def symbols_ld(snapshot: Snapshot, version: str) -> bytes:
     with effort.stage("build.symbols_ld"):
         rows, mask = snapshot.versions[version].symbols, snapshot.config.project.build.get("text_mask", _WORD)
         if mask != _WORD:  # the code is linked at its masked address, so a symbol in it is provided there too
-            spans, table = _text_spans(snapshot, version), symbols.load(snapshot.read, snapshot.config.project.versions)
+            spans, table = _text_spans(snapshot, version), symbols.load(snapshot.read, snapshot.config.project.versions, snapshot.config)
             code = snapshot.versions[version].code
             rows = {n: a & mask if n in code or table.get(n, {}).get("kind") == "function"
                     or spans[bisect_right(spans, (a, _WORD)) - 1][1] > a else a for n, a in rows.items()}

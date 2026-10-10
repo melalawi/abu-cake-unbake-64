@@ -398,7 +398,7 @@ def addresses(snapshot: Snapshot, debt: Sequence) -> dict[tuple[str, str], tuple
     """(name, version) -> (address, is a function) for every name whose address the table lacks or gets wrong
     where the ROM code of the units that use it agrees on one address, the exact units included."""
     with effort.stage("infer.addresses"):
-        table, units = symbols.load(snapshot.read, snapshot.config.project.versions), snapshot.layout.units
+        table, units = symbols.load(snapshot.read, snapshot.config.project.versions, snapshot.config), snapshot.layout.units
         failing = sorted({tuple(row.split(" ", 2)[:2]) for f in debt if "symbols.unknown" in f.reason
                           or "differ in .text" in f.reason for row in f.missing})
         def votes(jobs):

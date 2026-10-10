@@ -354,7 +354,7 @@ def test_symbols_ld_provides_code_at_the_masked_address_only_when_the_project_sa
     project = replace(snapshot.config.project, build={**snapshot.config.project.build, "text_mask": 0x1FFFFFFF})
     masked = replace(snapshot, layout=SimpleNamespace(members=members), versions={"a": record}, digest="masked",
                      config=replace(snapshot.config, project=project))
-    monkeypatch.setattr(build.symbols, "load", lambda reader, versions: {"call": {"kind": "function"}})
+    monkeypatch.setattr(build.symbols, "load", lambda reader, versions, cache: {"call": {"kind": "function"}})
     text = build.symbols_ld(masked, "a").decode()
     assert "PROVIDE(call = 0x002BB550);" in text and "PROVIDE(label = 0x002BB700);" in text
     assert "PROVIDE(data = 0x800D8A24);" in text  # data keeps the address it has

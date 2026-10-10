@@ -132,13 +132,14 @@ class _Run:
     """One group of a gather: its items, the cache keys of those, and the indexes the workers must still compute."""
     def __init__(self, config: Config, name: str, function: Callable, items: Sequence,
                  key: Callable[[Any], str | None] | None = None):
-        self.name, self.function, self.items, self.key = name, function, items, key
+        self.name, self.function, self.items, self.key, self.sealed = name, function, items, key, False
         self.outcomes: list[tuple[bool, Any, Json] | None] = [None] * len(items)
         self.keys = [key(item) for item in items] if key else []
         self.todo = list(range(len(items)))
         self.whole = digest(self.keys) if key and None not in self.keys else None
         if key:  # the parent resolves hits itself: a warm item never travels to a worker
             blob = self.whole and store.get(config, name + ".group", self.whole)  # a fully warm group is one entry
+            self.sealed = bool(blob)  # a group warm entry by entry is sealed too, so the next run reads one entry
             warm = pickle.loads(blob) if blob else [k and store.get(config, name, k) for k in self.keys]
             for index, found in enumerate(warm):
                 effort.count(name, found is not None)
@@ -147,7 +148,7 @@ class _Run:
             self.todo = [i for i, outcome in enumerate(self.outcomes) if outcome is None]
         self.submitted, self.done = 0, len(items) - len(self.todo)
     def seal(self, config: Config) -> None:
-        if self.whole and self.todo and all(o and o[0] for o in self.outcomes):
+        if self.whole and (self.todo or not self.sealed) and all(o and o[0] for o in self.outcomes):
             blobs = [pickle.dumps(o[1], protocol=5) for o in self.outcomes]
             store.put(config, self.name + ".group", self.whole, pickle.dumps(blobs))
     def sink(self, config: Config, picked: Sequence[int]) -> tuple | None:

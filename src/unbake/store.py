@@ -34,6 +34,7 @@ def write(path: Path, content: bytes) -> bool:
     part = path.with_name(f"{path.name}.{uuid.uuid4().hex}.part")
     part.write_bytes(content)
     part.replace(path)
+    effort.forget("pin", "includes", "edges", "closure")  # the memoised reads of project files are stale now
     return True
 def content(config: Config) -> ContentCache:
     """The project's content cache, in .unbake/cache, limited by the host's cache.max_bytes."""

@@ -7,6 +7,7 @@ import inspect
 import io
 import mmap
 import os
+import pickle
 import re
 import struct
 from collections import Counter
@@ -19,7 +20,7 @@ from typing import Any
 import yaml
 
 from unbake import config as configuration
-from unbake import effort, pool, symbols
+from unbake import effort, pool, store, symbols
 from unbake.contracts import Config, Finding, Placement, Refusal, Version, digest
 
 _SYMBOL = re.compile(r"^\s*([\w.$]+)\s*=\s*(0x[0-9A-Fa-f]+)\s*;")
@@ -110,6 +111,13 @@ def _generated(config: Config, vid: str, files: tuple[list[str], list[str]], par
             if name not in declared:
                 facts[name] = address
     return facts, frozenset(code)
+_FILE = digest(Path(__file__).read_bytes())
+def _generated_key(config: Config, vid: str, files: tuple[list[str], list[str]], declared: Mapping[str, int]) -> str:
+    """Everything _generated reads: the auto symbol files, the spim contexts, each asm file's stat and the declared names."""
+    root = config.project.root
+    contexts = sorted((root / ".unbake" / "symbols" / vid).glob("spim_context*.csv"))
+    return digest((vid, [(p, (root / p).read_bytes()) for p in files[0]], [p.read_bytes() for p in contexts],
+                   [_asm_key((str(root), rel)) for rel in files[1]], declared, _FILE))
 def unowned(name: str) -> bool:  # a data row no function has claimed
     return re.match(r"\w+/unresolved/", name) is not None
 def facts_digest(version: Version) -> str:
@@ -124,7 +132,7 @@ def read(config: Config, reader: Callable[[str], bytes], only: Collection[str] |
          reuse: Mapping[str, Version] | None = None) -> dict[str, Version]:
     with effort.stage("versions.read"):
         root, table = config.project.root, config.project.version_files
-        named = symbols.load(reader, table)
+        named = symbols.load(reader, table, config)
         wanted = [v for v in table if only is None or v in only]
         key = digest((str(root), wanted, [(reader(table[v].split), reader(table[v].symbols)) for v in wanted],
                       reader(symbols.path())))  # files the command rewrites itself drop the memos (effort.forget)
@@ -133,12 +141,18 @@ def read(config: Config, reader: Callable[[str], bytes], only: Collection[str] |
             built = effort.memo(("generated", str(root), id(named)), lambda: (named, seeds))[1]
             todo = [v for v in wanted if v not in built]
             files = {v: fact_files(config, v) for v in todo}
+            declared = {v: symbols.declared(named, v) for v in todo}
+            keys = {v: _generated_key(config, v, files[v], declared[v]) for v in todo}
+            blobs = {v: store.get(config, "generated", keys[v]) for v in todo}  # a version whose inputs held reads one entry
             parsed = iter(pool.map(config, "versions.asm", _asm_job,
-                                   [(str(root), rel) for v in todo for rel in files[v][1]], _asm_key))
+                                   [(str(root), rel) for v in todo if blobs[v] is None for rel in files[v][1]], _asm_key))
             for vid in todo:
-                declared = symbols.declared(named, vid)
-                found = [next(parsed) for _ in files[vid][1]]
-                built[vid] = (*_generated(config, vid, files[vid], found, declared), declared)
+                effort.count("generated", blobs[vid] is not None)
+                if blobs[vid] is None:
+                    found = [next(parsed) for _ in files[vid][1]]
+                    blobs[vid] = pickle.dumps((*_generated(config, vid, files[vid], found, declared[vid]), declared[vid]), 5)
+                    store.put(config, "generated", keys[vid], blobs[vid])
+                built[vid] = pickle.loads(blobs[vid])
             out: dict[str, Version] = {}
             for vid in wanted:
                 facts, code, declared = built[vid]
