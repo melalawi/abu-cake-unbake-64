@@ -111,12 +111,13 @@ def items(snapshot: Snapshot, params: Json) -> list[Json]:
                                   or not 0 <= (index := int(m[1])) < (modulus := int(m[2]))):
             raise Refusal(Finding("report.request", "shard must be I/K with 0 <= I < K"))
         rows, inventory = [], list(_inventory(snapshot))
-        successors = {split_slot(snapshot, name) for name, member, *_ in inventory if member.kind == "function"}
+        slots = {name: split_slot(snapshot, name) for name, member, *_ in inventory if member.kind == "function"}
+        successors = set(slots.values())
         for name, member, unit, matched, sid in inventory:
             sections = (".text",) if member.kind == "function" else (".data", ".rodata")
             if matched or not any(p.section in sections for p in member.placements):
                 continue
-            if member.kind == "function" and (split_slot(snapshot, name) is not None or name in successors):
+            if member.kind == "function" and (slots[name] is not None or name in successors):
                 continue
             if segment is not None and sid != segment:
                 continue
