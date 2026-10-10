@@ -36,10 +36,6 @@ tag = "v4.6.2"
 image = "python:3.11-slim@sha256:0dd364ba7e10242f07755449e3a3d0e35f9efd987952737b90def6709ab0c5ce"
 packages = ["make"]
 
-# The one abucache release this unbake is written for; pyproject.toml pins the same version.
-[abucache]
-version = "0.1.0"
-
 # Make variable -> host tool key (local.mk value) and the conventional command the committed Makefile falls back to.
 [make.tools.CPP]
 host = "cpp"

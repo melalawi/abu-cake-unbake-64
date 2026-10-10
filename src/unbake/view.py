@@ -26,7 +26,7 @@ def _pin(snapshot: Snapshot, path: str) -> str:
         if path in snapshot.overlays:
             return _sha(snapshot.read(path))
         full = f"{snapshot.config.project.root}/{path}"
-        return effort.memo(("pin", full), lambda: _sha(Path(full).read_bytes()))
+        return cast(str, effort.memo(("pin", full), lambda: _sha(Path(full).read_bytes())))
     except FileNotFoundError:
         return "missing"
 def _path(marker: str, root: Path, overlay: Path | None, real: bool = True) -> tuple[str, bool]:

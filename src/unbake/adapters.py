@@ -5,6 +5,7 @@ import re
 import shlex
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
+from importlib import metadata
 from pathlib import Path
 
 import abucache
@@ -208,10 +209,11 @@ def tool_identity(config: Config, id: str) -> str:
     chain = toolchain(config, id)
     return abucache.compile.identity(chain.tool_files(), [f"{k}={v}" for k, v in sorted(chain.row["pins"].items())])
 def check_abucache() -> None:
-    """The installed abucache is the one version this unbake is written for."""
-    pin = configuration.load_resource("repo.toml")["abucache"]["version"]
+    """The installed abucache is the one version this unbake's own requirement names."""
+    requirement = next(r for r in metadata.requires("unbake") or () if r.startswith("abucache"))
+    pin = re.search(r"abucache-([0-9][^-]*)-", requirement)[1]  # type: ignore[index]
     if abucache.__version__ != pin:
-        raise Refusal(Finding("tool.version", path="repo.toml:abucache.version",
+        raise Refusal(Finding("tool.version", path="pyproject.toml:dependencies",
                               reason=f"abucache version mismatch: expected {pin}, found {abucache.__version__}"))
 def toolchain(config: Config, id: str) -> TemplateToolchain:
     return TemplateToolchain(config, id, _row(config, id))

@@ -324,19 +324,13 @@ def test_a_failed_chain_step_is_refused_as_the_direct_calls_refuse(adapter_confi
     assert caught.value.findings[0].key == "assemble.error"
 
 
-def test_abucache_must_be_the_version_this_unbake_is_written_for(monkeypatch):
+def test_abucache_must_be_the_version_this_unbake_requires(monkeypatch):
     adapters.check_abucache()
     monkeypatch.setattr(adapters.abucache, "__version__", "0.2.0")
     with pytest.raises(Refusal) as caught:
         adapters.check_abucache()
     finding, = caught.value.findings
     assert (finding.key, finding.reason) == ("tool.version", "abucache version mismatch: expected 0.1.0, found 0.2.0")
-
-
-def test_pyproject_pins_the_version_the_data_names():
-    text = (Path(__file__).resolve().parent.parent / "pyproject.toml").read_text()
-    version = configuration.load_resource("repo.toml")["abucache"]["version"]
-    assert f'abu-cache-64/releases/download/v{version}/abucache-{version}-py3-none-any.whl"' in text
 
 
 def test_unused_tools_not_resolved(adapter_config, toolchains):
