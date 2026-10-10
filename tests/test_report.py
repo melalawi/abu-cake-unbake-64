@@ -484,3 +484,10 @@ def test_a_function_with_a_coprocessor_or_system_instruction_is_not_offered(snap
     monkeypatch.setattr(report, "split_slot", _REAL_SPLIT_SLOT)
     assert [report.split_slot(snapshot, n) for n in bodies] == [None] + ["system code C cannot emit"] * 4
     assert [r["member"] for r in report.items(snapshot, {})] == ["plain"]
+
+
+def test_a_fuzzy_score_missing_for_a_holding_version_counts_zero(snapshot_factory):
+    fuzzy = _member("fuzzy", size=20)
+    snapshot = snapshot_factory([fuzzy], fuzzy={"fuzzy": {"path": "src/fuzzy/fuzzy.c", "scores": {"a": 0.5}}})
+    versions = report.current(snapshot)["versions"]
+    assert versions["a"]["code_fuzzy"] == 10 and versions["b"]["code_fuzzy"] == 0

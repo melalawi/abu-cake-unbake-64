@@ -127,7 +127,7 @@ def current(snapshot: Snapshot) -> Json:
                 placements = [p for p in member.placements if p.version == v]
                 code = sum(p.size for p in placements if p.section == ".text")
                 data = sum(p.size for p in placements if p.section in (".data", ".rodata"))
-                score = 0.0 if matched else (snapshot.layout.fuzzy.get(name) or {"scores": {v: 0.0}})["scores"][v]
+                score = 0.0 if matched else snapshot.layout.fuzzy.get(name, {"scores": {}})["scores"].get(v, 0.0)
                 for bucket in (totals[v], segments[segment].setdefault(v, dict(zero)),
                                kinds[unit.kind if unit else member.state].setdefault(v, dict(zero))):
                     for prefix, size in (("code_", code), ("data_", data),
@@ -211,7 +211,7 @@ def objdiff(snapshot: Snapshot, report: Json, version: str) -> Json:
             sections = (".text",) if function else (".data", ".rodata")
             size = sum(p.size for p in placements if p.section in sections)
             fuzzy = snapshot.layout.fuzzy.get(name) if not matched else None
-            percent = 100.0 if matched else _f32(fuzzy["scores"][version] * 100) if fuzzy else 0.0
+            percent = 100.0 if matched else _f32(fuzzy["scores"].get(version, 0.0) * 100) if fuzzy else 0.0
             counter = "total_code" if function else "total_data"
             prefix = counter.removeprefix("total_")
             measures = {counter: str(size), "total_units": 1}
