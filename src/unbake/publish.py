@@ -70,17 +70,20 @@ def _plan(operation, snapshot, writes, affected, debt, message):
     body = (operation, snapshot.digest, writes, affected, (), debt, message)
     return Plan(*body, digest(body))
 def _proofs(snapshot: Snapshot, affected: Sequence[str]) -> tuple[tuple[Proof, ...], tuple[Finding, ...]]:
+    """A withheld version is not built, so it is neither proved nor a gap."""
     with store.work(snapshot.config) as work:
         jobs = []
+        skip = {path: set(snapshot.layout.units[path].withheld) for path in affected}
         # their data is proved with their code
         units = ownership.derive_many(snapshot, [snapshot.layout.units[path] for path in affected])
         for own, unit in units:
             recipe = recipes.resolve(snapshot.config, unit, unit.options)
-            for version in compare.holders(own, unit):
+            for version in sorted(set(compare.holders(own, unit)) - skip[unit.path]):
                 jobs.append((own, unit, version, recipe, work / f"{len(jobs)}"))
         batches = pool.map(snapshot.config, "publish.prove", native.prove_args, jobs)
         proofs = tuple(p for batch in batches for p in batch)
-        gaps = tuple(f for own, unit in units for f in compare.gaps(own, unit, proofs))
+        gaps = tuple(replace(f, versions=left) for own, unit in units for f in compare.gaps(own, unit, proofs)
+                     if (left := tuple(v for v in f.versions if v not in skip[unit.path])))
         return proofs, gaps
 def _regressions(snapshot: Snapshot, gaps: tuple[Finding, ...], own: Sequence[str],
                  candidate: str) -> tuple[Finding, ...]:
@@ -119,7 +122,7 @@ def _consumers(snapshot: Snapshot, changed: Sequence[str]) -> tuple[str, ...]:
         reached |= new
         todo.extend(new)
     return tuple(path for path in reached if path in snapshot.layout.units)
-def admit(snapshot: Snapshot, request: Json) -> tuple[UnitSpec, Snapshot, tuple[Proof, ...]]:
+def admit(snapshot: Snapshot, request: Json, partial: bool = False) -> tuple[UnitSpec, Snapshot, tuple[Proof, ...]]:
     with effort.stage("publish.admit"):
         with effort.stage("publish.admit.1"):
             file = Path(request["file"])
@@ -160,8 +163,11 @@ def admit(snapshot: Snapshot, request: Json) -> tuple[UnitSpec, Snapshot, tuple[
                         for i, (v, obj) in enumerate(zip(holders, objects, strict=True))]
                 proofs = tuple(p for batch in pool.map(snap.config, "publish.measure", _measure, jobs) for p in batch)
                 gaps = compare.gaps(snap, unit, proofs)
-                if gaps:
+                bad = {v for g in gaps for v in g.versions}
+                if gaps and (not partial or bad >= set(holders)):
                     raise Refusal(*gaps)
+                if tuple(sorted(bad)) != unit.withheld:  # a partial landing withholds exactly the inexact versions
+                    unit = replace(unit, withheld=tuple(sorted(bad)))
         return unit, snap, proofs
 def _append(old, folded):
     existing, incoming = old.decode().splitlines(), folded.decode().splitlines()
@@ -218,7 +224,7 @@ def _option_plan(snapshot: Snapshot, unit: UnitSpec, proposed: Snapshot, shared:
                           if option.path in snapshot.layout.units and not again else folded[unit.path])
     writes.update((p, b) for p, b in folded.items() if p != unit.path)
     overlay = layout.overlay(snapshot, writes)
-    configured = replace(option, toolchain=unit.toolchain, options=unit.options)
+    configured = replace(option, toolchain=unit.toolchain, options=unit.options, withheld=unit.withheld)
     gone = {k for k in snapshot.layout.units.keys() - proposed.layout.units.keys()  # data it now owns
             if all(map(versions.unowned, snapshot.layout.units[k].members))}
     units = {k: u for k, u in overlay.layout.units.items() if k not in gone}
@@ -253,8 +259,9 @@ def _option_plan(snapshot: Snapshot, unit: UnitSpec, proposed: Snapshot, shared:
     blocking, debt = policy.scope(before, after, writes)
     if blocking:
         return blocking
-    return _plan("publish", snapshot, writes, tuple(sorted(affected)), debt,
-                 f"publish {unit.members[0]} ({unit.path})")
+    kept = sorted(set(compare.holders(proposed, unit)) - set(unit.withheld))
+    where = f"{', '.join(kept)} exact; {', '.join(unit.withheld)} withheld" if unit.withheld else unit.path
+    return _plan("publish", snapshot, writes, tuple(sorted(affected)), debt, f"publish {unit.members[0]} ({where})")
 
 def land(config: Config, submission: Submission) -> Receipt:
     with effort.stage("publish.land"):
@@ -270,7 +277,8 @@ def land(config: Config, submission: Submission) -> Receipt:
                 raise Refusal(Finding("land.duplicate", f"{member} is already landed in {unit.path}", unit=member))
             request = {"file": str(inbox), "function": submission.function or member,
                        "overrides": submission.overrides, "note": submission.note}
-            unit, proposed, _ = admit(layout.overlay(snapshot, extras) if extras else snapshot, request)
+            unit, proposed, _ = admit(layout.overlay(snapshot, extras) if extras else snapshot, request,
+                                      bool(submission.withheld))
             touched = (*unit.members, *(m for p in extras if p in snapshot.layout.units
                                         for m in snapshot.layout.units[p].members))
             for plan in plans(snapshot, unit, proposed, extras):

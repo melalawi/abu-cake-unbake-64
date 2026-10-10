@@ -209,6 +209,13 @@
     "type": "string",
     "minLength": 1
    }
+  },
+  "withheld": {
+   "type": "array",
+   "items": {
+    "type": "string",
+    "minLength": 1
+   }
   }
  },
  "required": [
@@ -224,7 +231,8 @@
   "origin",
   "note",
   "invocation",
-  "extras"
+  "extras",
+  "withheld"
  ],
  "additionalProperties": false
 }

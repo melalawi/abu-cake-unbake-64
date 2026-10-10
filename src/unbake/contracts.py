@@ -273,6 +273,7 @@ class Submission:
     note: str  # free-text note given at submit time ("" when none)
     invocation: str
     extras: Json  # change set: project path -> inbox copy, landed with the source; {} for one file
+    withheld: tuple[str, ...]  # versions the source is not exact in, landed withheld; () when exact in all
 # ---------------------------------------------------------------- observability
 @dataclass(frozen=True)
 class StageRecord:

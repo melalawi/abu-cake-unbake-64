@@ -41,6 +41,7 @@ handler = "land.submit_command"
 params = [
   { name = "files", kind = "argument", type = "path", required = true, multiple = true, help = "C sources" },
   { name = "function", kind = "option", type = "str", required = false, multiple = false, help = "member, only with exactly one file" },
+  { name = "withhold", kind = "flag", type = "str", required = false, multiple = false, help = "land the versions that are byte-exact and withhold the others; refused when none is exact" },
   { name = "note", kind = "option", type = "str", required = false, multiple = false, help = "a free-text note recorded with the submission" },
 ]
 

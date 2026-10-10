@@ -538,3 +538,31 @@ def test_admission_refuses_a_view_conversion_in_new_text_only(lane):
     assert [(f.key, f.line) for f in exc.value.findings] == [("land.view-conversion", 1)]
     same = replace(lane["snapshot"], overlays={lane["unit"].path: text.encode()})
     assert publish.admit(same, _request(lane))[2] == lane["proofs"]  # the line was already landed text
+
+
+def _bad_in(*versions):
+    return Finding("land.not_exact", "bytes", unit="f", versions=versions, missing=("bytes",))
+
+
+def test_partial_admission_withholds_the_inexact_versions(lane):
+    publish.compare.gaps.return_value = (_bad_in("b"),)
+    with pytest.raises(Refusal):
+        publish.admit(lane["snapshot"], _request(lane))
+    unit, _, _ = publish.admit(lane["snapshot"], _request(lane), True)
+    assert unit.withheld == ("b",)
+
+
+def test_partial_admission_refuses_when_every_version_is_inexact(lane):
+    publish.compare.gaps.return_value = (_bad_in("a", "b"),)
+    with pytest.raises(Refusal):
+        publish.admit(lane["snapshot"], _request(lane), True)
+
+
+def test_partial_landing_writes_the_withheld_unit_and_names_the_exact_versions(lane):
+    publish.compare.gaps.side_effect = lambda snap, unit, proofs: (_bad_in("b"),) if "b" not in unit.withheld else ()
+    entry = replace(lane["submission"], withheld=("b",))
+    publish.land(lane["config"], entry)
+    plan = publish.journal.apply.call_args.args[1]
+    assert plan.message == "publish f (a exact; b withheld)"
+    assert lane["dumps"][plan.writes["layout.toml"]].units["src/f.c"].withheld == ("b",)
+    assert [c.args[2] for c in publish.native.prove.call_args_list] == ["a"]

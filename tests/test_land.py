@@ -345,7 +345,7 @@ def test_results_validate(lane, monkeypatch, schema):
         monkeypatch.setattr(land.compare, "bind", binder)
         monkeypatch.setattr(land.compare, "measure", measure)
         monkeypatch.setattr(land.compare, "gaps", gaps)
-        result = land.submit_command(cfg, {"files": [str(file)], "function": None, "note": None})
+        result = land.submit_command(cfg, {"files": [str(file)], "function": None, "note": None, "withhold": False})
         binder.assert_called_once_with(snapshot, file, None)
         measure.assert_called_once_with(snapshot, unit, {"add": [], "omit": []}, None)
         gaps.assert_called_once_with(snapshot, unit, _proofs(unit))
@@ -415,3 +415,29 @@ def test_change_set_is_one_entry_with_its_files_and_moves_as_one(lane):
     done = cfg.project.root / ".unbake/inbox/done"
     assert all((cfg.project.root / copy).exists() is False and (done / Path(copy).name).exists()
                for copy in entry.extras.values())
+
+
+def _one_exact(unit):
+    return (fixture.proof(unit.path, "f", "a", True), fixture.proof(unit.path, "f", "b", False, ("bytes differ",), 0.9))
+
+
+def test_submit_with_withhold_lands_the_exact_versions_and_withholds_the_rest(lane):
+    cfg, unit = lane[:2]
+    entry = land.submit(cfg, _request(), unit, _one_exact(unit), b"candidate", "submit", withhold=True)
+    assert entry.operation == "publish" and entry.withheld == ("b",)
+    assert land.submit(cfg, _request(), unit, _one_exact(unit), b"candidate", "submit", withhold=True).id == entry.id
+    assert land._read(cfg.project.root / f".unbake/inbox/{entry.id}.json").withheld == ("b",)
+
+
+def test_submit_without_withhold_keeps_the_fuzzy_rule(lane):
+    cfg, unit = lane[:2]
+    entry = land.submit(cfg, _request(), unit, _one_exact(unit), b"candidate", "submit")
+    assert entry.operation == "fuzzy" and entry.withheld == ()
+
+
+def test_submit_withhold_refuses_when_no_version_is_exact(lane):
+    cfg, unit = lane[:2]
+    with pytest.raises(Refusal) as error:
+        land.submit(cfg, _request(), unit, _proofs(unit, False, 0.9), b"candidate", "submit", withhold=True)
+    assert error.value.findings[0].key == "land.no_exact_version"
+    assert not (cfg.project.root / ".unbake/inbox").exists()

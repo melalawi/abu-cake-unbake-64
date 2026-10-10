@@ -20,13 +20,16 @@ def _read(path: Path) -> Submission:
     value = json.loads(path.read_text(encoding="utf-8"))
     configuration.validate("submission", value, str(path))
     value["proofs"] = tuple(Proof(**{**p, "missing": tuple(p["missing"])}) for p in value["proofs"])
+    value["withheld"] = tuple(value["withheld"])
     return Submission(**value)
 
 def _enqueue(config: Config, request: Json, member: str, operation: str, source: bytes,
-             proofs: Sequence[Proof], origin: str, base: str, extras: Mapping[str, bytes]) -> Submission:
+             proofs: Sequence[Proof], origin: str, base: str, extras: Mapping[str, bytes],
+             withheld: Sequence[str]) -> Submission:
     source_hash = sha256(source).hexdigest()
     identity = digest((member, source_hash, request["overrides"], operation,
-                       *([sorted((p, sha256(b).hexdigest()) for p, b in extras.items())] if extras else [])))
+                       *([sorted((p, sha256(b).hexdigest()) for p, b in extras.items())] if extras else []),
+                       *([tuple(withheld)] if withheld else [])))
     inbox_path = config.project.root / ".unbake/inbox"
     for directory in (inbox_path, inbox_path / "done"):  # a refused entry is tried again: its refusal may be stale
         path = directory / f"{identity}.json"
@@ -35,7 +38,8 @@ def _enqueue(config: Config, request: Json, member: str, operation: str, source:
     source_path = f".unbake/inbox/{identity}.c"
     entry = Submission(identity, operation, member, request["function"], source_path, source_hash,
                        request["overrides"], base, tuple(proofs), origin, request["note"], effort.invocation(),
-                       {path: f".unbake/inbox/{identity}.x{n}" for n, path in enumerate(sorted(extras))})
+                       {path: f".unbake/inbox/{identity}.x{n}" for n, path in enumerate(sorted(extras))},
+                       tuple(withheld))
     value = json.loads(json.dumps(asdict(entry)))
     configuration.validate("submission", value, f".unbake/inbox/{identity}.json")
     store.write(config.project.root / source_path, source)
@@ -45,9 +49,11 @@ def _enqueue(config: Config, request: Json, member: str, operation: str, source:
     return entry
 
 def submit(config: Config, request: Json, unit: UnitSpec, proofs: Sequence[Proof], source: bytes, origin: str,
-           extras: Mapping[str, bytes] | None = None) -> Submission | None:
+           extras: Mapping[str, bytes] | None = None, withhold: bool = False) -> Submission | None:
     """One submission. `extras` makes it a change set: project-relative path -> new text, landed with the source as one
-    plan and one commit, every touched unit proved exact or the whole set refused. Only exact sets are submitted."""
+    plan and one commit, every touched unit proved exact or the whole set refused. Only exact sets are submitted.
+    `withhold` lets a single file whose proofs are exact in only some versions land as exact there, withheld in the
+    others; with no exact version it is refused."""
     with effort.stage("land.submit"):
         member = request["function"] or unit.members[0]
         snapshot = layout.capture(config)
@@ -58,7 +64,13 @@ def submit(config: Config, request: Json, unit: UnitSpec, proofs: Sequence[Proof
         if (current and kinds[current.kind]["decompiled"] and path.is_file() and path.read_bytes() == source
                 and not extras):
             return None
-        if proofs and all(p.exact for p in proofs):
+        exact = {p.version for p in proofs if all(q.exact for q in proofs if q.version == p.version)}
+        withheld = sorted({p.version for p in proofs} - exact) if withhold and proofs and not extras else []
+        if withhold and proofs and not exact:
+            raise Refusal(Finding("land.no_exact_version", f"{member} is exact in no version, so none can land.",
+                                  unit=member, versions=tuple(sorted({p.version for p in proofs})),
+                                  action="make the source byte-exact in at least one version"))
+        if proofs and (all(p.exact for p in proofs) or withheld):
             operation = "publish"
         else:
             if extras:
@@ -70,7 +82,7 @@ def submit(config: Config, request: Json, unit: UnitSpec, proofs: Sequence[Proof
                                  for p in proofs) or min(p.score for p in proofs) - before < gain:
                 return None
             operation = "fuzzy"
-        return _enqueue(config, request, member, operation, source, proofs, origin, snapshot.commit, extras)
+        return _enqueue(config, request, member, operation, source, proofs, origin, snapshot.commit, extras, withheld)
 
 def _move(config: Config, identity: str, destination: str) -> None:
     root = config.project.root / ".unbake/inbox"
@@ -163,7 +175,8 @@ def submit_command(config: Config, params: Json) -> Json:
                                    params["function"])
         proofs = compare.measure(bound, unit, request["overrides"], None)
         request["function"] = request["function"] or unit.members[0]
-        entry = submit(config, request, unit, proofs, files[0].read_bytes(), "submit", extras)
+        entry = submit(config, request, unit, proofs, files[0].read_bytes(), "submit", extras,
+                       bool(params["withhold"]))
         row = {"file": str(files[0]), "files": [str(f) for f in files], "member": request["function"],
                "id": entry.id if entry else None, "operation": entry.operation if entry else "none",
                "exact": all(p.exact for p in proofs), "score": min(p.score for p in proofs),
