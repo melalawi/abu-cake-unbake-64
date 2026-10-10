@@ -211,6 +211,7 @@ def test_asm_unit_no_text_refuses(scene, member, version):
     with pytest.raises(Refusal) as caught:
         layout.asm_unit(snapshot, member, version)
     assert caught.value.findings[0].key == "layout.member"
+    assert layout._edit(b"  - [0x1000, .data, old]\n", "old", rename="new") == b"  - [0x1000, .data, new]\n"
 
 
 def test_overlay_content_deletion_and_digest(scene):

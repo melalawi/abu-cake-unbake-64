@@ -334,7 +334,8 @@ def test_abucache_must_be_the_version_this_unbake_is_written_for(monkeypatch):
 
 def test_pyproject_pins_the_version_the_data_names():
     text = (Path(__file__).resolve().parent.parent / "pyproject.toml").read_text()
-    assert f'"abucache=={configuration.load_resource("repo.toml")["abucache"]["version"]}"' in text
+    version = configuration.load_resource("repo.toml")["abucache"]["version"]
+    assert f'abu-cache-64/releases/download/v{version}/abucache-{version}-py3-none-any.whl"' in text
 
 
 def test_unused_tools_not_resolved(adapter_config, toolchains):

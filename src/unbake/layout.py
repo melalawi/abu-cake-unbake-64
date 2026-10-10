@@ -37,7 +37,7 @@ from unbake.contracts import (
 )
 
 _LINE = re.compile(
-    r"^(\s*-\s*\[\s*)(0[xX][0-9a-fA-F]+|\d+)(\s*,\s*)([\w]+)(\s*,\s*)(['\"]?)([^,\]\s'\"]+)(['\"]?)(.*)$" )
+    r"^(\s*-\s*\[\s*)(0[xX][0-9a-fA-F]+|\d+)(\s*,\s*)(\.?\w+)(\s*,\s*)(['\"]?)([^,\]\s'\"]+)(['\"]?)(.*)$" )
 _AUTO = re.compile(r"^(func|D)_([0-9A-F]{8})(_\w+)?$")
 def _kinds() -> tuple[str, str, str]:
     rows = configuration.load_resource("units.toml")["kind"]

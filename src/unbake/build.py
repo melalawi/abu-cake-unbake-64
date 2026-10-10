@@ -181,7 +181,8 @@ def makefile(snapshot: Snapshot) -> bytes:
     with effort.stage("build.makefile"):
         cfg, project = snapshot.config, snapshot.config.project
         rows = configuration.load_resource("toolchains.toml")["toolchain"]
-        tools = [f"{var} ?= {row['default']}" for var, row in sorted(_REPO["make"]["tools"].items())]
+        tools = [f"ifneq ($(filter default undefined,$(origin {var})),)\n{var} := {row['default']}\nendif"
+                 for var, row in sorted(_REPO["make"]["tools"].items())]  # make's own CPP and AS beat a ?= line
         blocks, chains, rom_rules, checks = [], [], [], []
         for id in sorted({u.toolchain for u in snapshot.layout.units.values()} | {project.toolchain}):
             key, row = id.replace("-", "_").replace(".", "_"), rows[id]

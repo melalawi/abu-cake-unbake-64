@@ -147,6 +147,7 @@ def test_toolchain_rule_pins(build_snapshot, toolchains):
     row.update(downloads=[download], pins={"z-file": "b" * 64, "a-file": "c" * 64})
     text = build.makefile(build_snapshot).decode()
     assert "CC_gcc_test ?= tools/gcc-test/cc" in text
+    assert "ifneq ($(filter default undefined,$(origin CPP)),)\nCPP := cpp\nendif" in text
     assert "AS_gcc_test ?= $(AS)" in text
     assert "TOOLCHAIN_gcc_test ?= tools/gcc-test/.stamp" in text
     assert "tools/gcc-test/.stamp:" in text
