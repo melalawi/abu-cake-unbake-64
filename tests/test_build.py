@@ -266,7 +266,7 @@ def test_a_unit_depends_on_the_headers_it_can_reach_and_on_no_others(build_snaps
     assert build.makefile(unrelated) == build.makefile(build_snapshot)  # a header it never includes changes nothing
     including = replace(build_snapshot, digest="including",
                         overlays={**planned, "src/group.c": b'#include "a.h"\n#include "other.h"\n'})
-    assert "include/common/b.h include/new.h include/other.h" in build.makefile(including).decode()  # planned files count
+    assert "include/common/b.h include/new.h include/other.h" in build.makefile(including).decode()
 
 
 def test_symbols_ld_sorted(build_snapshot):
