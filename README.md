@@ -52,14 +52,11 @@ unbake setup                      # installs toolchains, extracts and proves eve
 unbake report                                        # progress per version, kind and segment
 unbake report --next --count 20                      # the ordered work list
 unbake compare src/code_80200610.c --function NAME   # measure a source against every version
-unbake submit src/code_80200610.c                    # put an exact source in the landing inbox
-unbake land                                          # land every inbox submission, one commit each
 unbake check                                         # census the source rules over the whole project
-unbake rename OLD NEW                                # rename a symbol everywhere it is spelled
 ```
 
 A function that is exact in every version lands at once with a ROM proof and a commit.
-Run `unbake --help` for every verb: `init`, `setup`, `report`, `compare`, `submit`, `land`, `check` and `rename`.
+Run `unbake --help` for every verb: `init`, `setup`, `report`, `compare` and `check`.
 Every command prints one JSON object on stdout. Human text goes to stderr.
 
 See [compiler ownership](docs/compiler-families.md) and

@@ -333,44 +333,11 @@ def _flags(**overrides):
     return {"strict": False, **overrides}
 
 
-@pytest.mark.parametrize("schema", ["result.submit", "result.land", "result.check"])
-def test_results_validate(lane, monkeypatch, schema):
-    cfg, unit, snapshot = lane[:3]
-    if schema == "result.submit":
-        file = cfg.project.root / "candidate.c"
-        file.write_bytes(b"candidate")
-        binder = Mock(return_value=(unit, snapshot))
-        measure = Mock(return_value=_proofs(unit))
-        gaps = Mock(return_value=())
-        monkeypatch.setattr(land.compare, "bind", binder)
-        monkeypatch.setattr(land.compare, "measure", measure)
-        monkeypatch.setattr(land.compare, "gaps", gaps)
-        result = land.submit_command(cfg, {"files": [str(file)], "function": None, "note": None, "withhold": False})
-        binder.assert_called_once_with(snapshot, file, None)
-        measure.assert_called_once_with(snapshot, unit, {"add": [], "omit": []}, None)
-        gaps.assert_called_once_with(snapshot, unit, _proofs(unit))
-        row = result["submissions"][0]
-        assert row["member"] == "f" and row["operation"] == "publish"
-        assert row["exact"] and row["score"] == 1.0
-        assert result["drain"]["landed"][0]["id"] == row["id"]
-    elif schema == "result.land":
-        _submit(lane)
-        lane[6].side_effect = Refusal(Finding("land.request", "refused"))
-        result = land.land_command(cfg, {})
-        assert len(result["refused"]) == 1
-    else:
-        monkeypatch.setattr(land.policy, "census", lambda snap: ())
-        result = land.check_command(cfg, _flags())
-        assert set(result) == {"commit", "counts"}
-    configuration.validate(schema, json.loads(json.dumps(result)), schema)
-
-
-@pytest.mark.parametrize("files,function", [([], None)])
-def test_submit_command_rejects_invalid_request(lane, files, function):
-    with pytest.raises(Refusal) as error:
-        land.submit_command(lane[0], {"files": files, "function": function, "note": ""})
-    assert error.value.findings[0].key == "land.request"
-    lane[3].assert_not_called()
+def test_check_result_validates(lane, monkeypatch):
+    monkeypatch.setattr(land.policy, "census", lambda snap: ())
+    result = land.check_command(lane[0], _flags())
+    assert set(result) == {"commit", "counts"}
+    configuration.validate("result.check", json.loads(json.dumps(result)), "result.check")
 
 
 def test_check_strict_reports_debt_after_census_written(lane, monkeypatch):

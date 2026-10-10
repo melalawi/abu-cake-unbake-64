@@ -10,9 +10,9 @@ from dataclasses import asdict
 from hashlib import sha256
 from pathlib import Path
 
-from unbake import compare, effort, layout, policy, publish, store
 from unbake import config as configuration
-from unbake.contracts import Config, Finding, Json, Proof, Receipt, Refusal, Snapshot, Submission, UnitSpec, digest
+from unbake import effort, layout, policy, publish, store
+from unbake.contracts import Config, Finding, Json, Proof, Receipt, Refusal, Submission, UnitSpec, digest
 
 _ATTEMPTS = 3  # a commit that finds HEAD moved is measured again, up to this many times
 
@@ -149,43 +149,6 @@ def drain(config: Config) -> Json:
                 (config.project.root / f".unbake/inbox/{entry.id}.lock").unlink(missing_ok=True)
             busy = not claimed  # what is left belongs to other drains
         return {"running": busy, "landed": landed, "refused": refused}
-
-def _target(snapshot: Snapshot, file: Path) -> str:
-    """The project path a change-set file replaces: itself when inside the project, else the landed unit of its name."""
-    root = snapshot.config.project.root.resolve()
-    if file.resolve().is_relative_to(root):
-        return file.resolve().relative_to(root).as_posix()
-    unit = next((u for u in snapshot.layout.units.values() if file.stem in u.members), None)
-    if unit is None:
-        raise Refusal(Finding("land.request", f"{file} is outside the project and is no landed unit's source.",
-                              path=str(file), action="pass a file inside the project or a landed unit's new text"))
-    return unit.path
-
-def submit_command(config: Config, params: Json) -> Json:
-    """The first file is the source; every further file is a change-set file landed with it as one commit."""
-    with effort.stage("land.submit_command"):
-        files = [Path(f) for f in params["files"]]
-        if not files:
-            raise Refusal(Finding("land.request", "Supply files."))
-        snapshot = layout.capture(config)
-        extras = {_target(snapshot, f): f.read_bytes() for f in files[1:]}
-        request = {"file": str(files[0]), "function": params["function"], "overrides": {"add": [], "omit": []},
-                   "note": params["note"] or ""}
-        unit, bound = compare.bind(layout.overlay(snapshot, extras) if extras else snapshot, files[0],
-                                   params["function"])
-        proofs = compare.measure(bound, unit, request["overrides"], None)
-        request["function"] = request["function"] or unit.members[0]
-        entry = submit(config, request, unit, proofs, files[0].read_bytes(), "submit", extras,
-                       bool(params["withhold"]))
-        row = {"file": str(files[0]), "files": [str(f) for f in files], "member": request["function"],
-               "id": entry.id if entry else None, "operation": entry.operation if entry else "none",
-               "exact": all(p.exact for p in proofs), "score": min(p.score for p in proofs),
-               "findings": [asdict(f) for f in compare.gaps(bound, unit, proofs)]}
-        return {"submissions": [row], "drain": drain(config)}
-
-def land_command(config: Config, params: Json) -> Json:
-    with effort.stage("land.land_command"):
-        return drain(config)
 
 def check_command(config: Config, params: Json) -> Json:
     with effort.stage("land.check_command"):

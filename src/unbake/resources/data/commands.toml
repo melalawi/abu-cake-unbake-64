@@ -36,34 +36,11 @@ params = [
   { name = "withhold", kind = "flag", type = "str", required = false, multiple = false, help = "land the versions that are byte-exact and withhold the others; refused when none is exact" },
 ]
 
-[command.submit]
-help = "Admit sources and put exact (or improved fuzzy) candidates in the landing inbox; landing starts if idle."
-handler = "land.submit_command"
-params = [
-  { name = "files", kind = "argument", type = "path", required = true, multiple = true, help = "C sources" },
-  { name = "function", kind = "option", type = "str", required = false, multiple = false, help = "member, only with exactly one file" },
-  { name = "withhold", kind = "flag", type = "str", required = false, multiple = false, help = "land the versions that are byte-exact and withhold the others; refused when none is exact" },
-  { name = "note", kind = "option", type = "str", required = false, multiple = false, help = "a free-text note recorded with the submission" },
-]
-
-[command.land]
-help = "Land every inbox submission in order, one commit each; returns at once if a landing is already running."
-handler = "land.land_command"
-params = []
-
 [command.check]
 help = "Census source rules over the whole project."
 handler = "land.check_command"
 params = [
   { name = "strict", kind = "flag", type = "str", required = false, multiple = false, help = "exit 1 when any debt exists" },
-]
-
-[command.rename]
-help = "Give one symbol a new name everywhere it is spelled (table, sources, headers, generated files) in one commit."
-handler = "rename.run"
-params = [
-  { name = "old", kind = "argument", type = "str", required = true, multiple = false, help = "current symbol name" },
-  { name = "new", kind = "argument", type = "str", required = true, multiple = false, help = "new symbol name, a C identifier no symbol has" },
 ]
 
 [command.report]

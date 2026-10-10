@@ -58,21 +58,6 @@ def test_load_refuses_a_missing_table_by_name() -> None:
     assert (error.value.findings[0].key, error.value.findings[0].path) == ("config.missing", "symbols.toml")
 
 
-def test_rename_refuses_unknown_existing_and_non_identifiers() -> None:
-    table = symbols.parse(TABLE, VERSIONS)
-    cases = (("nope", "x", "symbols.unknown"), ("foo", "bar", "symbols.exists"), ("foo", "1x", "symbols.name"))
-    for old, new, key in cases:
-        with pytest.raises(Refusal) as error:
-            symbols.rename(table, old, new)
-        assert error.value.findings[0].key == key
-    symbols.rename(table, "foo", "camera")
-    assert "foo" not in table and table["camera"]["b"] == 0x80000410
-
-
-def test_rewrite_is_token_exact() -> None:
-    assert symbols.rewrite("foo(foo_x, xfoo, foo)", "foo", "bar") == "bar(foo_x, xfoo, bar)"
-
-
 def test_join_keeps_the_name_c_uses_and_refuses_disagreement() -> None:
     table = {"x": {"kind": "data", "a": 1}, "y": {"kind": "function", "b": 2}}
     assert symbols.join(table, "x", "y", {"y"}, "a") == "y"
