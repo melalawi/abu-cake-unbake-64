@@ -343,7 +343,7 @@ def test_correspondence_votes_survive_unrelated_landing_and_recompute_one_pair(t
         return real(cfg, name, counted, items, key)
     monkeypatch.setattr(pool, "map", mapped)
     assert infer.correspondences(snapshot) == (("x_a", "a", "x_b", "b"), ("y_a", "a", "y_b", "b"))
-    assert len(ran) == 4
+    assert len(ran) == 2 and all(len(rows) == 2 for rows in ran)  # one chunk of pairs per direction
     ran.clear()
     assert infer.correspondences(replace(snapshot, digest="other landing", commit="other commit"))
     assert ran == []
@@ -351,7 +351,7 @@ def test_correspondence_votes_survive_unrelated_landing_and_recompute_one_pair(t
     path.write_text(path.read_text().replace("x_a", "z_a"))
     updated = replace(snapshot, digest="changed assembly")
     assert ("z_a", "a", "x_b", "b") in infer.correspondences(updated)
-    assert len(ran) == 2 and all(rows == [("f0", "f0")] for rows in ran)
+    assert len(ran) == 2 and all(("f0", "f0") in rows for rows in ran)  # only the chunks holding the changed file
 
 
 @pytest.mark.usefixtures("toolchains")

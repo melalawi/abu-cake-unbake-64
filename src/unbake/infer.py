@@ -353,8 +353,9 @@ def _correspondences(snapshot: Snapshot, member: str | None) -> tuple[tuple[str,
     with effort.stage("infer.correspondences"):
         source = snapshot.config.project.names_from
         directions = [(a, b) for v in snapshot.versions if v != source for a, b in ((source, v), (v, source))]
-        jobs = [(snapshot, a, b, [(left, right)]) for (a, b), found in pairs(snapshot, directions).items()
-                for left, right in found.items() if member is None or member in (left, right)]
+        jobs = [(snapshot, a, b, rows[i:i + 64]) for (a, b), found in pairs(snapshot, directions).items()
+                for rows in [[(x, y) for x, y in found.items() if member is None or member in (x, y)]]
+                for i in range(0, len(rows), 64)]
         total: dict[tuple[str, str], Counter] = defaultdict(Counter)
         parts = pool.map(snapshot.config, "infer.votes", _votes_job, jobs, _votes_key)
         for (_, a, b, _), part in zip(jobs, parts, strict=True):
