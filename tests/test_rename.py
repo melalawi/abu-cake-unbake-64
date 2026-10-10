@@ -25,7 +25,7 @@ def case(monkeypatch):
     config.snapshot = snapshot
     applied = []
     monkeypatch.setattr(rename.effort, "stage", lambda name: nullcontext())
-    monkeypatch.setattr(rename.store, "exclusive", lambda c, n: nullcontext(True))
+    monkeypatch.setattr(rename.store, "exclusive", lambda c, n, wait: nullcontext(True))
     monkeypatch.setattr(rename.journal, "recover", lambda c: None)
     monkeypatch.setattr(rename.layout, "capture", lambda c: snapshot)
     monkeypatch.setattr(rename.layout, "overlay", lambda s, writes: s)

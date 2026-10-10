@@ -357,7 +357,7 @@ def setup_case(snapshot, monkeypatch):
         return (fixture.proof(unit.path, unit.members[0], version, True),)
 
     monkeypatch.setattr(repo.effort, "stage", stage)
-    monkeypatch.setattr(repo.store, "exclusive", lambda config, name: nullcontext(True))
+    monkeypatch.setattr(repo.store, "exclusive", lambda config, name, wait: nullcontext(True))
     monkeypatch.setattr(repo.store, "work", lambda config: nullcontext(root / ".unbake/work"))
     monkeypatch.setattr(repo.journal, "recover", lambda config: events.append("recover"))
     monkeypatch.setattr(repo.journal, "apply", apply)
@@ -397,7 +397,7 @@ def test_setup_busy_when_land_held(setup_case, monkeypatch):
     monkeypatch.setattr(repo.store, "exclusive", lock)
     with pytest.raises(Refusal) as caught:
         repo.setup(snapshot.config, {})
-    lock.assert_called_once_with(snapshot.config, "land")
+    lock.assert_called_once_with(snapshot.config, "land", wait=False)
     assert caught.value.findings[0].key == "setup.busy"
     assert events == [] and stages == ["repo.setup"]
 

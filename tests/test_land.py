@@ -266,7 +266,7 @@ def test_drain_running_returns_immediately(lane):
     entry = _submit(lane)
     # Independent open file descriptions contend under real flock in one process.
     # A child process is forbidden for this module by the phase-2 lane rules.
-    with land.store.exclusive(cfg, "land") as held:
+    with land.store.exclusive(cfg, "land", wait=False) as held:
         assert held
         assert land.drain(cfg) == {"running": True, "landed": [], "refused": []}
     lane[6].assert_not_called()
@@ -298,8 +298,8 @@ def test_drain_rescans_after_lock_release(lane, monkeypatch):
     from contextlib import contextmanager
 
     @contextmanager
-    def exclusive(cfg, name):
-        with real_exclusive(cfg, name) as held:
+    def exclusive(cfg, name, *, wait):
+        with real_exclusive(cfg, name, wait=wait) as held:
             yield held
         if not added:
             added.append(_submit(lane, b"after unlock"))

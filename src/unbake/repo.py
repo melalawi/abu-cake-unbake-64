@@ -289,7 +289,7 @@ def _drop_stale_facts(config: Config) -> None:
             for path in [*versions.fact_files(config, v)[0], *(root / ".unbake/symbols" / v).glob("*.csv")]:
                 (root / path).unlink(missing_ok=True)
 def setup(config: Config, params: Json) -> Json:
-    with effort.stage("repo.setup"), store.exclusive(config, "land") as held:
+    with effort.stage("repo.setup"), store.exclusive(config, "land", wait=False) as held:
         adapters.check_abucache()
         if not held:
             raise Refusal(Finding("setup.busy", configuration.sentence("setup.busy")))

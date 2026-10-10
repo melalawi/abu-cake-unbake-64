@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import multiprocessing
+import threading
 import time
 from pathlib import Path
 
@@ -13,7 +14,7 @@ from unbake.contracts import Config, Refusal
 
 
 def _hold_child(config: Config, started: Path, release: Path) -> None:
-    with store.exclusive(config, "land") as held:
+    with store.exclusive(config, "land", wait=False) as held:
         started.write_text(str(held))
         while not release.exists():
             time.sleep(0.02)
@@ -104,16 +105,32 @@ def test_exclusive_second_holder_gets_false(cfg: Config, tmp_path: Path) -> None
     try:
         _wait(started)
         assert started.read_text() == "True"
-        with store.exclusive(cfg, "land") as held:
+        with store.exclusive(cfg, "land", wait=False) as held:
             assert held is False
     finally:
         release.write_text("go")
         proc.join(10)
     assert proc.exitcode == 0
-    with store.exclusive(cfg, "land") as held:
+    with store.exclusive(cfg, "land", wait=False) as held:
         assert held is True
         text = (cfg.project.root / ".unbake" / "land.lock").read_text()
         assert text.strip().split()[0].isdigit() and text.endswith("\n")
+
+
+def test_exclusive_waits_for_a_held_lock_and_records_the_wait(cfg: Config, tmp_path: Path, monkeypatch) -> None:
+    started, release = tmp_path / "started", tmp_path / "release"
+    proc = multiprocessing.get_context("fork").Process(target=_hold_child, args=(cfg, started, release))
+    proc.start()
+    waits: list[float] = []
+    monkeypatch.setattr(effort, "waited", waits.append)
+    try:
+        _wait(started)
+        threading.Timer(0.3, release.write_text, ["go"]).start()
+        with store.exclusive(cfg, "land", wait=True) as held:
+            assert held is True
+    finally:
+        proc.join(10)
+    assert len(waits) == 1
 
 
 def test_work_dir_removed(cfg: Config) -> None:

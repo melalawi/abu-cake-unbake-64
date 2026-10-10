@@ -41,13 +41,17 @@ def content(config: Config) -> ContentCache:
     """The project's content cache, in .unbake/cache, limited by the host's cache.max_bytes."""
     return open_cache(config.project.root / ".unbake" / "cache", config.host.cache_max_bytes, effort.count)
 @contextmanager
-def _flock(path: Path, flags: int) -> Iterator[int]:
+def _flock(path: Path, flags: int, *, wait: bool = True) -> Iterator[int | None]:
+    """Hold the lock; a contended lock yields None when `wait` is false, else blocks and records the wait."""
     path.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o644)
     try:
         try:
             fcntl.flock(fd, flags | fcntl.LOCK_NB)
         except BlockingIOError:
+            if not wait:
+                yield None
+                return
             start = time.perf_counter()
             fcntl.flock(fd, flags)
             effort.waited(time.perf_counter() - start)
@@ -115,22 +119,13 @@ def log(config: Config, kind: str, body: Json) -> None:
          "time": datetime.now(UTC).isoformat(timespec="seconds"), "body": body},
     )
 @contextmanager
-def exclusive(config: Config, name: str) -> Iterator[bool]:
-    """Try the named project lock without waiting; yield True when held, False when another process holds it."""
-    path = config.project.root / ".unbake" / f"{name}.lock"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o644)
-    try:
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            yield False
-            return
-        os.ftruncate(fd, 0)
-        os.write(fd, f"{os.getpid()} {effort.invocation()}\n".encode())
-        yield True
-    finally:
-        os.close(fd)  # the kernel releases the lock on close, exit or crash
+def exclusive(config: Config, name: str, *, wait: bool) -> Iterator[bool]:
+    """Take the named project lock: block for it when `wait`, else yield False at once when another process holds it."""
+    with _flock(config.project.root / ".unbake" / f"{name}.lock", fcntl.LOCK_EX, wait=wait) as fd:
+        if fd is not None:
+            os.ftruncate(fd, 0)
+            os.write(fd, f"{os.getpid()} {effort.invocation()}\n".encode())
+        yield fd is not None
 @contextmanager
 def work(config: Config) -> Iterator[Path]:
     """Yield a fresh scratch directory under the host cache and remove it on exit."""

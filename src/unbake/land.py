@@ -102,12 +102,12 @@ def drain(config: Config) -> Json:
     """Lands the inbox: one lock per entry so drains run side by side, the project lock only probed."""
     with effort.stage("land.drain"):
         landed, refused, busy = [], [], False
-        with store.exclusive(config, "land") as free:
+        with store.exclusive(config, "land", wait=False) as free:
             busy = not free
         while not busy and (entries := inbox(config)):
             claimed = False
             for entry in entries:
-                with store.exclusive(config, f"inbox/{entry.id}") as mine:
+                with store.exclusive(config, f"inbox/{entry.id}", wait=False) as mine:
                     if not mine or not (config.project.root / f".unbake/inbox/{entry.id}.json").exists():
                         continue
                     claimed = True

@@ -7,7 +7,7 @@ from unbake.contracts import Config, Finding, Json, Plan, Refusal, digest
 
 _SPELLED = ("src", "include", "types.toml")  # tracked places that name symbols
 def run(config: Config, params: Json) -> Json:
-    with effort.stage("rename.run"), store.exclusive(config, "land") as held:
+    with effort.stage("rename.run"), store.exclusive(config, "land", wait=False) as held:
         if not held:
             raise Refusal(Finding("setup.busy", configuration.sentence("setup.busy")))
         journal.recover(config)
