@@ -293,7 +293,7 @@ def test_plan_refusals(lane, reason):
     else:
         publish.layout.unit_options.return_value = []
     with pytest.raises(Refusal) as exc:
-        publish.plans(lane["snapshot"], lane["unit"], lane["proposed"])
+        list(publish.plans(lane["snapshot"], lane["unit"], lane["proposed"]))
     assert exc.value.findings[0].key == "land.request"
     publish.journal.apply.assert_not_called()
 
@@ -318,7 +318,7 @@ def test_plan_falls_through_an_option_that_refuses_outright(lane):
 def test_plan_refuses_with_the_last_refusal_when_every_option_refuses(lane):
     publish.types.landed.side_effect = Refusal(Finding("headers.parse", "no parse"))
     with pytest.raises(Refusal) as exc:
-        publish.plans(lane["snapshot"], lane["unit"], lane["proposed"])
+        list(publish.plans(lane["snapshot"], lane["unit"], lane["proposed"]))
     assert exc.value.findings[0].key == "headers.parse"
 
 
@@ -482,3 +482,15 @@ def test_land_fuzzy_compile_failed_refuses(lane, symptom):
     assert finding.key == "land.not_exact" and finding.unit == "f"
     assert set(finding.missing) == {symptom} and finding.symptoms[symptom]
     publish.journal.apply.assert_not_called()
+
+
+def test_a_later_layout_option_is_planned_only_when_the_first_does_not_prove(lane, monkeypatch):
+    first, second = Mock(name="first"), Mock(name="second")
+    monkeypatch.setattr(publish, "_option_plan", Mock(side_effect=[first, second]))
+    monkeypatch.setattr(publish, "Plan", type(first))
+    monkeypatch.setattr(publish.layout, "unit_options", Mock(return_value=[(lane["unit"], {}), (lane["unit"], {})]))
+    monkeypatch.setattr(publish.headers, "fold", Mock(return_value=({lane["unit"].path: b"x"}, ())))
+    monkeypatch.setattr(publish.view, "get", Mock())
+    monkeypatch.setattr(publish.compare, "holders", Mock(return_value=("a",)))
+    taken = publish.plans(lane["snapshot"], lane["unit"], lane["proposed"])
+    assert next(taken) is first and publish._option_plan.call_count == 1

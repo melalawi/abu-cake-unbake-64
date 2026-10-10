@@ -2,9 +2,10 @@
 import posixpath
 import re
 from collections import defaultdict
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
 from unbake import (
     compare,
@@ -162,7 +163,9 @@ def _generated(snapshot, writes):
     for path, data in repo.files(overlay).items():
         if data != snapshot.peek(path):
             writes[path] = data
-def plans(snapshot: Snapshot, unit: UnitSpec, proposed: Snapshot) -> list[Plan]:
+def plans(snapshot: Snapshot, unit: UnitSpec, proposed: Snapshot) -> Iterator[Plan]:
+    """The publication layout options, each planned only when the caller asks for it: the first option that proves
+    lands, so the others cost nothing."""
     with effort.stage("publish.plans"):
         recipe = recipes.resolve(proposed.config, unit, unit.options)
         first = compare.holders(proposed, unit)[0]
@@ -175,59 +178,72 @@ def plans(snapshot: Snapshot, unit: UnitSpec, proposed: Snapshot) -> list[Plan]:
             folded, conflicts = headers.fold(proposed, unit, view.get(proposed, unit, first, recipe))
         if conflicts:
             raise Refusal(*conflicts)
-        result, last = [], ()
         options = [(owner, {})] if again else layout.unit_options(snapshot, unit.members[0], folded[unit.path])
-        for option, writes in options:
-            try:
-                writes = dict(writes)
-                writes[option.path] = (_append(snapshot.read(option.path), folded[unit.path])
-                                      if option.path in snapshot.layout.units and not again else folded[unit.path])
-                writes.update((p, b) for p, b in folded.items() if p != unit.path)
-                overlay = layout.overlay(snapshot, writes)
-                configured = replace(option, toolchain=unit.toolchain, options=unit.options)
-                gone = {k for k in snapshot.layout.units.keys() - proposed.layout.units.keys()  # data it now owns
-                        if all(map(versions.unowned, snapshot.layout.units[k].members))}
-                units = {k: u for k, u in overlay.layout.units.items() if k not in gone}
-                units[option.path] = configured
-                writes.update(dict.fromkeys(gone))
-                member = unit.members[0]
-                if member in snapshot.layout.fuzzy:
-                    writes[snapshot.layout.fuzzy[member]["path"]] = None
-                fuzzy = {k: v for k, v in overlay.layout.fuzzy.items() if k != member}
-                writes["layout.toml"] = layout.dump_map(replace(overlay.layout, units=units, fuzzy=fuzzy))
-                overlay = layout.overlay(snapshot, writes)
-                landed = types.landed(overlay, configured, view.get(overlay, configured, first, recipe))
-                if landed != snapshot.peek("types.toml"):
-                    writes["types.toml"] = landed
-                _generated(snapshot, writes)
-                overlay = layout.overlay(snapshot, writes)
-                group = proposed.layout.groups[unit.group]
-                affected = {option.path}
-                edited = [p for p, data in writes.items() if p.endswith(".h") and data != snapshot.peek(p)]
-                affected.update(_consumers(overlay, edited))
-                before, after = [], []
-                for path, data in writes.items():
-                    if Path(path).suffix not in (".c", ".h"):
-                        continue
-                    owner = overlay.layout.units.get(path)
-                    sdk = overlay.layout.groups[owner.group].sdk if owner else group.sdk
-                    old = snapshot.peek(path)
-                    if old is not None:
-                        before.extend(policy.evaluate(snapshot, path, old.decode(), None, sdk))
-                    if data is not None:
-                        after.extend(policy.evaluate(overlay, path, data.decode(), None, sdk))
-                blocking, debt = policy.scope(before, after, writes)
-                if blocking:
-                    last = blocking
-                    continue
-                result.append(_plan("publish", snapshot, writes, tuple(sorted(affected)), debt,
-                                    f"publish {unit.members[0]} ({unit.path})"))
-            except Refusal as error:  # one option failing outright leaves the others to try
-                last = error.findings
-        if not result:
-            raise Refusal(*last or (Finding("land.request", "No publication layout option is available.",
-                                            path=unit.path),))
-        return result
+    return _option_plans(snapshot, unit, proposed, (folded, again, first, recipe), options)
+def _option_plans(snapshot: Snapshot, unit: UnitSpec, proposed: Snapshot, shared: tuple[Any, ...],
+                  options: Sequence[tuple[UnitSpec, dict[str, bytes | None]]]) -> Iterator[Plan]:
+    produced, last = False, ()
+    for option, writes in options:
+        try:
+            with effort.stage("publish.plans"):
+                made = _option_plan(snapshot, unit, proposed, shared, option, writes)
+        except Refusal as error:  # one option failing outright leaves the others to try
+            last = error.findings
+            continue
+        if isinstance(made, Plan):
+            produced = True
+            yield made
+        else:
+            last = made
+    if not produced:
+        raise Refusal(*last or (Finding("land.request", "No publication layout option is available.",
+                                        path=unit.path),))
+def _option_plan(snapshot: Snapshot, unit: UnitSpec, proposed: Snapshot, shared: tuple[Any, ...], option: UnitSpec,
+                 writes: dict[str, bytes | None]) -> Plan | tuple[Finding, ...]:
+    folded, again, first, recipe = shared
+    writes = dict(writes)
+    writes[option.path] = (_append(snapshot.read(option.path), folded[unit.path])
+                          if option.path in snapshot.layout.units and not again else folded[unit.path])
+    writes.update((p, b) for p, b in folded.items() if p != unit.path)
+    overlay = layout.overlay(snapshot, writes)
+    configured = replace(option, toolchain=unit.toolchain, options=unit.options)
+    gone = {k for k in snapshot.layout.units.keys() - proposed.layout.units.keys()  # data it now owns
+            if all(map(versions.unowned, snapshot.layout.units[k].members))}
+    units = {k: u for k, u in overlay.layout.units.items() if k not in gone}
+    units[option.path] = configured
+    writes.update(dict.fromkeys(gone))
+    member = unit.members[0]
+    if member in snapshot.layout.fuzzy:
+        writes[snapshot.layout.fuzzy[member]["path"]] = None
+    fuzzy = {k: v for k, v in overlay.layout.fuzzy.items() if k != member}
+    writes["layout.toml"] = layout.dump_map(replace(overlay.layout, units=units, fuzzy=fuzzy))
+    overlay = layout.overlay(snapshot, writes)
+    landed = types.landed(overlay, configured, view.get(overlay, configured, first, recipe))
+    if landed != snapshot.peek("types.toml"):
+        writes["types.toml"] = landed
+    _generated(snapshot, writes)
+    overlay = layout.overlay(snapshot, writes)
+    group = proposed.layout.groups[unit.group]
+    affected = {option.path}
+    edited = [p for p, data in writes.items() if p.endswith(".h") and data != snapshot.peek(p)]
+    affected.update(_consumers(overlay, edited))
+    before, after = [], []
+    for path, data in writes.items():
+        if Path(path).suffix not in (".c", ".h"):
+            continue
+        owner = overlay.layout.units.get(path)
+        sdk = overlay.layout.groups[owner.group].sdk if owner else group.sdk
+        old = snapshot.peek(path)
+        if old is not None:
+            before.extend(policy.evaluate(snapshot, path, old.decode(), None, sdk))
+        if data is not None:
+            after.extend(policy.evaluate(overlay, path, data.decode(), None, sdk))
+    blocking, debt = policy.scope(before, after, writes)
+    if blocking:
+        return blocking
+    return _plan("publish", snapshot, writes, tuple(sorted(affected)), debt,
+                 f"publish {unit.members[0]} ({unit.path})")
+
 def land(config: Config, submission: Submission) -> Receipt:
     with effort.stage("publish.land"):
         snapshot = layout.capture(config)
