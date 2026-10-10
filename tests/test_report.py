@@ -423,3 +423,22 @@ def test_an_entry_reading_an_undefined_register_is_a_piece_of_a_function(snapsho
     assert [report.split_slot(snapshot, n) for n in ("normal", "middle", "argument")] == [
         None, "the middle of a function", None]
     assert [r["member"] for r in report.items(snapshot, {})] == ["normal", "argument"]
+
+
+def test_a_function_whose_words_write_zero_is_data_misclassified_as_code(snapshot_factory, monkeypatch):
+    jr, nop = 0x03E00008, 0
+    real = [0x27BDFFE8, 0xAFBF0014, nop, jr, nop]  # a nop is not a write to $zero
+    load = [0x9400000A, 0x00041080, jr, nop, nop]  # lhu zero, 0xA(zero)
+    shift = [0x27BDFFE8, 0x00040080, jr, nop, nop]  # sll zero, a0, 2
+    rom = {0x1000: real, 0x1014: load, 0x1028: shift}
+    words = {start + 4 * i: w for start, ws in rom.items() for i, w in enumerate(ws)}
+    placed = lambda name, start: Member(name, "function", "asm", "g", (  # noqa: E731
+        Placement("a", ".text", start, start + 20, 0x80000000 + start),))
+    snapshot = snapshot_factory([placed("real", 0x1000), placed("load", 0x1014), placed("shift", 0x1028)],
+                                versions=("a",))
+    monkeypatch.setattr(versions, "rom_bytes", lambda v, lo, hi: b"".join(words[a].to_bytes(4, "big")
+                                                                        for a in range(lo, hi, 4)))
+    monkeypatch.setattr(report, "split_slot", _REAL_SPLIT_SLOT)
+    assert [report.split_slot(snapshot, n) for n in ("real", "load", "shift")] == [
+        None, "data misclassified as code", "data misclassified as code"]
+    assert [r["member"] for r in report.items(snapshot, {})] == ["real"]
