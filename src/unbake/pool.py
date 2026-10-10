@@ -76,12 +76,13 @@ def _get_executor(config: Config) -> ProcessPoolExecutor:
             )
             _host_digest = config.host.digest
         return _executor
-def _job(function: Callable[[Any], Any], item: Any, floor: float) -> tuple[bool, Any, Json]:
+def _job(function: Callable[[Any], Any], item: Any, floor: float, config: Config) -> tuple[bool, Any, Json]:
     start_ns = time.monotonic_ns()
     before = resource.getrusage(resource.RUSAGE_SELF)
     with effort.capture() as records:
         try:
-            value, ok = function(item), True
+            with store.slots(config, 1):
+                value, ok = function(item), True
         except Exception as exc:
             here = [f for f in traceback.extract_tb(exc.__traceback__) if "/unbake/" in f.filename]
             if here:  # the traceback does not cross the process boundary, a note does
@@ -94,6 +95,7 @@ def _job(function: Callable[[Any], Any], item: Any, floor: float) -> tuple[bool,
         "native_cpu": sum(r.native_cpu_seconds for r in records if r.kind == "native"),
         "rss": after.ru_maxrss * 1024,
         "cache": dict(records[-1].cache),
+        "wait_seconds": records[-1].wait_seconds,
         "records": [asdict(r) for r in records if r.wall_seconds >= floor or r.findings or r.wait_seconds],
         "start_ns": start_ns,
         "end_ns": time.monotonic_ns(),
@@ -104,7 +106,7 @@ class _Pickler(pickle.Pickler):
     def persistent_id(self, obj: Any) -> tuple | None:
         if isinstance(obj, Snapshot):
             key = hashlib.sha256((str(obj.config.project.root) + obj.digest).encode()).hexdigest()
-            if store.get(obj.config, "snapshot", key) is None:
+            if f"snapshot:{key}" not in store.content(obj.config)._cache:
                 store.put(obj.config, "snapshot", key, pickle.dumps(obj, protocol=5))
             return ("snapshot", key, obj.config)
         return None
@@ -119,8 +121,9 @@ class _Unpickler(pickle.Unpickler):
                 raise Refusal(Finding("worker.crash", f"snapshot {digest[:12]} is missing from the cache"))
             _SNAPSHOTS[digest] = pickle.loads(value)
         return _SNAPSHOTS[digest]
-def _chunk(function: Callable, items: Sequence, floor: float, sink: tuple | None) -> list[tuple[bool, Any, Json]]:
-    outcomes = [_job(function, item, floor) for item in items]
+def _chunk(function: Callable, items: Sequence, floor: float, sink: tuple | None,
+           config: Config) -> list[tuple[bool, Any, Json]]:
+    outcomes = [_job(function, item, floor, config) for item in items]
     if sink:
         store.put_many(sink[0], sink[1], [(key, pickle.dumps(value, protocol=5)) for (ok, value, _), key in
                                           zip(outcomes, sink[2], strict=True) if ok and key is not None])
@@ -128,8 +131,7 @@ def _chunk(function: Callable, items: Sequence, floor: float, sink: tuple | None
 def _dispatch(blob: bytes, floor: float, config: Config) -> list[tuple[bool, Any, Json]]:
     """One chunk travels as its own pickle, so a worker only unpacks the items it runs and stores their results."""
     function, items, sink = _Unpickler(io.BytesIO(blob)).load()
-    with store.slots(config, 1):
-        return _chunk(function, items, floor, sink)
+    return _chunk(function, items, floor, sink, config)
 def _raise_failure(config: Config, name: str, index: int, exc: Any) -> None:
     if isinstance(exc, Refusal):
         raise exc
@@ -227,9 +229,8 @@ def gather(config: Config, groups: Sequence[tuple]) -> list[list[Any]]:
                     picked = run.todo[lo:lo + size[run]]
                     if inline:
                         pending[future := Future()] = (run, picked)
-                        with store.slots(config, 1):
-                            future.set_result(_chunk(run.function, [run.items[i] for i in picked], floor,
-                                                     run.sink(config, picked)))
+                        future.set_result(_chunk(run.function, [run.items[i] for i in picked], floor,
+                                                 run.sink(config, picked), config))
                     else:
                         stream = io.BytesIO()
                         _Pickler(stream, protocol=5).dump(

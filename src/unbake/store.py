@@ -45,23 +45,19 @@ def content(config: Config) -> ContentCache:
 def _flock(path: Path, flags: int, *, wait: bool = True) -> Iterator[int | None]:
     """Hold the lock; a contended lock yields None when `wait` is false, else blocks and records the wait."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o644)
-    try:
+    with path.open("a+b") as handle:
+        fd = handle.fileno()
         try:
             fcntl.flock(fd, flags | fcntl.LOCK_NB)
         except BlockingIOError:
             if not wait:
-                os.close(fd)
-                fd = -1
+                handle.close()
                 yield None
                 return
             start = time.perf_counter()
             fcntl.flock(fd, flags)
             effort.waited(time.perf_counter() - start)
         yield fd
-    finally:
-        if fd >= 0:
-            os.close(fd)  # closing releases the lock
 def cached(config: Config, kind: str, key: str, produce: Callable[[], bytes]) -> bytes:
     return content(config).cached(kind, key, produce)
 def get(config: Config, kind: str, key: str) -> bytes | None:
@@ -70,9 +66,7 @@ def put(config: Config, kind: str, key: str, value: bytes) -> None:
     content(config).put(kind, key, value)
 def put_many(config: Config, kind: str, rows: Iterable[tuple[str, bytes]]) -> None:
     """Entries in one write transaction: tens of thousands of single writes queue on the cache's one writer."""
-    with content(config)._cache.transact():
-        for key, value in rows:
-            put(config, kind, key, value)
+    content(config).put_many((kind, key, value) for key, value in rows)
 def stem(member: str) -> str:
     """One file-name segment per member: slashes become dots, a name too long for a file keeps head and digest."""
     flat = member.replace("/", ".")
@@ -139,7 +133,7 @@ def slots(config: Config, want: int) -> Iterator[int]:
     if held and held[:2] == (os.getpid(), home):
         yield min(want, held[2])
         return
-    start, count = time.perf_counter(), 0
+    start, count = None, 0
     with ExitStack() as stack:
         while not count:
             with _flock(host.budget_dir / "allocate.lock", fcntl.LOCK_EX):
@@ -155,8 +149,10 @@ def slots(config: Config, want: int) -> Iterator[int]:
                         if count == want:
                             break
             if not count:
+                start = start or time.perf_counter()
                 time.sleep(0.01)
-        effort.waited(time.perf_counter() - start)
+        if start is not None:
+            effort.waited(time.perf_counter() - start)
         token = _held.set((os.getpid(), home, count))
         try:
             yield count

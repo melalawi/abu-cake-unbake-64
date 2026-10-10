@@ -133,7 +133,7 @@ def test_native_and_pool_cpu_cache(tmp_path):
         effort.record_native("tool", fixture.native_result(cpu=3), effort.time.perf_counter_ns())
         effort.record_pool("units", 2, 2, 2, effort.time.perf_counter_ns(), [
             {"worker_cpu": 4, "native_cpu": 5, "rss": 1234, "pid": 10, "start_ns": 0, "end_ns": 2_000_000_000,
-             "cache": {"object": (2, 1)}, "records": []},
+             "cache": {"object": (2, 1)}, "records": [], "wait_seconds": 1.0},
             {"worker_cpu": 6, "native_cpu": 7, "rss": 2345, "pid": 11, "start_ns": 0, "end_ns": 3_000_000_000,
              "cache": {"object": (1, 2)}, "records": []},
         ])
@@ -142,6 +142,8 @@ def test_native_and_pool_cpu_cache(tmp_path):
     assert (root.items, root.jobs, root.workers_used, root.workers_admitted) == (2, 2, 2, 2)
     assert root.worker_rss_peak_bytes == 2345
     assert root.cache["object"] == (3, 3)
+    held = next(r for r in effort.closed() if r.kind == "pool")
+    assert held.wait_seconds == 1.0 and held.busy_seconds == 4.0
 
 
 def test_pool_job_records_rebased():

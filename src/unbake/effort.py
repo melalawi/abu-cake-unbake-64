@@ -257,7 +257,9 @@ def record_pool(name: str, items: int, jobs: int, admitted: int, start_ns: int, 
                            native=sum(e["native_cpu"] for e in envelopes),
                            items=items, jobs=jobs, workers_admitted=admitted, cache=cache,
                            workers_used=len({e["pid"] for e in envelopes}), dispatch_seconds=dispatch_seconds,
-                           busy_seconds=sum((e["end_ns"] - e["start_ns"]) / 1e9 for e in envelopes),
+                           wait_seconds=sum(e.get("wait_seconds", 0.0) for e in envelopes),
+                           busy_seconds=sum((e["end_ns"] - e["start_ns"]) / 1e9
+                                            - e.get("wait_seconds", 0.0) for e in envelopes),
                            worker_rss_peak_bytes=max((e["rss"] for e in envelopes), default=0)), True)
     _stack.get()[-1].children.append(record)
     _merge_cache(_stack.get()[-1].remote_cache, cache)

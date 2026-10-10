@@ -7,8 +7,10 @@ import threading
 import time
 from concurrent.futures import Future
 from concurrent.futures.process import BrokenProcessPool
+from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from test_effort import _config
@@ -107,12 +109,12 @@ def test_worker_failure_mapping(tmp_path, mocked_parallel, monkeypatch, exc, key
     assert next(r for r in effort.closed() if r.kind == "pool").jobs == 2
 
 
-def test_job_cache_and_metrics():
+def test_job_cache_and_metrics(tmp_path):
     def work(value):
         effort.count("object", True)
         effort.count("view", False)
         return value
-    ok, value, envelope = pool._job(work, 7, 2.0)
+    ok, value, envelope = pool._job(work, 7, 2.0, _config(tmp_path))
     assert (ok, value) == (True, 7)
     assert envelope["cache"] == {"object": (1, 0), "view": (0, 1)}
     assert envelope["worker_cpu"] >= 0
@@ -207,19 +209,19 @@ def test_real_batched_work_count_order_and_worker_pids(tmp_path, monkeypatch):
     assert metrics.jobs == metrics.items == len(items)
     assert metrics.workers_used == len({pid for value, pid in values})
     assert metrics.workers_admitted == 2
-    assert not [r for r in effort.closed() if r.kind == "job"]
+    assert all(r.wait_seconds for r in effort.closed() if r.kind == "job")
 
 
-def test_job_ships_only_notable_records():
+def test_job_ships_only_notable_records(tmp_path):
     def work(value):
         with effort.stage("quick"):
             pass
         with effort.stage("waited"):
             effort.waited(0.5)
         return value
-    _, _, kept = pool._job(work, 1, 1000.0)
+    _, _, kept = pool._job(work, 1, 1000.0, _config(tmp_path))
     assert [r["path"][-1] for r in kept["records"]] == ["waited"]
-    _, _, everything = pool._job(work, 1, 0.0)
+    _, _, everything = pool._job(work, 1, 0.0, _config(tmp_path))
     assert {r["path"][-1] for r in everything["records"]} == {"quick", "waited", "job", "(own)"}
 
 
@@ -302,17 +304,17 @@ def test_a_warm_keyed_group_costs_one_store_read(tmp_path, monkeypatch):
 
 def test_whoever_ran_a_keyed_chunk_stores_its_results(tmp_path):
     config = _config(tmp_path)
-    outcomes = pool._chunk(_square, [2, 3, 4], 0.0, (config, "units", ["a", None, "c"]))
+    outcomes = pool._chunk(_square, [2, 3, 4], 0.0, (config, "units", ["a", None, "c"]), config)
     assert [o[1] for o in outcomes] == [4, 9, 16]
     assert pickle.loads(pool.store.get(config, "units", "a")) == 4 and pool.store.get(config, "units", "c") is not None
     assert pool.store.get(config, "units", "b") is None  # an unkeyed item is not stored
-    failed = pool._chunk(_fail, [1], 0.0, (config, "units", ["f"]))
+    failed = pool._chunk(_fail, [1], 0.0, (config, "units", ["f"]), config)
     assert failed[0][0] is False and pool.store.get(config, "units", "f") is None
-    assert [o[1] for o in pool._chunk(_square, [5], 0.0, None)] == [25]
+    assert [o[1] for o in pool._chunk(_square, [5], 0.0, None, config)] == [25]
 
 
 def test_a_worker_crash_names_the_type_and_the_innermost_unbake_frame(tmp_path):
-    ok, error, _ = pool._job(view._sha, "not bytes", 0.0)  # hashlib refuses inside unbake.view._sha
+    ok, error, _ = pool._job(view._sha, "not bytes", 0.0, _config(tmp_path))  # hashlib refuses inside unbake.view._sha
     assert not ok and error.__notes__[0].startswith("at view:_sha:")
     with pytest.raises(Refusal) as raised:
         pool._raise_failure(_config(tmp_path), "stage", 3, error)
@@ -354,13 +356,34 @@ def test_snapshot_transport_restores_an_evicted_entry(tmp_path, monkeypatch):
     from unbake.contracts import LayoutMap, Snapshot
     snapshot = Snapshot(config, "commit", LayoutMap(1, {}, {}, {}, "layout", (), {}), {}, {}, "snapshot")
     kept, writes = {}, []
-    monkeypatch.setattr(pool.store, "get", lambda cfg, kind, key: kept.get((kind, key)))
+    monkeypatch.setattr(pool.store, "content", lambda cfg: SimpleNamespace(_cache=kept))
+    monkeypatch.setattr(pool.store, "get", lambda *args: pytest.fail("presence must not read snapshot bytes"))
     def put(cfg, kind, key, value):
         writes.append(key)
-        kept[kind, key] = value
+        kept[f"{kind}:{key}"] = value
     monkeypatch.setattr(pool.store, "put", put)
     pickler = pool._Pickler(io.BytesIO(), protocol=5)
     first = pickler.persistent_id(snapshot)
     kept.clear()
     assert pickler.persistent_id(snapshot) == first
     assert writes == [first[1], first[1]]
+
+
+def test_every_job_releases_its_token_and_keeps_admission_wait(tmp_path, monkeypatch):
+    events = []
+    @contextmanager
+    def slots(config, want):
+        assert want == 1
+        events.append("take")
+        effort.waited(0.625)
+        try:
+            yield 1
+        finally:
+            events.append("release")
+    monkeypatch.setattr(pool.store, "slots", slots)
+    outcomes = pool._chunk(_square, [2, 3, 4], 1000.0, None, _config(tmp_path))
+    assert events == ["take", "release"] * 3
+    assert [outcome[2]["wait_seconds"] for outcome in outcomes] == [0.625] * 3
+    assert [outcome[1] for outcome in outcomes] == [4, 9, 16]
+    pool._chunk(_fail, [1], 1000.0, None, _config(tmp_path))
+    assert events == ["take", "release"] * 4
