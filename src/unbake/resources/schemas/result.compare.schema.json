@@ -246,94 +246,6 @@
     "additionalProperties": false
    }
   },
-  "feedback": {
-   "type": "object",
-   "properties": {
-    "member": {
-     "type": "string",
-     "minLength": 1
-    },
-    "subsystem": {
-     "type": "string",
-     "minLength": 1
-    },
-    "step": {
-     "type": "string",
-     "minLength": 1
-    },
-    "score_before": {
-     "type": "number",
-     "minimum": 0,
-     "maximum": 1
-    },
-    "score_after": {
-     "type": "number",
-     "minimum": 0,
-     "maximum": 1
-    },
-    "outcome": {
-     "enum": [
-      "exact",
-      "better",
-      "same",
-      "worse",
-      "failed"
-     ]
-    },
-    "hints": {
-     "type": "array",
-     "items": {
-      "type": "object",
-      "properties": {
-       "id": {
-        "type": "string",
-        "minLength": 1
-       },
-       "technique": {
-        "type": "string",
-        "minLength": 1
-       },
-       "example": {
-        "type": "string"
-       },
-       "because": {
-        "type": "object",
-        "additionalProperties": {}
-       }
-      },
-      "required": [
-       "id",
-       "technique",
-       "example",
-       "because"
-      ],
-      "additionalProperties": false
-     }
-    },
-    "next": {
-     "type": "string"
-    },
-    "label": {
-     "enum": [
-      "CRACKED",
-      "NEEDS CREATIVE",
-      ""
-     ]
-    }
-   },
-   "required": [
-    "member",
-    "subsystem",
-    "step",
-    "score_before",
-    "score_after",
-    "outcome",
-    "hints",
-    "next",
-    "label"
-   ],
-   "additionalProperties": false
-  },
   "submitted": {
    "oneOf": [
     {
@@ -525,7 +437,6 @@
   "score",
   "proofs",
   "gaps",
-  "feedback",
   "submitted",
   "drain"
  ],

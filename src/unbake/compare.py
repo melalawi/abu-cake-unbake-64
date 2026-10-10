@@ -10,7 +10,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from unbake import crack, effort, land, layout, native, ownership, pool, process, recipes, store, symptoms, versions
+from unbake import effort, land, layout, native, ownership, pool, process, recipes, store, symptoms, versions
 from unbake.contracts import Config, Finding, Json, Proof, Refusal, Snapshot, UnitSpec
 
 
@@ -138,7 +138,6 @@ def run(config: Config, params: Json) -> Json:
             raise Refusal(Finding("land.request", reason="the file holds several members; pass --function",
                                   unit=unit.path, action="pass --function NAME"))
         note = params["note"] or ""
-        _, feedback = crack.feedback(bound, member, "creative", proofs, note)
         request = {"file": str(params["file"]), "function": member, "overrides": overrides, "note": note}
         submission = land.submit(config, request, unit, proofs, Path(params["file"]).read_bytes(), "compare")
         drain = land.drain(config) if submission else None
@@ -146,4 +145,4 @@ def run(config: Config, params: Json) -> Json:
         return {"unit": unit.path, "members": list(unit.members),
                 "exact": all(p.exact for p in proofs) and not found, "score": score,
                 "proofs": [asdict(p) for p in proofs], "gaps": [asdict(f) for f in found],
-                "feedback": feedback, "submitted": submission.id if submission else None, "drain": drain}
+                "submitted": submission.id if submission else None, "drain": drain}
