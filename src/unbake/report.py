@@ -7,6 +7,9 @@ import math
 import re
 import struct
 from collections import defaultdict
+from collections.abc import Sequence
+
+import rabbitizer
 
 from unbake import config as configuration
 from unbake import effort, land, layout, pool, versions
@@ -36,9 +39,33 @@ def _text_starts(snapshot: Snapshot) -> dict[tuple[str, int], str]:
     return effort.memo(("text-starts", snapshot.digest), build)  # type: ignore[return-value]
 def _ends(word: int) -> bool:  # an unconditional jr, j or b, after which execution never reaches the next member
     return (word >> 26 == 0 and word & 0x3F == 8) or word >> 26 == 2 or word >> 16 == 0x1000
+_ENTRY_WORDS = 64
+_DEFINED_AT_ENTRY = frozenset({0, 4, 5, 6, 7, 28, 29, 31})  # $zero, $a0-$a3, $gp, $sp, $ra
+_SAVED = frozenset({*range(16, 24), 30})  # $s0-$s7, $fp: defined only to be stored to the stack
+def _reads_before_writing(words: Sequence[int], vram: int) -> bool:
+    """Whether the straight-line entry block (up to the first jump or branch and its delay slot) reads a register
+    the calling convention leaves undefined at entry: such a symbol is a point inside a function."""
+    defined, slot = set(_DEFINED_AT_ENTRY), False
+    for index, word in enumerate(words):
+        instruction = rabbitizer.Instruction(word, vram + 4 * index)
+        if not instruction.isValid():
+            return False
+        reads = [int(getattr(instruction, name).value) for name, reading in (
+            ("rs", instruction.readsRs()), ("rt", instruction.readsRt()), ("rd", instruction.readsRd())) if reading]
+        saving = instruction.doesStore() and instruction.readsRs() and int(instruction.rs.value) == 29
+        if any(r not in defined and not (r in _SAVED and saving) for r in reads):
+            return True
+        defined.update(int(getattr(instruction, name).value) for name, writing in (
+            ("rs", instruction.modifiesRs()), ("rt", instruction.modifiesRt()), ("rd", instruction.modifiesRd()))
+            if writing)
+        if slot:
+            return False
+        slot = instruction.hasDelaySlot()
+    return False
 def split_slot(snapshot: Snapshot, member: str) -> str | None:
     """The member that `member` runs into: the one holding the delay slot of its last instruction, or the one it
-    falls through into when its last instruction pair is not an unconditional jump."""
+    falls through into when its last instruction pair is not an unconditional jump. A member whose entry reads a
+    register that is undefined there is itself a piece of a function, named "the middle of a function"."""
     for place in snapshot.layout.members[member].placements:
         if place.section != ".text" or place.size < 4:
             continue
@@ -48,6 +75,10 @@ def split_slot(snapshot: Snapshot, member: str) -> str | None:
             versions.rom_bytes(version, place.rom_end - 8, place.rom_end - 4), "big")
         if versions.delay_slot(last) or (place.size >= 8 and not _ends(pair)):
             return _text_starts(snapshot).get((place.version, place.rom_end), "an unowned range")
+        data = versions.rom_bytes(version, place.rom_start, min(place.rom_end, place.rom_start + 4 * _ENTRY_WORDS))
+        if _reads_before_writing([int.from_bytes(data[i:i + 4], "big") for i in range(0, len(data) - 3, 4)],
+                                 place.vram):
+            return "the middle of a function"
     return None
 def _inventory(snapshot: Snapshot):
     kinds = configuration.load_resource("units.toml")["kind"]

@@ -404,3 +404,22 @@ def test_a_member_that_falls_through_is_a_fragment_and_so_is_its_successor(snaps
     assert report.split_slot(snapshot, "call") == "epilogue"
     assert report.split_slot(snapshot, "epilogue") is None
     assert [r["member"] for r in report.items(snapshot, {})] == ["whole"]
+
+
+def test_an_entry_reading_an_undefined_register_is_a_piece_of_a_function(snapshot_factory, monkeypatch):
+    jr, nop = 0x03E00008, 0
+    prologue = [0x27BDFFE8, 0xAFBF0014, 0xAFB00010, jr, nop]  # addiu sp; sw ra; sw s0; jr ra; nop
+    reads_v1 = [0x28620002, 0x10400003, nop, jr, nop]  # slti v0, v1, 2; beqz v0; nop; jr ra; nop
+    reads_a0 = [0x28820002, 0x10400003, nop, jr, nop]  # slti v0, a0, 2: an argument
+    rom = {0x1000: prologue, 0x1014: reads_v1, 0x1028: reads_a0}
+    words = {start + 4 * i: w for start, ws in rom.items() for i, w in enumerate(ws)}
+    placed = lambda name, start: Member(name, "function", "asm", "g", (  # noqa: E731
+        Placement("a", ".text", start, start + 20, 0x80000000 + start),))
+    snapshot = snapshot_factory([placed("normal", 0x1000), placed("middle", 0x1014), placed("argument", 0x1028)],
+                                versions=("a",))
+    monkeypatch.setattr(versions, "rom_bytes", lambda v, lo, hi: b"".join(words[a].to_bytes(4, "big")
+                                                                        for a in range(lo, hi, 4)))
+    monkeypatch.setattr(report, "split_slot", _REAL_SPLIT_SLOT)
+    assert [report.split_slot(snapshot, n) for n in ("normal", "middle", "argument")] == [
+        None, "the middle of a function", None]
+    assert [r["member"] for r in report.items(snapshot, {})] == ["normal", "argument"]
