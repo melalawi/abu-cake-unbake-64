@@ -11,7 +11,7 @@ from typing import Any, Protocol
 Json = Mapping[str, Any]  # a document already validated by config.load_resource against its schema
 def digest(value: Any) -> str:
     """sha256 hex of canonical JSON (sorted keys, no spaces); dataclasses, paths, bytes and sets are normalised."""
-    def norm(item: Any) -> Any:  # only what JSON cannot write itself reaches here, so a long list of tuples stays native
+    def norm(item: Any) -> Any:  # JSON writes the rest natively
         if is_dataclass(item):
             return asdict(item)
         if isinstance(item, Mapping):

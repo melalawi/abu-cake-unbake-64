@@ -119,7 +119,7 @@ def _overlay(snapshot: Snapshot, writes: Mapping[str, bytes | None]) -> Snapshot
         return new
 def load_map(config: Config, versions: Mapping[str, Version], text: bytes, reader: Callable[[str], bytes]) -> LayoutMap:
     with effort.stage("layout.load_map"):
-        doc = configuration.toml("layout", text, "layout.toml", "layout.map", config)
+        doc = configuration.toml("layout", text, "layout.toml", "layout.map", store.content(config).cached)
         groups = {r["name"]: Group(**{**r, "members": tuple(r["members"]), "signals": tuple(r["signals"])})
                   for r in doc["group"]}
         collected = {}

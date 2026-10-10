@@ -182,7 +182,7 @@ def test_items_order_rank_state_size(snapshot_factory, monkeypatch):
         if row["state"] == "creative":
             assert row["packet"] == f".unbake/packets/{name}.json"
     assert all(c.args[0] is snapshot.config for c in history.call_args_list)
-    assert not {"fuzzy", "large", "late", "z_tie", "a_tie"} & {c.args[1] for c in history.call_args_list}  # no file, no read
+    assert not {"fuzzy", "large", "late", "z_tie", "a_tie"} & {c.args[1] for c in history.call_args_list}
     assert [r["member"] for r in report.items(snapshot, {"subsystem": "sdk"})] == ["sdk_creative"]
 
 

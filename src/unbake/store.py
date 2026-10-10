@@ -15,6 +15,7 @@ from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import cast
 
 from abucache.store import ContentCache, open_cache
 
@@ -77,7 +78,8 @@ def _stream_path(config: Config, stream: str) -> Path:
 def listing(config: Config, folder: str) -> frozenset[str]:
     """The file names in .unbake/<folder>, read once per command: a thousand questions about files are one listing."""
     path = f"{config.project.root}/.unbake/{folder}"
-    return effort.memo(("listing", path), lambda: frozenset(os.listdir(path)) if os.path.isdir(path) else frozenset())
+    return cast(frozenset[str], effort.memo(("listing", path),
+                lambda: frozenset(os.listdir(path)) if os.path.isdir(path) else frozenset()))
 def append(config: Config, stream: str, row: Json) -> None:
     """Append one JSON line to .unbake/<stream>.jsonl as a single O_APPEND write under an exclusive lock."""
     path = _stream_path(config, stream)

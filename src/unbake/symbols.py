@@ -7,8 +7,9 @@ from collections import Counter
 from collections.abc import Callable, Collection, Mapping
 
 from unbake import config, effort
-from unbake.contracts import Config, Finding, Refusal, Snapshot
+from unbake.contracts import Finding, Refusal, Snapshot
 
+Cached = Callable[[str, str, Callable[[], bytes]], bytes]  # store.content(config).cached
 PATH = "symbols.toml"
 _PARSED: list = [None, None]  # the last bytes loaded and their table (read-only)
 _NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
@@ -17,7 +18,7 @@ def path() -> str:
     return PATH
 def empty() -> bytes:
     return dump({})
-def parse(data: bytes, versions: Collection[str], cache: Config | None = None) -> dict[str, dict]:
+def parse(data: bytes, versions: Collection[str], cache: Cached | None = None) -> dict[str, dict]:
     """The rows of the table: name -> {"kind": function|data, <version>: vram}."""
     document = config.toml("symbols", data, PATH, "symbols.table", cache)
     for name, row in document["symbol"].items():
@@ -26,7 +27,8 @@ def parse(data: bytes, versions: Collection[str], cache: Config | None = None) -
             raise Refusal(Finding("symbols.table", f"{name} must hold an address for a configured version"
                                   + (f"; {stray[0]} is not one" if stray else ""), path=PATH, unit=name))
     return document["symbol"]
-def load(reader: Callable[[str], bytes], versions: Collection[str], cache: Config | None = None) -> dict[str, dict]:
+def load(reader: Callable[[str], bytes], versions: Collection[str],
+         cache: Cached | None = None) -> dict[str, dict]:
     """The table for reading only: parsed once per distinct content."""
     try:
         data = reader(PATH)

@@ -132,7 +132,8 @@ class _Run:
     """One group of a gather: its items, the cache keys of those, and the indexes the workers must still compute."""
     def __init__(self, config: Config, name: str, function: Callable, items: Sequence,
                  key: Callable[[Any], str | None] | None = None):
-        self.name, self.function, self.items, self.key, self.sealed = name, function, items, key, False
+        self.name, self.function, self.items, self.key = name, function, items, key
+        self.sealed = False
         self.outcomes: list[tuple[bool, Any, Json] | None] = [None] * len(items)
         self.keys = [key(item) for item in items] if key else []
         self.todo = list(range(len(items)))

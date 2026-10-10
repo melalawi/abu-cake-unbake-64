@@ -9,6 +9,7 @@ import re
 from collections.abc import Sequence
 from dataclasses import replace
 from pathlib import Path
+from typing import cast
 
 from unbake import adapters, effort, pool, store
 from unbake import config as configuration
@@ -61,7 +62,7 @@ def _edges(path: str, include: tuple[str, ...]) -> tuple[str, ...]:
                     found.append(candidate)
                     break
         return tuple(found)
-    return effort.memo(("edges", path, include), resolve)
+    return cast(tuple[str, ...], effort.memo(("edges", path, include), resolve))
 def _reached(source: str, include: Sequence[str]) -> set[str]:
     """Every file the source can include. The preprocessor's line markers are what dependencies were read from, and
     a flag such as -P removes them, so the include graph is read from the sources instead (a superset is safe)."""
