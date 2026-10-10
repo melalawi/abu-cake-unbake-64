@@ -18,8 +18,8 @@ def holders(snapshot: Snapshot, unit: UnitSpec) -> tuple[str, ...]:
     return tuple(sorted(snapshot.layout.held(unit.members)))
 
 
-def _export(snapshot: Snapshot, unit: UnitSpec, version: str, recipe: Any, work: Path,
-            proofs: Sequence[Proof], target: Path) -> None:
+def _export(item: tuple) -> None:
+    snapshot, unit, version, recipe, work, proofs, target = item
     target.mkdir(parents=True)
     stem = Path(unit.path).stem
     for name in (f"{stem}.i", f"{stem}.s", f"{stem}.o", "linked.elf", "text.bin",
@@ -71,8 +71,8 @@ def measure_many(snapshot: Snapshot, unit: UnitSpec, variants: Sequence[Json],
                 staging = out.parent / (".tmp-" + out.name)
                 if staging.exists():
                     shutil.rmtree(staging)
-                for v in held:
-                    _export(snapshot, unit, v, recipes_[0], work / v, proofs[0], staging / v)
+                pool.map(config, "compare.export", _export,
+                         [(snapshot, unit, v, recipes_[0], work / v, proofs[0], staging / v) for v in held])
                 os.replace(staging, out)
         return proofs
 

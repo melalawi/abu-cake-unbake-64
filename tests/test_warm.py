@@ -97,20 +97,26 @@ def test_a_split_file_is_parsed_once_across_commands(cfg) -> None:
     assert len(parses) == 1
 
 
-def test_derive_many_places_every_unit_in_one_dispatch(monkeypatch) -> None:
+def test_derive_many_places_every_holder_in_one_dispatch(monkeypatch) -> None:
     from types import SimpleNamespace
 
     from unbake import ownership
+    from unbake.contracts import LayoutMap, Member, Placement, UnitSpec
     maps = []
-    monkeypatch.setattr(ownership.pool, "map",
-                        lambda cfg, name, fn, items, key=None: maps.append(len(items)) or [{}] * len(items))
-    monkeypatch.setattr(ownership, "_emits_data", lambda snapshot, unit: unit != "data")
+    units = [UnitSpec(f"src/{n}.c", "c", "g", (n,), "gcc-test", {}) for n in ("f", "data", "g")]
+    members = {n: Member(n, "function", "c", "g", tuple(
+        Placement(v, ".text", 0, 4, 0x80000000) for v in held))
+        for n, held in (("f", ("a", "b", "c")), ("g", ("a", "b")))}
+    monkeypatch.setattr(ownership.pool, "map", lambda cfg, name, fn, jobs, key=None:
+                        maps.append(len(jobs)) or [{v: {}} for _, _, v in jobs])
+    monkeypatch.setattr(ownership, "_emits_data", lambda snapshot, unit: unit.members != ("data",))
     monkeypatch.setattr(ownership, "_derived", lambda snapshot, unit, result: ("derived", unit))
-    snapshot = SimpleNamespace(config=None)
-    got = ownership.derive_many(snapshot, ["a", "data", "b"])
-    assert got == [("derived", "a"), (snapshot, "data"), ("derived", "b")]
-    assert maps == [2]  # two compiled units, one dispatch
-    assert ownership.derive_many(snapshot, ["data"]) == [(snapshot, "data")] and maps == [2]  # nothing to place
+    snapshot = SimpleNamespace(config=None, versions={v: None for v in ("a", "b", "c")},
+                               layout=LayoutMap(32, {}, members, {}, "d", (), {}))
+    got = ownership.derive_many(snapshot, units)
+    assert got == [("derived", units[0]), (snapshot, units[1]), ("derived", units[2])]
+    assert maps == [5]
+    assert ownership.derive_many(snapshot, [units[1]]) == [(snapshot, units[1])] and maps == [5]
 
 
 def test_a_map_only_overlay_reads_no_version_and_a_repeated_map_is_built_once(cfg, monkeypatch) -> None:

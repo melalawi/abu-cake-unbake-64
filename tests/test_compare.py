@@ -130,6 +130,8 @@ def mock_measure(monkeypatch: pytest.MonkeyPatch, seen: list[Path], exact: bool 
     monkeypatch.setattr(compare.recipes, "resolve", lambda *a: RECIPE)
 
     def fake_map(config: Config, name: str, function: Any, items: list[Any]) -> list[Any]:
+        if function is compare._export:
+            return [function(item) for item in items]
         seen.extend(item[4] for item in items)
         return [(fixture.proof(UNIT, "f", item[2], exact, () if exact else ("bytes differ",)),) for item in items]
 
@@ -161,17 +163,21 @@ def test_measure_exports_before_work_removed(cfg: Config, tmp_path: Path, monkey
     s = snap(cfg, {"f": member("f")})
     exported: list[Path] = []
 
-    def export(snapshot: Snapshot, u: UnitSpec, version: str, recipe: Recipe, work: Path,
-               proofs: Any, target: Path) -> None:
+    def export(item: tuple) -> None:
+        _snapshot, _u, _version, _recipe, work, _proofs, target = item
         exported.append(work.parent)
         assert work.parent.exists()
         target.mkdir(parents=True)
         (target / "result.json").write_text("{}")
 
     monkeypatch.setattr(compare, "_export", export)
+    calls = []
+    inner = compare.pool.map
+    monkeypatch.setattr(compare.pool, "map", lambda *a: calls.append((a[1], len(a[3]))) or inner(*a))
     out = tmp_path / "out"
     compare.measure(s, unit("f"), {"add": [], "omit": []}, out)
     assert sorted(p.name for p in out.iterdir()) == ["a", "b"]
+    assert calls == [("compare.measure", 2), ("compare.export", 2)]
     assert not (out.parent / ".tmp-out").exists()
     assert not exported[0].exists()
 

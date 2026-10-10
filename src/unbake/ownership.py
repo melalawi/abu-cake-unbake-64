@@ -164,33 +164,34 @@ def _vram_of(index: tuple, offset: int) -> int:
     rows = index[1]
     i = bisect_right(rows, (offset, _WORD)) - 1
     return rows[i][4] + offset - rows[i][0]
-def _job_key(item: tuple[Snapshot, UnitSpec, str | None]) -> str | None:
-    """What the unit's placements read: its builds in every holder, the rows they can land on and its own text range."""
-    snapshot, unit, only = item
-    held = sorted(snapshot.layout.held(unit.members) & ({only} if only else set(snapshot.versions)))
-    stamps = [native.stamp(snapshot, unit, v) for v in held]
-    return None if None in stamps else digest((stamps, [_index(snapshot, v)[4] for v in held]))
-def _job(item: tuple[Snapshot, UnitSpec, str | None]) -> dict[str, dict | str]:
-    snapshot, unit, only = item
-    cfg, recipe, out = snapshot.config, recipes.resolve(snapshot.config, unit, {}), {}
+def _job_key(item: tuple[Snapshot, UnitSpec, str]) -> str | None:
+    """The build and ROM rows of one unit holder."""
+    snapshot, unit, version = item
+    stamp = native.stamp(snapshot, unit, version)
+    return None if stamp is None else digest((stamp, _index(snapshot, version)[4]))
+def _job(item: tuple[Snapshot, UnitSpec, str]) -> dict[str, dict | str]:
+    snapshot, unit, version = item
+    cfg, recipe = snapshot.config, recipes.resolve(snapshot.config, unit, {})
     code = replace(unit, members=tuple(n for n in unit.members if snapshot.layout.members[n].kind == "function"))
-    for version in sorted(snapshot.layout.held(unit.members)):
-        if only not in (None, version):
-            continue
-        try:
-            with store.work(cfg) as work:
-                obj = native.objects(snapshot, unit, version, recipe, work)[0]
-                blob = obj.read_bytes()
-                unresolved = versions.resolve(snapshot.versions[version], versions.undefined(obj), unit.path)
-            if unresolved:  # the link would fail: the holder is withheld like any compile failure
-                raise Refusal(replace(unresolved[0], reason=f"{unresolved[0].missing[0]} has no address in {version}"
-                                      f" ({len(unresolved)} unresolved)"))
-            held = next((p for p in native.sections(snapshot, code, version) if p.section == ".text"), None)
-        except Refusal as refusal:
-            out[version] = f"{refusal.findings[0].key}: {refusal.findings[0].reason}"
-            continue
-        out[version] = locate(_index(snapshot, version), blob, (held.vram, held.rom_start) if held else None)
-    return out
+    try:
+        with store.work(cfg) as work:
+            obj = native.objects(snapshot, unit, version, recipe, work)[0]
+            blob = obj.read_bytes()
+            unresolved = versions.resolve(snapshot.versions[version], versions.undefined(obj), unit.path)
+        if unresolved:
+            raise Refusal(replace(unresolved[0], reason=f"{unresolved[0].missing[0]} has no address in {version}"
+                                  f" ({len(unresolved)} unresolved)"))
+        held = next((p for p in native.sections(snapshot, code, version) if p.section == ".text"), None)
+    except Refusal as refusal:
+        return {version: f"{refusal.findings[0].key}: {refusal.findings[0].reason}"}
+    return {version: locate(_index(snapshot, version), blob, (held.vram, held.rom_start) if held else None)}
+def _collect(snapshot: Snapshot, units: Sequence[UnitSpec], label: str, version: str | None = None) -> list[dict]:
+    """One job per holder, regrouped in the caller's unit order."""
+    held = [sorted(snapshot.layout.held(u.members) & ({version} if version else snapshot.versions.keys()))
+            for u in units]
+    jobs = [(snapshot, u, v) for u, holders in zip(units, held, strict=True) for v in holders]
+    parts = iter(pool.map(snapshot.config, label, _job, jobs, _job_key))
+    return [{v: next(parts)[v] for v in holders} for holders in held]
 def _range(hits: list, here: list[tuple[int, int]]) -> tuple[list | None, str]:
     """The one range of hits the unit owns, else None and why not. Several ranges that hold the same bytes are
     told apart by the rows the unit owns now: a range that is exactly one of them wins over overlapping ones."""
@@ -291,7 +292,7 @@ def claims(snapshot: Snapshot, version: str | None = None, units: Mapping[str, U
         wanted = dict(snapshot.layout.units if units is None else units)
         phases = config.load_resource("units.toml")["kind"]
         todo = sorted((u for u in wanted.values() if "compile" in phases[u.kind]["phases"]), key=_unowned)
-        results = pool.map(snapshot.config, "layout.ownership", _job, [(snapshot, u, version) for u in todo], _job_key)
+        results = _collect(snapshot, todo, "layout.ownership", version)
         indexes = {v: _index(snapshot, v) for v in snapshot.versions}
         taken: dict[str, list[tuple[int, int, str]]] = defaultdict(list)
         debt: dict[str, list[str]] = defaultdict(list)
@@ -323,7 +324,7 @@ def derive_many(snapshot: Snapshot, units: Sequence[UnitSpec]) -> list[tuple[Sna
     todo = [u for u in units if _emits_data(snapshot, u)]
     if not todo:
         return [(snapshot, u) for u in units]
-    found = iter(pool.map(snapshot.config, "ownership.derive", _job, [(snapshot, u, None) for u in todo], _job_key))
+    found = iter(_collect(snapshot, todo, "ownership.derive"))
     return [_derived(snapshot, u, next(found)) if u in todo else (snapshot, u) for u in units]
 def _derived(snapshot: Snapshot, unit: UnitSpec, result: dict[str, Any]) -> tuple[Snapshot, UnitSpec]:
     from unbake import layout  # the rows come from the layout, which in turn reads ownership

@@ -283,7 +283,7 @@ def test_claims_give_bytes_to_one_unit_only_and_aggregate_the_debt(monkeypatch):
     monkeypatch.setattr(ownership.effort, "stage", stage)
     units = {p: replace(unit("f"), path=p) for p in ("src/a.c", "src/b.c", "src/c.c")}
     snapshot = SimpleNamespace(config=SimpleNamespace(project=SimpleNamespace(names_from="a")),
-                               layout=SimpleNamespace(members=MEMBERS, units=units), versions={"a": None})
+                               layout=LayoutMap(32, {}, MEMBERS, units, "d", (), {}), versions={"a": None})
     out, claims, findings = ownership.claims(snapshot)
     assert findings == found["findings"]
     assert [out[p].members for p in units] == [("f", "rodata/a/00000104"), ("f",), ("f",)]  # b.c lost them to a.c
@@ -334,7 +334,7 @@ def test_derive_gives_a_candidate_the_rows_its_source_emits(monkeypatch, inline)
     from unbake import layout
     members = {"f": member("f", "function", ".text"), "row": member("row")}
     snapshot = SimpleNamespace(config=SimpleNamespace(project=SimpleNamespace(names_from="a")),
-                               layout=SimpleNamespace(members=members, units={}), versions={"a": None})
+                               layout=LayoutMap(32, {}, members, {}, "d", (), {}), versions={"a": None})
     monkeypatch.setattr(ownership.config, "load_resource", lambda name: {"kind": {"c": {"phases": ["compile"]}}})
     monkeypatch.setattr(ownership, "_index", lambda snap, v: INDEXES["a"])
     monkeypatch.setattr(ownership, "_job", lambda item: {"a": {".rodata": [[4, 8]]}})
@@ -422,6 +422,24 @@ def test_claims_let_a_function_unit_take_bytes_before_an_unowned_data_unit(monke
         i[1].path for i in items) or [{"a": {}} for _ in items])
     monkeypatch.setattr(ownership, "_index", lambda snap, v: INDEXES["a"])
     snapshot = SimpleNamespace(config=SimpleNamespace(project=SimpleNamespace(names_from="a")),
-                               layout=SimpleNamespace(members=members, units=units), versions={"a": None})
+                               layout=LayoutMap(32, {}, members, units, "d", (), {}), versions={"a": None})
     ownership.claims(snapshot)
     assert order == ["src/f.c", "src/data.c"]
+
+
+def test_ownership_dispatches_each_holder_and_regroups_units_without_merging_paths(monkeypatch):
+    members = {"f": member("f", "function", ".text", ("a", "b", "c"))}
+    snapshot = SimpleNamespace(config=None, versions={"a": None, "b": None, "c": None},
+                               layout=LayoutMap(32, {}, members, {}, "d", (), {}))
+    units = [unit("f"), replace(unit("f"), toolchain="other")]
+    batches = []
+    def run(cfg, label, function, jobs, key):
+        batches.append([(u.toolchain, v) for _, u, v in jobs])
+        return [{v: {"toolchain": u.toolchain}} for _, u, v in jobs]
+    monkeypatch.setattr(ownership.pool, "map", run)
+    assert ownership._collect(snapshot, units, "test") == [
+        {v: {"toolchain": u.toolchain} for v in ("a", "b", "c")} for u in units]
+    assert batches == [[(u.toolchain, v) for u in units for v in ("a", "b", "c")]]
+    assert ownership._collect(snapshot, units, "test", "b") == [
+        {"b": {"toolchain": u.toolchain}} for u in units]
+    assert batches[-1] == [(u.toolchain, "b") for u in units]
