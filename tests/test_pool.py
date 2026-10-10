@@ -7,10 +7,8 @@ import threading
 import time
 from concurrent.futures import Future
 from concurrent.futures.process import BrokenProcessPool
-from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 from test_effort import _config
@@ -114,7 +112,7 @@ def test_job_cache_and_metrics(tmp_path):
         effort.count("object", True)
         effort.count("view", False)
         return value
-    ok, value, envelope = pool._job(work, 7, 2.0, _config(tmp_path))
+    ok, value, envelope = pool._job(work, 7, 2.0)
     assert (ok, value) == (True, 7)
     assert envelope["cache"] == {"object": (1, 0), "view": (0, 1)}
     assert envelope["worker_cpu"] >= 0
@@ -152,8 +150,7 @@ def test_executor_reuse_and_host_change(tmp_path, monkeypatch):
     assert first.shutdowns == [{"wait": True, "cancel_futures": True}]
     assert second.kwargs["max_workers"] == config.host.workers
     assert second.kwargs["mp_context"].get_start_method() == "forkserver"
-    assert second.kwargs["initargs"] == (config.host.memory_worker_bytes,
-                                            replace(config, host=replace(config.host, digest="other")))
+    assert second.kwargs["initargs"] == (config.host.memory_worker_bytes,)
 
 
 def test_threads_asking_at_once_create_one_executor(tmp_path, monkeypatch):
@@ -219,9 +216,9 @@ def test_job_ships_only_notable_records(tmp_path):
         with effort.stage("waited"):
             effort.waited(0.5)
         return value
-    _, _, kept = pool._job(work, 1, 1000.0, _config(tmp_path))
+    _, _, kept = pool._job(work, 1, 1000.0)
     assert [r["path"][-1] for r in kept["records"]] == ["waited"]
-    _, _, everything = pool._job(work, 1, 0.0, _config(tmp_path))
+    _, _, everything = pool._job(work, 1, 0.0)
     assert {r["path"][-1] for r in everything["records"]} == {"quick", "waited", "job", "(own)"}
 
 
@@ -260,7 +257,7 @@ def test_worker_dies_with_its_parent(tmp_path, monkeypatch):
     monkeypatch.setattr(pool.resource, "setrlimit", lambda *a: None)
     monkeypatch.setattr(pool.ctypes, "CDLL", lambda name: type("L", (), {"prctl": lambda self, *a: calls.append(a)})())
     monkeypatch.setattr(pool, "_in_worker", False)
-    pool._init(1 << 30, _config(tmp_path))
+    pool._init(1 << 30)
     assert calls == [(1, pool.signal.SIGKILL)]
 
 
@@ -304,17 +301,17 @@ def test_a_warm_keyed_group_costs_one_store_read(tmp_path, monkeypatch):
 
 def test_whoever_ran_a_keyed_chunk_stores_its_results(tmp_path):
     config = _config(tmp_path)
-    outcomes = pool._chunk(_square, [2, 3, 4], 0.0, (config, "units", ["a", None, "c"]), config)
+    outcomes = pool._chunk(_square, [2, 3, 4], 0.0, (config, "units", ["a", None, "c"]))
     assert [o[1] for o in outcomes] == [4, 9, 16]
     assert pickle.loads(pool.store.get(config, "units", "a")) == 4 and pool.store.get(config, "units", "c") is not None
     assert pool.store.get(config, "units", "b") is None  # an unkeyed item is not stored
-    failed = pool._chunk(_fail, [1], 0.0, (config, "units", ["f"]), config)
+    failed = pool._chunk(_fail, [1], 0.0, (config, "units", ["f"]))
     assert failed[0][0] is False and pool.store.get(config, "units", "f") is None
-    assert [o[1] for o in pool._chunk(_square, [5], 0.0, None, config)] == [25]
+    assert [o[1] for o in pool._chunk(_square, [5], 0.0, None)] == [25]
 
 
 def test_a_worker_crash_names_the_type_and_the_innermost_unbake_frame(tmp_path):
-    ok, error, _ = pool._job(view._sha, "not bytes", 0.0, _config(tmp_path))  # hashlib refuses inside unbake.view._sha
+    ok, error, _ = pool._job(view._sha, "not bytes", 0.0)  # hashlib refuses inside unbake.view._sha
     assert not ok and error.__notes__[0].startswith("at view:_sha:")
     with pytest.raises(Refusal) as raised:
         pool._raise_failure(_config(tmp_path), "stage", 3, error)
@@ -351,39 +348,24 @@ def _record_key_chunk(item):
     return [str(value) for value in items]
 
 
-def test_snapshot_transport_restores_an_evicted_entry(tmp_path, monkeypatch):
+def test_the_parent_asks_the_store_for_a_snapshot_once_however_many_chunks_travel(tmp_path, monkeypatch):
     config = _config(tmp_path)
     from unbake.contracts import LayoutMap, Snapshot
-    snapshot = Snapshot(config, "commit", LayoutMap(1, {}, {}, {}, "layout", (), {}), {}, {}, "snapshot")
-    kept, writes = {}, []
-    monkeypatch.setattr(pool.store, "content", lambda cfg: SimpleNamespace(_cache=kept))
+    snapshot = Snapshot(config, "commit", LayoutMap(1, {}, {}, {}, "layout", (), {}), {}, {}, "once-snapshot")
+    asked, writes = [], []
+    monkeypatch.setattr(pool, "_STORED", set())
+    monkeypatch.setattr(pool.store, "content", lambda cfg: _Counting(asked))
     monkeypatch.setattr(pool.store, "get", lambda *args: pytest.fail("presence must not read snapshot bytes"))
-    def put(cfg, kind, key, value):
-        writes.append(key)
-        kept[f"{kind}:{key}"] = value
-    monkeypatch.setattr(pool.store, "put", put)
-    pickler = pool._Pickler(io.BytesIO(), protocol=5)
-    first = pickler.persistent_id(snapshot)
-    kept.clear()
-    assert pickler.persistent_id(snapshot) == first
-    assert writes == [first[1], first[1]]
+    monkeypatch.setattr(pool.store, "put", lambda cfg, kind, key, value: writes.append(key))
+    ids = [pool._Pickler(io.BytesIO(), protocol=5).persistent_id(snapshot) for _ in range(50)]
+    assert len({i[1] for i in ids}) == 1 and len(asked) == 1 and writes == [ids[0][1]]
 
 
-def test_every_job_releases_its_token_and_keeps_admission_wait(tmp_path, monkeypatch):
-    events = []
-    @contextmanager
-    def slots(config, want):
-        assert want == 1
-        events.append("take")
-        effort.waited(0.625)
-        try:
-            yield 1
-        finally:
-            events.append("release")
-    monkeypatch.setattr(pool.store, "slots", slots)
-    outcomes = pool._chunk(_square, [2, 3, 4], 1000.0, None, _config(tmp_path))
-    assert events == ["take", "release"] * 3
-    assert [outcome[2]["wait_seconds"] for outcome in outcomes] == [0.625] * 3
-    assert [outcome[1] for outcome in outcomes] == [4, 9, 16]
-    pool._chunk(_fail, [1], 1000.0, None, _config(tmp_path))
-    assert events == ["take", "release"] * 4
+class _Counting:
+    """A content cache stand-in that counts how often the parent asks whether a key is held."""
+    def __init__(self, asked):
+        self._cache = self
+        self.asked = asked
+    def __contains__(self, key):
+        self.asked.append(key)
+        return False

@@ -37,8 +37,7 @@ def scene(tmp_path, monkeypatch):
     monkeypatch.setattr(layout.effort, "stage", lambda name: nullcontext())
     monkeypatch.setattr(layout.process, "git", Mock(return_value=fixture.native_result(stdout=b"head\n")))
     host = Host(2, 2, 1 << 30, 1 << 30, 1 << 30,
-                tmp_path / "toolchains", {}, None, 2, 2, 0.8, 2, ("test", "test@example.invalid"), {}, "host",
-                    budget_dir=tmp_path / "budget")
+                tmp_path / "toolchains", {}, None, 2, 2, 0.8, 2, ("test", "test@example.invalid"), {}, "host")
     project = Project(tmp_path, "fixture", "fixture", "Fixture", ("a", "b"), "a", "gcc-test",
                       {}, {}, {}, {}, 200, {}, "project")
     config = Config(project, host, "config")

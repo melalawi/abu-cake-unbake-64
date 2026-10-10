@@ -443,3 +443,16 @@ def test_ownership_dispatches_each_holder_and_regroups_units_without_merging_pat
     assert ownership._collect(snapshot, units, "test", "b") == [
         {"b": {"toolchain": u.toolchain}} for u in units]
     assert batches[-1] == [(u.toolchain, "b") for u in units]
+
+
+def test_ownership_jobs_are_keyed_by_the_build_stamp_so_unchanged_units_dispatch_nothing(monkeypatch):
+    members = {"f": member("f", "function", ".text", ("a",))}
+    snapshot = SimpleNamespace(config=None, versions={"a": None}, layout=LayoutMap(32, {}, members, {}, "d", (), {}))
+    seen = []
+    monkeypatch.setattr(ownership.pool, "map", lambda cfg, label, function, jobs, key: seen.append((function, key))
+                        or [{"a": {}} for _ in jobs])
+    ownership._collect(snapshot, [unit("f")], "test")
+    assert seen == [(ownership._job, ownership._job_key)]
+    monkeypatch.setattr(ownership.native, "stamp", lambda *item: "stamp")
+    monkeypatch.setattr(ownership, "_index", lambda snap, version: INDEXES["a"])
+    assert ownership._job_key((snapshot, unit("f"), "a")) == ownership._job_key((snapshot, unit("f"), "a"))

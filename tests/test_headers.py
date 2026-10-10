@@ -244,3 +244,38 @@ def test_a_declaration_that_disagrees_with_the_landed_definition_is_a_conflict(t
     assert found.symptoms["consumers"] == 1
     assert list(found.missing) == ["f: src/f.c:1 s32 f(s32 arg0, s32 *arg1)",
                                    "f: src/g.c:1 extern u32 f(u32 devAddr, u32 *data);"]
+
+
+def _graph(files: dict[str, bytes], reads: list[str], digest: str):
+    def peek(path):
+        reads.append(path)
+        return files.get(path)
+    units = {p: SimpleNamespace(path=p) for p in files if p.endswith(".c")}
+    return SimpleNamespace(peek=peek, digest=digest, overlays={}, layout=SimpleNamespace(units=units))
+
+
+def test_consumers_read_nothing_without_a_header_edit(monkeypatch):
+    reads: list[str] = []
+    monkeypatch.setattr(headers, "sources", lambda _: [])
+    assert headers.consumers(_graph({"src/a.c": b""}, reads, "no-edit"), []) == () and reads == []
+
+
+def test_consumers_follow_includes_through_headers_and_name_includers_of_a_deleted_header(monkeypatch):
+    files = {"src/a.c": b'#include "mid.h"\n', "include/mid.h": b'#include "top.h"\n', "include/top.h": b"",
+             "src/b.c": b'#include "other.h"\n', "include/other.h": b"", "src/c.c": b'#include "gone.h"\n'}
+    monkeypatch.setattr(headers, "sources", lambda _: ["include/mid.h", "include/top.h", "include/other.h"])
+    snapshot = _graph(files, [], "reach")
+    assert headers.consumers(snapshot, ["include/top.h"]) == ("src/a.c",)
+    assert headers.consumers(snapshot, ["include/gone.h"]) == ("src/c.c",)
+
+
+def test_consumers_read_each_file_once_however_many_units_include_the_header(monkeypatch):
+    units = {f"src/u{i}.c": b'#include "shared.h"\n' for i in range(300)}
+    files = {**units, "include/shared.h": b""}
+    reads: list[str] = []
+    monkeypatch.setattr(headers, "sources", lambda _: ["include/shared.h"])
+    snapshot = _graph(files, reads, "many-units")
+    assert sorted(headers.consumers(snapshot, ["include/shared.h"])) == sorted(units)
+    assert len(reads) == len(files) and len(set(reads)) == len(files)  # one read per file, not per unit
+    headers.consumers(snapshot, ["include/shared.h"])
+    assert len(reads) == len(files)  # the graph is one fact of the snapshot: asking again reads nothing

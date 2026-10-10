@@ -40,8 +40,7 @@ def isolated_toolchains(toolchains):
 def build_snapshot(tmp_path, toolchains, monkeypatch):
     tools = {name: tmp_path / "host-bin" / name for name in fixture.TOOLS}
     host = Host(2, 3, 1024, 1024, 1024, tmp_path / "chains",
-                tools, None, 2, 2, 0.8, 2, ("test", "test@invalid"), {}, "host",
-                    budget_dir=tmp_path / "budget")
+                tools, None, 2, 2, 0.8, 2, ("test", "test@invalid"), {}, "host")
     files = {v: VersionFiles(f"roms/{v}.z64", str(i) * 40, f"versions/{v}/Game.yaml",
                              f"versions/{v}/symbols.txt", {}) for i, v in enumerate(("a", "b"), 1)}
     project = Project(tmp_path, "fixture", "fixture", "Fixture title", ("b", "a"), "a", "gcc-test",
@@ -266,8 +265,7 @@ def test_rule_outputs_live_in_a_directory_named_by_the_digest_of_the_rule(build_
 
 
 def test_a_rule_does_not_depend_on_the_host_or_the_project_root(build_snapshot):
-    other_host = replace(build_snapshot.config.host, workers=7, digest="another host",
-                         budget_dir=build_snapshot.config.host.budget_dir / "other")
+    other_host = replace(build_snapshot.config.host, workers=7, digest="another host")
     moved = replace(build_snapshot, config=replace(build_snapshot.config, host=other_host, digest="another config"))
     assert build.makefile(moved) == build.makefile(build_snapshot)
 

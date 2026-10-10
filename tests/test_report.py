@@ -56,8 +56,7 @@ def snapshot_factory(tmp_path, monkeypatch):
         project = Project(tmp_path, "fixture", "fixture", "Fixture", versions, versions[0],
                           "test", {}, vf, {}, {}, 200, {}, "project")
         host = Host(2, 2, 1024, 1024, 1024, tmp_path / "tools", {},
-                    None, 2, 2, 0.8, 2, ("test", "test@example.invalid"), {}, "host",
-                    budget_dir=tmp_path / "budget")
+                    None, 2, 2, 0.8, 2, ("test", "test@example.invalid"), {}, "host")
         config = Config(project, host, "config")
         groups = groups if groups is not None else [Group(
             "g", "main", tuple(m.name for m in members), "authored", (), False

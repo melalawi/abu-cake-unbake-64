@@ -13,8 +13,7 @@ def _config(tmp_path):
     keys = ("resources.memory_parent_bytes", "resources.memory_worker_bytes", "budgets.serial_seconds")
     origins = {key: Origin(key, "/host.toml", "0" * 64) for key in keys}
     host = Host(2, 2, 1 << 30, 1 << 30, 1 << 30,
-                tmp_path / "tools", {}, None, 2, 2, 0.8, 2, ("test", "test@invalid"), origins, "host",
-                    budget_dir=tmp_path / "budget")
+                tmp_path / "tools", {}, None, 2, 2, 0.8, 2, ("test", "test@invalid"), origins, "host")
     project = Project(tmp_path, "fixture", "fixture", "Fixture", (), "", "test", {}, {}, {}, {}, 200, {}, "project")
     return Config(project, host, "config")
 

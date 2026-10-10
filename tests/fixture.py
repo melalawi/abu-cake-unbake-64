@@ -167,7 +167,7 @@ def host(tmp: Path, **overrides: Any) -> Path:
         shutil.copy2(true, tmp / "bin" / name)
         tools[name] = str(tmp / "bin" / name)
     document: dict[str, dict[str, Any]] = {
-        "resources": {"budget_dir": str(tmp / "budget"), "cores": 2, "workers": 2,
+        "resources": {"cores": 2, "workers": 2,
                       "memory_parent_bytes": 1 << 30, "memory_worker_bytes": 1 << 30},
         "cache": {"max_bytes": 1 << 30},
         "toolchains": {"root": str(tmp / "toolchains")},
@@ -179,7 +179,7 @@ def host(tmp: Path, **overrides: Any) -> Path:
         section, _, key = dotted.partition(".")
         document.setdefault(section, {})[key] = value
     path = tmp / "host.toml"
-    _write(path, "schema = 3\n\n" + "".join(_table(name, body) for name, body in document.items()))
+    _write(path, "schema = 2\n\n" + "".join(_table(name, body) for name, body in document.items()))
     return path
 
 

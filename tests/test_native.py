@@ -40,8 +40,7 @@ def invocation():
 def case(tmp_path, monkeypatch, toolchains):
     root = tmp_path / "project"
     host = Host(2, 2, 1 << 30, 1 << 30, 1 << 30,
-                tmp_path / "toolchains", {}, None, 2, 2, 0.8, 2, ("test", "test"), {}, "host",
-                    budget_dir=tmp_path / "budget")
+                tmp_path / "toolchains", {}, None, 2, 2, 0.8, 2, ("test", "test"), {}, "host")
     project = Project(root, "fixture", "fixture", "Fixture", ("a", "b"), "a", "gcc-test",
                       {}, {}, {}, {"a": (), "b": ()}, 200, {}, "project")
     cfg = Config(project, host, "config")
@@ -524,3 +523,18 @@ def test_every_native_refusal_boundary_uses_diagnostic_query(case, monkeypatch):
         raise Refusal(Finding("compile.error", "unit.i:330: error"))
     assert caught.value.findings[0].reason == "include/type.h:2: error"
     assert calls == ["unit.i:330: error"]
+
+
+def test_a_stamp_names_an_overlaid_snapshot_by_the_content_it_reads(case, monkeypatch):
+    snapshot, unit, recipe, *_ = case
+    project = replace(snapshot.config.project, version_macros={"a": ()})
+    snapshot = replace(snapshot, config=replace(snapshot.config, project=project))
+    monkeypatch.setattr(native.recipes, "resolve", Mock(return_value=recipe))
+    monkeypatch.setattr(native.adapters, "tool_identity", Mock(return_value="tools"))
+    monkeypatch.setattr(native.view, "closure", lambda snap, *_: (
+        ("src/f.c", "pin"), ("include/h.h", sha256(snap.overlays.get("include/h.h", b"disk")).hexdigest())))
+    on_disk = native.stamp(snapshot, unit, "a")
+    same_bytes = replace(snapshot, overlays={"include/h.h": b"disk"}, digest="another snapshot")
+    other_bytes = replace(snapshot, overlays={"include/h.h": b"edited"}, digest="third snapshot")
+    assert native.stamp(same_bytes, unit, "a") == on_disk  # warm: the ownership and proof jobs it keys are not redone
+    assert native.stamp(other_bytes, unit, "a") != on_disk  # only a unit that reads the edited file is redone

@@ -49,8 +49,7 @@ def lane(tmp_path, monkeypatch):
         cores=2, workers=2, memory_parent_bytes=1024, memory_worker_bytes=1024,
         cache_max_bytes=1024, toolchain_root=tmp_path / "tools",
         tools={}, sdk_catalog=None, serial_seconds=2, serial_cores=2, pool_fill=0.8, pool_fanout=2,
-        author=("test", "test@example.invalid"), origins={}, digest=digest("host"),
-        budget_dir=tmp_path / "budget")
+        author=("test", "test@example.invalid"), origins={}, digest=digest("host"))
     config = Config(project, host, digest("config"))
     unit = UnitSpec("src/unit.c", "c", "group", ("value",), "fake", {})
     layout = LayoutMap(200, {}, {}, {unit.path: unit}, digest("layout"), (), {})
@@ -97,6 +96,14 @@ def _get(lane, snapshot=None, recipe=None):
 
 def _overlay(snapshot, writes):
     return replace(snapshot, overlays=writes, digest=digest((snapshot.digest, writes)))
+
+
+def _dir(lane, snapshot):
+    """Where a view that reads an overlaid file is made: named by the view key, never by the snapshot."""
+    reads = view.closure(snapshot, lane.unit, "a")
+    key = digest((lane.unit.path, _sha(snapshot.read(lane.unit.path)), lane.recipe.digest, "a",
+                  snapshot.config.project.version_macros["a"], view._CODE, reads, True))
+    return lane.root / "build/views" / key[:16]
 
 
 def test_cardinality_equals_request(lane):
@@ -163,7 +170,7 @@ def test_overlay_paths_mapped_back(lane, source_overlaid):
     if source_overlaid:
         writes[lane.unit.path] = b"int changed;\n"
     snapshot = _overlay(lane.snapshot, writes)
-    overlay = lane.root / "build/views" / snapshot.digest[:16]
+    overlay = _dir(lane, snapshot)
     source = (overlay if source_overlaid else lane.root) / lane.unit.path
     outside = lane.root.parent / "system.h"
     lane.text = (
@@ -186,18 +193,15 @@ def test_overlay_paths_mapped_back(lane, source_overlaid):
         source, lane.recipe, "a",
         [overlay / "include", lane.root / "include", overlay / "src", lane.root / "src"],
     )
-    # A different recipe causes another preprocessing pass but reuses materialisation.
-    (overlay / "include/active.h").write_bytes(b"sentinel")
-    _get(lane, snapshot, replace(lane.recipe, digest=digest("other-recipe")))
-    assert (overlay / "include/active.h").read_bytes() == b"sentinel"
 
 
 def test_an_overlaid_file_finds_the_files_it_names_relative_to_itself(lane):
     (lane.root / "include/sub").mkdir()
     (lane.root / "include/base.h").write_bytes(b'#include "sub/deep.h"\ntypedef int base;\n')
     (lane.root / "include/sub/deep.h").write_bytes(b"typedef int deep;\n")
+    (lane.root / lane.unit.path).write_bytes(b'#include "sub/new.h"\n')  # the unit reaches the overlaid file
     snapshot = _overlay(lane.snapshot, {"include/sub/new.h": b'#include "../base.h"\n'})
-    overlay = lane.root / "build/views" / snapshot.digest[:16]
+    overlay = _dir(lane, snapshot)
     _get(lane, snapshot)
     assert (overlay / "include/base.h").read_bytes() == (lane.root / "include/base.h").read_bytes()
     assert (overlay / "include/sub/deep.h").read_bytes() == b"typedef int deep;\n"  # and what that file names
@@ -240,7 +244,7 @@ def test_dependency_order_and_cache_keys(lane):
             (lane.unit.path, "include/active.h", "include/z.h")]
     reads = view.closure(lane.snapshot, lane.unit, "a")  # what the build can reach, pinned: the one key
     key = digest((lane.unit.path, _sha(lane.snapshot.read(lane.unit.path)), lane.recipe.digest, "a",
-                  lane.snapshot.config.project.version_macros["a"], view._CODE, reads))
+                  lane.snapshot.config.project.version_macros["a"], view._CODE, reads, False))
     assert result.dependencies == tuple(deps)
     assert result.key == key
     assert json.loads(lane.cache["view", key]) == {"text": lane.text, "deps": [list(row) for row in deps]}
@@ -304,10 +308,11 @@ def test_the_view_is_preprocessed_with_line_markers_even_when_the_recipe_asks_fo
 def test_a_relative_include_beside_an_overlaid_header_is_linked_from_the_real_tree(lane):
     (lane.root / "include/sub").mkdir()
     (lane.root / "include/types.h").write_bytes(b'#include "z.h"\ntypedef int t;\n')
+    (lane.root / lane.unit.path).write_bytes(b'#include "sub/a.h"\n')  # the unit reaches the overlaid file
     writes = {"include/sub/a.h": b'#include "../types.h"\n'}
     snapshot = _overlay(lane.snapshot, writes)
     _get(lane, snapshot)
-    overlay = lane.root / "build/views" / snapshot.digest[:16]
+    overlay = _dir(lane, snapshot)
     assert (overlay / "include/types.h").resolve() == (lane.root / "include/types.h").resolve()
     assert (overlay / "include/z.h").is_symlink()
 
@@ -337,3 +342,33 @@ def test_diagnostic_maps_view_and_out_of_file_lines_through_markers(lane):
     text = "span_1000/type.h:6: previous declaration; unit.i:4: conflict; include/type.h:1: real"
     assert view.diagnostic(lane.snapshot, lane.unit, "a", lane.recipe, text) == (
         f"include/type.h:2: previous declaration; {lane.unit.path}:1: conflict; include/type.h:1: real")
+
+
+def test_snapshots_giving_the_unit_the_same_files_share_one_view(lane):
+    (lane.root / "include/sub").mkdir()
+    (lane.root / lane.unit.path).write_bytes(b'#include "sub/a.h"\n')
+    one = _overlay(lane.snapshot, {"include/sub/a.h": b"typedef int a;\n"})
+    two = _overlay(lane.snapshot, {"include/sub/a.h": b"typedef int a;\n", "include/unrelated.h": b"x\n"})
+    assert one.digest != two.digest
+    first, second = _get(lane, one), _get(lane, two)
+    assert second == first and lane.preprocess.call_count == 1  # one preprocessing, however many snapshots ask
+    _get(lane, _overlay(lane.snapshot, {"include/sub/a.h": b"typedef long a;\n"}))
+    assert lane.preprocess.call_count == 2  # other bytes of a reached file are another view
+
+
+def test_an_overlay_the_unit_does_not_reach_shares_the_disk_view(lane):
+    first = _get(lane)
+    second = _get(lane, _overlay(lane.snapshot, {"include/unrelated.h": b"typedef int u;\n"}))
+    assert second == first and lane.preprocess.call_count == 1
+    assert lane.preprocess.call_args.args[3] == [lane.root / "include", lane.root / "src"]  # no overlay directory
+
+
+def test_the_closure_pins_overlaid_files_by_content_like_files_on_disk(lane):
+    (lane.root / "include/sub").mkdir()
+    (lane.root / lane.unit.path).write_bytes(b'#include "sub/a.h"\n')
+    (lane.root / "include/sub/a.h").write_bytes(b"typedef int a;\n")
+    on_disk = view.closure(lane.snapshot, lane.unit, "a")
+    same = _overlay(lane.snapshot, {"include/sub/a.h": b"typedef int a;\n"})
+    changed = _overlay(lane.snapshot, {"include/sub/a.h": b"typedef long a;\n"})
+    assert view.closure(same, lane.unit, "a") == on_disk
+    assert view.closure(changed, lane.unit, "a") != on_disk

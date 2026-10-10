@@ -10,7 +10,8 @@ from copy import deepcopy
 from pycparser import CParser, c_ast, c_generator
 from pycparser.c_parser import ParseError
 
-from unbake import effort, pool, store, types, view
+from unbake import effort, pool, store, types
+from unbake import view as _view
 from unbake.contracts import Finding, Refusal, Snapshot, SourceView, UnitSpec, digest
 
 
@@ -25,7 +26,7 @@ def sources(snapshot: Snapshot, place: str = 'include', suffix: str = '.h') -> l
     return sorted(p for p in paths if p not in snapshot.overlays or snapshot.overlays[p] is not None)
 
 def _quoted(content: bytes) -> tuple[str, ...]:
-    return tuple(name.decode(errors="replace") for delimiter, name in view.directives(content) if delimiter == b'"')
+    return tuple(name.decode(errors="replace") for delimiter, name in _view.directives(content) if delimiter == b'"')
 def consumers(snapshot: Snapshot, changed: Collection[str]) -> tuple[str, ...]:
     """Every unit, of any group, that includes a changed header directly or through other headers. A quote include
     names a file beside the including one, else under include/ or src/; taking every one that exists

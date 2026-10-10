@@ -23,8 +23,7 @@ def isolated_toolchains(toolchains):
 def adapter_config(tmp_path):
     tools = {name: tmp_path / "host-bin" / name for name in fixture.TOOLS}
     host = Host(2, 2, 1024, 1024, 1024, tmp_path / "chains",
-                tools, None, 2, 2, 0.8, 2, ("test", "test@invalid"), {}, "host",
-                    budget_dir=tmp_path / "budget")
+                tools, None, 2, 2, 0.8, 2, ("test", "test@invalid"), {}, "host")
     project = Project(tmp_path, "fixture", "fixture", "Fixture", ("a", "b"), "a", "gcc-test",
                       {}, {}, {"a": ("-DVERSION_A",), "b": ("-DVERSION_B",)}, {}, 200, {}, "project")
     return Config(project, host, "config")

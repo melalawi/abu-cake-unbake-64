@@ -108,7 +108,7 @@ def test_host_workers_exceed_cores(tmp_path: Path) -> None:
 
 def test_host_schema_1_refused(tmp_path: Path) -> None:
     path = fixture.host(tmp_path)
-    path.write_text(path.read_text().replace("schema = 3", "schema = 1", 1))
+    path.write_text(path.read_text().replace("schema = 2", "schema = 1", 1))
     assert "config.schema" in _keys(_refusal(configuration.load_host, path))
 
 
@@ -197,12 +197,3 @@ def test_optional_host_tool_absent_and_bad_path(tmp_path: Path, tool: str) -> No
     refusal = _refusal(configuration.load_host, invalid)
     assert refusal.findings[0].key == "config.file"
     assert refusal.findings[0].path == f"host:tools.{tool}"
-
-
-def test_worker_budget_is_required_and_absolute(tmp_path):
-    path = fixture.host(tmp_path)
-    path.write_text(path.read_text().replace('budget_dir = ' + fixture._value(str(tmp_path / "budget")) + '\n', ''))
-    refusal = _refusal(configuration.load_host, path)
-    assert "budget_dir" in refusal.findings[0].reason
-    refusal = _refusal(configuration.load_host, fixture.host(tmp_path, **{"resources.budget_dir": "relative"}))
-    assert refusal.findings[0].path == "host:resources.budget_dir"
