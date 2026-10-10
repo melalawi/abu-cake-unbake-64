@@ -193,15 +193,14 @@ def _unit_rules(snapshot: Snapshot, unit: UnitSpec, version: str) -> str:
     return text.replace(_TAG, digest(text)[:12])
 def _unit_key(item) -> str:
     """A unit's rules read its own rows, text, headers and recipe, never another unit's: one changed unit, one key."""
-    snapshot, unit = item
+    snapshot, unit, version = item
     context = effort.memo(("unit-rules", snapshot.config.digest), lambda: digest((
         snapshot.config.project, configuration.load_resource("toolchains.toml"),
         configuration.load_resource("units.toml"), configuration.template("unit.mk.in"))))
-    headers = [_headers(snapshot, unit, v) for v in _versions(snapshot, unit)]
-    return digest((unit, [snapshot.layout.members[n] for n in unit.members], headers, context))
-def _unit_job(item) -> list[str]:
-    snapshot, unit = item
-    return [_unit_rules(snapshot, unit, v) for v in _versions(snapshot, unit)]
+    headers = _headers(snapshot, unit, version)
+    return digest((unit, version, [snapshot.layout.members[n] for n in unit.members], headers, context))
+def _unit_job(item) -> str:
+    return _unit_rules(*item)
 def makefile(snapshot: Snapshot) -> bytes:
     with effort.stage("build.makefile"):
         cfg, project = snapshot.config, snapshot.config.project
@@ -226,8 +225,8 @@ def makefile(snapshot: Snapshot) -> bytes:
                     sha256=download["sha256"], files=" ".join(download["files"]), stamp_name=".stamp",
                     pins=" ".join(f"'{sha}  {file}'" for file, sha in sorted(row["pins"].items()))))
         units = sorted(snapshot.layout.units.values(), key=lambda u: u.path)
-        for fragments in pool.map(cfg, "build.units", _unit_job, [(snapshot, u) for u in units], _unit_key):
-            blocks.extend(fragments)
+        blocks = pool.map(cfg, "build.units", _unit_job,
+                          [(snapshot, u, v) for u in units for v in _versions(snapshot, u)], _unit_key)
         for version in project.versions:
             files, rom = project.version_files[version], f"build/{version}/{project.name}.z64"
             checks.append(f'\t$(Q)test "$$(sha1sum < {rom} | cut -d\' \' -f1)" = {files.baserom_sha1}')

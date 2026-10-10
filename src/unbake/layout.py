@@ -407,7 +407,8 @@ def _rename(name: str, old: int, new: int) -> str:
 def boundary_plan(snapshot: Snapshot) -> tuple[Plan, Json]:
     """The plan is a function of the snapshot and this code, so one computation serves every later command."""
     with effort.stage("layout.boundary_plan"):
-        key = digest((dump_map(replace(snapshot.layout, fuzzy={})), snapshot.config.digest,
+        key = digest((snapshot.layout.cap, snapshot.layout.groups, snapshot.layout.units, snapshot.layout.authored,
+                      snapshot.config.digest,
                       snapshot.read(symbols.path()),
                       [(v.id, v.rom_sha256, snapshot.read(v.split), version_data.facts_digest(v))
                        for v in snapshot.versions.values()]))

@@ -83,6 +83,8 @@ def fragment_cache(monkeypatch):
         return values[kind, key]
 
     monkeypatch.setattr(store, "cached", cached)
+    monkeypatch.setattr(build.pool, "map", lambda cfg, name, function, items, key:
+                        [cached(cfg, name, key(item), lambda item=item: function(item)) for item in items])
     return calls
 
 
@@ -141,6 +143,34 @@ def test_makefile_tree_and_rom_checks(build_snapshot):
         assert f"cp {files.baserom} $@" in text
     assert "for p in $(PATCHES); do dd if=$${p%:*} of=$@ bs=64K oflag=seek_bytes seek=$${p##*:}" in text
     assert "conv=notrunc status=none || exit 1" in text
+
+
+def test_makefile_dispatches_each_holder_and_reuses_unaffected_units(build_snapshot, monkeypatch):
+    one = _unit(build_snapshot)
+    two = replace(one, path="src/other.c")
+    snapshot = replace(build_snapshot, layout=replace(build_snapshot.layout, units={one.path: one, two.path: two}))
+    cache, jobs = {}, []
+
+    def mapped(cfg, name, function, items, key):
+        assert name == "build.units"
+        result = []
+        for item in items:
+            assert len(item) == 3 and item[2] in ("a", "b")
+            named = key(item)
+            if named not in cache:
+                jobs.append((item[1].path, item[2]))
+                cache[named] = function(item)
+            result.append(cache[named])
+        return result
+
+    monkeypatch.setattr(build.pool, "map", mapped)
+    before = build.makefile(snapshot)
+    assert jobs == [(one.path, "a"), (one.path, "b"), (two.path, "a"), (two.path, "b")]
+    assert build.makefile(snapshot) == before and len(jobs) == 4
+    edited = replace(one, toolchain="ido-7.1")
+    changed = replace(snapshot, layout=replace(snapshot.layout, units={one.path: edited, two.path: two}))
+    assert build.makefile(changed) != before
+    assert jobs[4:] == [(one.path, "a"), (one.path, "b")]
 
 
 def test_toolchain_rule_pins(build_snapshot, toolchains):
@@ -231,6 +261,7 @@ def test_rule_outputs_live_in_a_directory_named_by_the_digest_of_the_rule(build_
     first = tags(build_snapshot)
     assert len(set(first)) == 2 and tags(build_snapshot) == first  # one per version, the same on every run
     toolchains["toolchain"]["gcc-test"]["compile"].append("-changed")
+    build.effort.forget("unit-rules")  # changed installed instructions start with a fresh process memo
     assert not set(tags(build_snapshot)) & set(first)
 
 

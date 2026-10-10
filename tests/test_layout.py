@@ -423,6 +423,18 @@ def test_boundary_plan_is_computed_once_per_snapshot(scene, monkeypatch):
     assert layout.boundary_plan(snapshot)[1] == first[1] and len(calls) == count
 
 
+def test_boundary_key_never_renders_toml_and_ignores_fuzzy_scores(scene, monkeypatch):
+    snapshot = scene()
+    calls = []
+    monkeypatch.setattr(layout, "dump_map", lambda *args: pytest.fail("a boundary cache key must not render TOML"))
+    monkeypatch.setattr(layout, "_boundary", lambda s: calls.append(s) or ({}, {"computed": len(calls)}))
+    first = layout.boundary_plan(snapshot)
+    fuzzy = replace(snapshot, layout=replace(snapshot.layout, fuzzy={"func_80000400": {"scores": {"a": 0.7}}}))
+    assert layout.boundary_plan(fuzzy) == first and len(calls) == 1
+    changed = replace(snapshot, layout=replace(snapshot.layout, cap=snapshot.layout.cap + 1))
+    assert layout.boundary_plan(changed)[1] == {"computed": 2}
+
+
 def test_each_project_keeps_its_own_cache_so_no_copy_reads_another_copys_sources(scene, tmp_path):
     from unbake import store
     cfg = scene().config
