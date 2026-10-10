@@ -8,8 +8,7 @@ from pathlib import Path
 from pycparser import CParser, c_ast, c_generator
 from pycparser.c_parser import ParseError
 
-from unbake import effort, layout, pool, recipes, store, types
-from unbake import view as _view
+from unbake import effort, pool, types
 from unbake.contracts import Finding, Refusal, Snapshot, SourceView, UnitSpec, digest
 
 _CODE = digest(Path(__file__).read_bytes())
@@ -143,47 +142,6 @@ def disagreements(snapshot: Snapshot, defined: Collection[str] = ()) -> tuple[di
                                         unit=name, missing=shown, blocking=False,
                                         action='declare it once, with one type, in a shared header'))
         return agreed, findings
-
-def context(snapshot: Snapshot, version: str) -> Path:
-    with effort.stage('headers.context'):
-        extra = types.context(snapshot)
-        path = f'build/context/{version}-{digest(extra)[:16]}.c'
-        source = ''.join(f'#include "{p.removeprefix("include/")}"\n' for p in sources(snapshot))
-        output = snapshot.config.project.root / path
-        try:
-            output.parent.mkdir(parents=True, exist_ok=True)
-            store.write(output, source.encode())
-            # a plain snapshot reads the file just written, so the view key never carries the snapshot digest
-            proposed = layout.overlay(snapshot, {path: source.encode()}) if snapshot.overlays else snapshot
-            unit = UnitSpec(path, Path(path).suffix[1:], '', (), snapshot.config.project.toolchain,
-                            {'add': [], 'omit': []})
-            recipe = recipes.resolve(snapshot.config, unit, unit.options)
-            result = _view.get(proposed, unit, version, recipe, lines=False)
-            output = output.with_name(f'{version}-{digest((result.key, extra, _CODE))[:16]}.i')  # named by its content
-            if not output.exists():
-                text = result.text.rstrip('\n') + '\n'
-                kept, dropped = _parseable(text, extra)
-                store.write(output, (text + kept).encode())
-                store.write(output.with_suffix('.dropped'), '\n'.join(dropped).encode())  # lines C cannot read
-        except (Refusal, OSError) as error:
-            raise Refusal(Finding('draft.context', reason=str(error), path=path)) from error
-        return output
-def _parseable(text: str, extra: str) -> tuple[str, list[str]]:
-    """The type map lines a C parser reads after the headers' typedefs, and the ones it cannot."""
-    try:
-        ast = CParser().parse(normal(text))
-    except ParseError as error:
-        raise Refusal(Finding('draft.context', reason=f'the project headers do not parse: {error}')) from error
-    names = {n.name for n in ast.ext if isinstance(n, c_ast.Typedef)}
-    parser, lines, dropped = CParser(), [], []
-    for line in extra.splitlines():  # each line on its own, after stubs of just the typedef names it uses
-        words = dict.fromkeys(w for w in re.findall(r'\b[A-Za-z_]\w*\b', line) if w in names)
-        try:
-            parser.parse(normal(''.join(f'typedef int {w};\n' for w in words) + line + '\n'))
-            lines.append(line)
-        except ParseError:
-            dropped.append(line)
-    return '\n'.join(lines) + ('\n' if lines else ''), dropped
 
 def normal(text: str) -> str:
     while match := re.search(r'\b__attribute__\s*\(', text):
