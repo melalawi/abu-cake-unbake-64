@@ -19,7 +19,7 @@ from unbake.contracts import Config, Finding, Host, Json, Origin, Project, Refus
 
 SCHEMA_OF = { "keys.toml": "keys",
     "rules.toml": "rules", "units.toml": "units", "commands.toml": "commands", "retired.toml": "retired",
-    "subsystems.toml": "subsystems", "toolchains.toml": "toolchains", "gbi.toml": "gbi", "hints.jsonl": "hint",
+    "toolchains.toml": "toolchains",
     "flow.toml": "flow", "rom.toml": "rom", "repo.toml": "repo", }
 @cache
 def _schema(name: str) -> Json:

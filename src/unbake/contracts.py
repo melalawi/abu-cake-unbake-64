@@ -62,7 +62,7 @@ class Host:
     memory_worker_bytes: int
     cache_max_bytes: int
     toolchain_root: Path
-    # tools, exactly: git make cpp mips_as mips_ld mips_objcopy mips_objdump n64link splat m2c permuter armips
+    # tools, exactly: git make cpp mips_as mips_ld mips_objcopy mips_objdump n64link splat armips
     tools: Mapping[str, Path]
     sdk_catalog: Path | None  # n64sym-style signature JSON, None = no SDK identification
     serial_seconds: float  # budgets.*: a leaf stage this long must use at least serial_cores
@@ -269,25 +269,9 @@ class Submission:
     overrides: Json  # {"toolchain"?: str, "add": [str], "omit": [str]}
     base: str  # git HEAD the proofs were measured at
     proofs: tuple[Proof, ...]
-    origin: str  # command that submitted: "submit" | "compare" | "crack" | "check"
+    origin: str  # command that submitted: "submit" | "compare" | "check"
     note: str  # cracker's technique note ("" when none); becomes a project hint row when it lands exact
     invocation: str
-@dataclass(frozen=True)
-class Attempt:
-    """One measured cracking attempt (.unbake/attempts/<member>.jsonl)."""
-    member: str
-    step: str  # ladder step id from resources/data/flow.toml
-    source_sha256: str
-    recipe: str
-    score: float  # minimum Proof.score over holders
-    best_before: float
-    outcome: str  # "exact" | "better" | "same" | "worse" | "failed"
-    symptoms: Json  # symptoms of the lowest-scoring holder
-    hints: tuple[str, ...]  # ids of hints whose match held
-    subsystem: str
-    note: str
-    invocation: str
-    time: str  # UTC ISO-8601
 # ---------------------------------------------------------------- observability
 @dataclass(frozen=True)
 class StageRecord:

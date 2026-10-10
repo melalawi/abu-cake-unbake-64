@@ -5,7 +5,7 @@ from unbake import build, effort, journal, layout, process, store, symbols
 from unbake import config as configuration
 from unbake.contracts import Config, Finding, Json, Plan, Refusal, digest
 
-_SPELLED = ("src", "include", "types.toml", "hints.jsonl")  # tracked places that name symbols
+_SPELLED = ("src", "include", "types.toml")  # tracked places that name symbols
 def run(config: Config, params: Json) -> Json:
     with effort.stage("rename.run"), store.exclusive(config, "land") as held:
         if not held:

@@ -22,13 +22,6 @@ help = "Install toolchains, extract every version, prove the extracted assembly,
 handler = "repo.setup"
 params = []
 
-[command.draft]
-help = "Write a draft of one function or data item to .unbake/work/ITEM.c."
-handler = "draft.run"
-params = [
-  { name = "item", kind = "argument", type = "str", required = true, multiple = false, help = "member name (function or data)" },
-]
-
 [command.compare]
 help = "Measure a source against every version that holds its item; exact submits it for landing."
 handler = "compare.run"
@@ -40,15 +33,6 @@ params = [
   { name = "omit-flag", kind = "option", type = "str", required = false, multiple = true, help = "remove one compiler option (with its operand)" },
   { name = "out", kind = "option", type = "path", required = false, multiple = false, help = "new directory for artifacts" },
   { name = "note", kind = "option", type = "str", required = false, multiple = false, help = "technique tried, recorded with the attempt" },
-]
-
-[command.crack]
-help = "Run the tool steps of the cracking ladder for one item, then write its creative packet if still not exact."
-handler = "crack.run"
-params = [
-  { name = "item", kind = "argument", type = "str", required = true, multiple = false, help = "member name" },
-  { name = "seconds", kind = "option", type = "int", required = true, multiple = false, help = "permuter wall budget" },
-  { name = "no-submit", kind = "flag", type = "str", required = false, multiple = false, help = "keep candidates and packets without submitting or landing" },
 ]
 
 [command.submit]

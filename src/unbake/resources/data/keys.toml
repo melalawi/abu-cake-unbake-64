@@ -58,14 +58,6 @@ sentence = "a configuration key was retired at the cutover"
 owner = "config"
 sentence = "a configuration or data file does not match its schema"
 
-[key."draft.context"]
-owner = "headers"
-sentence = "the header context for m2c cannot be built"
-
-[key."draft.m2c"]
-owner = "draft"
-sentence = "m2c produced no draft"
-
 [key."effort.log"]
 owner = "effort"
 sentence = "stage records could not be written to build/stages.jsonl"
@@ -255,10 +247,6 @@ sentence = "a pool worker failed"
 owner = "pool"
 sentence = "a pool worker hit its memory limit"
 
-[key."draft.data"]
-owner = "draft"
-sentence = "the data item cannot be drafted from its placements"
-
 [key."fuzzy.no_gain"]
 owner = "land"
 sentence = "the candidate does not raise the item's best score by the fuzzy minimum gain"
@@ -311,6 +299,3 @@ sentence = "make check failed on the rendered build"
 owner = "repo"
 sentence = "the extracted assembly does not rebuild the ROM bytes"
 
-[key."types.m2c"]
-owner = "types"
-sentence = "m2c produced no signature for a function"

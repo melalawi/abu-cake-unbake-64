@@ -113,14 +113,6 @@
      "type": "string",
      "minLength": 1
     },
-    "m2c": {
-     "type": "string",
-     "minLength": 1
-    },
-    "permuter": {
-     "type": "string",
-     "minLength": 1
-    },
     "armips": {
      "type": "string",
      "minLength": 1
