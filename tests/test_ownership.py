@@ -159,7 +159,9 @@ def member(name, kind="data", section=".rodata", holders=("a",)):
 
 
 MEMBERS = {"f": member("f", "function", ".text"), "bss": member("bss", section=".bss"),
-           "old1": member("old1"), "old2": member("old2"), "row": member("row"), "labels": member("labels")}
+           "old1": member("old1"), "old2": member("old2"),
+           "row": Member("row", "data", "asm", "g", tuple(Placement(v, ".rodata", 4, 8, 0x104, 0) for v in ("a",))),
+           "labels": member("labels")}
 # rom 0..12 as three whole rows that follow each other in memory
 ROWS = [(0, 4, "old1", ".rodata", 0x100), (4, 8, "row", ".rodata", 0x104), (8, 12, "old2", ".rodata", 0x108)]
 INDEXES = {"a": index(bytes(12), ROWS), "b": index(bytes(12), ROWS)}
@@ -184,6 +186,11 @@ def test_resolve_names_a_claim_by_the_names_from_holders_address_else_the_first(
     assert {c.rows for c in resolve(unit("f"), both)[2]} == {("rodata/f/00000100",)}
     assert {c.rows for c in resolve(unit("f"), both, "b")[2]} == {("rodata/f/00000104",)}
     assert {c.rows for c in resolve(unit("f"), both, "c")[2]} == {("rodata/f/00000100",)}
+
+
+def test_resolve_names_a_claim_after_the_data_member_the_unit_owns_where_it_starts():
+    claims = resolve(unit("f", "row"), {"a": {".rodata": [[4, 8]]}})[2]
+    assert [c.rows for c in claims] == [("row",)]
 
 
 def test_resolve_drops_what_the_object_no_longer_emits():

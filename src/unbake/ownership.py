@@ -201,14 +201,17 @@ def _range(hits: list, here: list[tuple[int, int]]) -> tuple[list | None, str]:
         return owned[0], ""
     return hits[0], ""
 def _named(unit: UnitSpec, picked: dict[str, list[tuple[str, int, int]]], indexes: Mapping[str, tuple],
-           names_from: str) -> list[Claim]:
-    """The claims of the unit, each named by its section, the unit and the address the first holder gives its start
-    (the names_from version where the unit holds it): the one row the claim becomes."""
+           names_from: str, members: Mapping[str, Any]) -> list[Claim]:
+    """The claims of the unit, each named by the unit-owned member if it starts at the claim, else by section, unit
+    and address: the one row the claim becomes."""
     out = []
     for section in sorted({s for rows in picked.values() for s, _, _ in rows}):
         held = {v: (a, b) for v, rows in picked.items() for s, a, b in rows if s == section}
         ref = names_from if names_from in held else min(held)
         name = f"{section[1:]}/{Path(unit.path).stem}/{_vram_of(indexes[ref], held[ref][0]):08X}"
+        name = next((m for m in unit.members if members[m].kind != "function" and any(
+            p.version == ref and p.section == section and p.rom_start == held[ref][0] for p in members[m].placements
+        )), name)
         out.extend(Claim(unit.path, v, section, a, b, (name,)) for v, (a, b) in sorted(held.items()))
     return out
 def _resolve(unit: UnitSpec, members: Mapping, result: dict, indexes: Mapping[str, tuple], names_from: str
@@ -245,7 +248,7 @@ def _resolve(unit: UnitSpec, members: Mapping, result: dict, indexes: Mapping[st
         else:
             resolved.add(version)
             picked[version] = mine
-    return keep, resolved, _named(unit, picked, indexes, names_from), debt
+    return keep, resolved, _named(unit, picked, indexes, names_from, members), debt
 def _clash(taken: list[tuple[int, int, str]], start: int, end: int) -> str | None:
     """The unit that holds some of [start, end) in taken (sorted, disjoint), if any."""
     at = bisect_left(taken, (start,))
