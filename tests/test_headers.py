@@ -169,3 +169,18 @@ def test_fold_refuses_a_definition_whose_header_prototype_returns_another_type(
     assert [f.key for f in findings] == (["headers.conflict"] if conflicts else [])
     if conflicts:
         assert "include/g.h:7" in findings[0].reason and "declares 'int'" in findings[0].reason
+
+
+def test_a_declaration_that_disagrees_with_the_landed_definition_is_a_conflict(tmp_path):
+    files = {"src/f.c": "s32 f(s32 arg0, s32 *arg1) {\n    return 0;\n}\n",
+             "src/g.c": "extern u32 f(u32 devAddr, u32 *data);\nvoid g(void) { f(0, 0); }\n",
+             "src/h.c": "void h(void) { f(1, 0); }\n",
+             "include/ok.h": "extern s32 f2(s32, s32 *);\n", "src/f2.c": "s32 f2(s32 a, s32 *b) { return 0; }\n"}
+    agreed, findings = headers.disagreements(snap(tmp_path, files))
+    assert [f.unit for f in findings] == ["f"] and "f" not in agreed
+    found = findings[0]
+    assert found.key == "types.conflict" and not found.blocking
+    assert found.symptoms["definition"] == {"path": "src/f.c", "line": 1, "signature": "s32 f(s32 arg0, s32 *arg1)"}
+    assert found.symptoms["consumers"] == 1
+    assert list(found.missing) == ["f: src/f.c:1 s32 f(s32 arg0, s32 *arg1)",
+                                   "f: src/g.c:1 extern u32 f(u32 devAddr, u32 *data);"]

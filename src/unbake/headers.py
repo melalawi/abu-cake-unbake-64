@@ -81,11 +81,20 @@ def _externs(text: str) -> list[tuple[str, int, str]]:
     return [(name, clean.count('\n', 0, found.start()) + 1, statement)
             for found in _EXTERN.finditer(clean) for name, _, statement in _declared(found[0])]
 
+# a function definition's head: type and name at the start of a line, parameters, then the opening brace
+_FUNCTION = re.compile(r'^[A-Za-z_][\w \t*]*?\b(\w+)\s*\(([^;{}]*)\)\s*\{', re.M)
+
+def _functions(text: str) -> list[tuple[str, int, str]]:
+    clean = _blank(text)
+    return [(found[1], clean.count('\n', 0, found.start()) + 1, ' '.join(found[0].split()).rstrip('{ '))
+            for found in _FUNCTION.finditer(clean)]
+
 def _file_job(item) -> dict:
     text, source = item
     code = text.decode(errors='replace')
     defined = _DEFINITION.findall(_blank(code)) if source else []
-    return {'declared': (_externs if source else _declared)(code), 'defined': defined}
+    return {'declared': (_externs if source else _declared)(code), 'defined': defined,
+            'functions': _functions(code) if source else []}
 def _file_key(item) -> str:
     return digest(item)  # the file bytes and how it is read
 
@@ -114,24 +123,61 @@ def _type_of(statement: str, name: str) -> str:
             return ' '.join(f"{base.removeprefix('extern')} {stars} {match[0].replace(name, '@', 1)}".split())
     return ''
 
+_TYPE_WORDS = {'const', 'volatile', 'unsigned', 'signed', 'struct', 'union', 'enum', 'int', 'char', 'short', 'long',
+               'void', 'float', 'double'}
+
+def _unnamed(spelled: str) -> str:
+    """A function type without its parameter names: `@(s32 a, s32 *b)` and `@(s32, s32*)` are one type."""
+    head, found, rest = spelled.partition('@(')
+    if not found:
+        return spelled
+    kept = []
+    for param in (p.strip() for p in rest.rpartition(')')[0].split(',')):
+        named = re.search(r'(\w+)\s*$', param)
+        kept.append(param[:named.start()] if named and named.start() and named[1] not in _TYPE_WORDS else param)
+    return re.sub(r'\s+|\bvoid\b(?=\))|\b(?:struct|union|enum)\b', '', head + '@(' + ','.join(kept) + ')')
+
+def _normal(spelled: str) -> str:
+    return ' '.join(re.sub(r'\b\w+\b', lambda w: _SYNONYMS.get(w[0], w[0]), spelled).split())
+
+def _consumers(snapshot: Snapshot, paths: list[str], name: str, rows: Collection[str]) -> int:
+    """The landed files, besides the ones that declare or define the name, that mention it."""
+    pattern = re.compile(rf'\b{re.escape(name)}\b')
+    return sum(1 for path in paths if path not in rows and pattern.search(snapshot.read(path).decode(errors='replace')))
+
 def disagreements(snapshot: Snapshot, defined: Collection[str] = ()) -> tuple[dict[str, str], list[Finding]]:
     """The one type each declared name has where every landed declaration of it agrees (and no source defines it),
-    and a finding per name whose declarations disagree, naming each declaration with its file and line."""
+    and a finding per name whose declarations disagree, naming each declaration with its file and line. A function
+    a landed source defines is the canonical type: a declaration that spells another type is a finding too, whose
+    symptoms hold the definition ({path, line, signature}) and the count of other landed files that use the name."""
     with effort.stage('headers.disagreements'):
         paths = [*sources(snapshot), *sources(snapshot, 'src', '.c')]
         found: dict[str, list[tuple[str, int, str]]] = {}
-        owned = set(defined)
+        owned, definitions = set(defined), {}
         for path, scanned in zip(paths, _scanned(snapshot, paths), strict=True):
             owned.update(scanned['defined'])
+            if not path.startswith('src/fuzzy/'):  # a fuzzy candidate is not landed
+                definitions.update({name: (path, line, text) for name, line, text in scanned['functions']})
             for name, line, text in scanned['declared']:
                 if not text.startswith('typedef') and not re.match(r'(?:struct|union|enum)\b[^;(]*\{', text):
                     found.setdefault(name, []).append((path, line, text))
         agreed, findings = {}, []
         for name, rows in sorted(found.items()):
+            if name in definitions:
+                path, line, text = definitions[name]
+                canonical = _unnamed(_normal(_type_of(text, name)))
+                if canonical and any(_unnamed(_normal(_type_of(t, name))) != canonical for _, _, t in rows):
+                    shown = tuple(f"{name}: {p}:{n} {t}" for p, n, t in [definitions[name], *rows])
+                    findings.append(Finding(
+                        'types.conflict', f"{name} is defined as {text} but declared another way", path=path, line=line,
+                        unit=name, missing=shown, blocking=False, action=f"declare it as its definition in {path} does",
+                        symptoms={'definition': {'path': path, 'line': line, 'signature': text},
+                                  'consumers': _consumers(snapshot, paths, name, {p for p, _, _ in rows} | {path})}))
+                continue
             if name in owned:
                 continue
             spelled = [_type_of(text, name) for _, _, text in rows]
-            types = {' '.join(re.sub(r'\b\w+\b', lambda w: _SYNONYMS.get(w[0], w[0]), s).split()) for s in spelled}
+            types = {_normal(s) for s in spelled}
             if len(types) == 1 and '' not in spelled:
                 agreed[name] = spelled[0]
             else:
