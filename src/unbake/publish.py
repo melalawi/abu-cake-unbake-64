@@ -1,5 +1,8 @@
 """Admission, submission landing and withdrawal."""
 import json
+import posixpath
+import re
+from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import replace
 from pathlib import Path
@@ -77,11 +80,23 @@ def _regressions(snapshot: Snapshot, gaps: tuple[Finding, ...], own: Sequence[st
     exact = {(p.member, p.version) for p in _proofs(snapshot, paths)[0] if p.exact} if paths else set()
     return tuple(g for g in gaps if g.unit in own or heads[g.unit] is None
                  or any((g.unit, v) in exact for v in g.versions))
-def _consumers(snapshot, header, group=None):
-    include = f'#include "{header.removeprefix("include/")}"'
-    return tuple(path for path, unit in snapshot.layout.units.items()
-                 if (group is None or unit.group == group)
-                 and include in snapshot.read(path).decode())
+def _consumers(snapshot: Snapshot, changed: Sequence[str]) -> tuple[str, ...]:
+    """Every unit, of any group, that includes a changed header directly or through other headers. A quote include
+    names a file beside the including one, else under include/ or src/; taking every one that exists
+    over-approximates."""
+    known = set(headers.sources(snapshot)) | set(snapshot.layout.units)
+    included_by = defaultdict(set)
+    for path in known:
+        for name in re.findall(rb'^\s*#\s*include\s*"([^"]+)"', snapshot.peek(path) or b"", re.M):
+            for base in (posixpath.dirname(path), "include", "src"):
+                if (target := posixpath.normpath(posixpath.join(base, name.decode(errors="replace")))) in known:
+                    included_by[target].add(path)
+    reached, todo = set(), list(changed)
+    while todo:
+        new = included_by[todo.pop()] - reached
+        reached |= new
+        todo.extend(new)
+    return tuple(path for path in reached if path in snapshot.layout.units)
 def admit(snapshot: Snapshot, request: Json) -> tuple[UnitSpec, Snapshot, tuple[Proof, ...]]:
     with effort.stage("publish.admit"):
         with effort.stage("publish.admit.1"):
@@ -176,10 +191,9 @@ def plans(snapshot: Snapshot, unit: UnitSpec, proposed: Snapshot) -> list[Plan]:
                 _generated(snapshot, writes)
                 overlay = layout.overlay(snapshot, writes)
                 group = proposed.layout.groups[unit.group]
-                header = f"include/{group.segment}/{group.name}.h"
                 affected = {option.path}
-                if header in writes and writes[header] != snapshot.peek(header):
-                    affected.update(_consumers(overlay, header, unit.group))
+                edited = [p for p, data in writes.items() if p.endswith(".h") and data not in (None, snapshot.peek(p))]
+                affected.update(_consumers(overlay, edited))
                 before, after = [], []
                 for path, data in writes.items():
                     if Path(path).suffix not in (".c", ".h"):

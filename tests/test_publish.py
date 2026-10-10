@@ -242,23 +242,28 @@ def test_plan_writes_changed_repo_files_only(lane):
                                   plan.blocking, plan.debt, plan.message))
 
 
-def test_plan_appends_and_reproves_same_group_header_consumers(lane):
+def test_plan_appends_and_reproves_every_unit_that_includes_the_edited_header_through_headers(lane):
     snapshot, unit = lane["snapshot"], lane["unit"]
     consumer = replace(unit, path="src/consumer.c", members=("consumer",))
     outsider = replace(consumer, path="src/outsider.c", group="other")
+    bystander = replace(consumer, path="src/bystander.c", members=("bystander",))
     header = "include/main/group.h"
     old = b'#include "old.h"\nint old(void);\n'
-    snapshot = replace(snapshot, layout=replace(snapshot.layout, units={u.path: u for u in (unit, consumer, outsider)}),
+    units = {u.path: u for u in (unit, consumer, outsider, bystander)}
+    snapshot = replace(snapshot, layout=replace(snapshot.layout, units=units),
                        overlays={**snapshot.overlays, unit.path: old, header: b"old header",
                                  consumer.path: b'#include "main/group.h"\n',
-                                 outsider.path: b'#include "main/group.h"\n'})
+                                 "include/mid.h": b'#include "main/group.h"\n',
+                                 outsider.path: b'#include "mid.h"\n',
+                                 bystander.path: b'#include "other.h"\n'})
+    publish.headers.sources.return_value = [header, "include/mid.h"]
     folded = b'#include "old.h"\n#include "new.h"\n#include "new.h"\nint f(void);\n'
     publish.headers.fold.return_value = ({unit.path: folded, header: b"new header"}, ())
     debt = Finding("land.request", "existing debt", blocking=False)
     publish.policy.scope.return_value = ((), (debt,))
     plan, = publish.plans(snapshot, unit, lane["proposed"])
     assert plan.writes[unit.path] == b'#include "old.h"\n#include "new.h"\nint old(void);\n\nint f(void);\n'
-    assert plan.affected == tuple(sorted((unit.path, consumer.path)))
+    assert plan.affected == tuple(sorted((unit.path, consumer.path, outsider.path)))  # not the bystander
     assert plan.debt == (debt,)
     assert publish.policy.scope.call_args.args[2] == plan.writes
 
