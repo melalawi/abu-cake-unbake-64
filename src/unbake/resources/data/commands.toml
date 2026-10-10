@@ -57,7 +57,7 @@ params = [
 ]
 
 [command.rename]
-help = "Give one symbol a new name everywhere it is spelled (table, sources, headers, hints, generated files) in one commit."
+help = "Give one symbol a new name everywhere it is spelled (table, sources, headers, generated files) in one commit."
 handler = "rename.run"
 params = [
   { name = "old", kind = "argument", type = "str", required = true, multiple = false, help = "current symbol name" },

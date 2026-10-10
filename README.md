@@ -44,39 +44,26 @@ Missing `domain` refuses; project overrides may change limits but may never set 
 
 ```sh
 unbake init NAME --functions-per-header 32
-unbake setup                      # prints a proposal and its digest
-unbake setup --confirm <SHA256>   # proves every ROM
+unbake setup                      # installs toolchains, extracts and proves every ROM
 ```
 
 ## Work
 
 ```sh
-unbake cycle                                         # pick, draft, compare on save, land
-unbake cycle --pick 5 --stop idle:900 > events.jsonl
+unbake report                                        # progress per version, kind and segment
+unbake report --next --count 20                      # the ordered work list
+unbake compare src/code_80200610.c --function NAME   # measure a source against every version
+unbake submit src/code_80200610.c                    # put an exact source in the landing inbox
+unbake land                                          # land every inbox submission, one commit each
+unbake check                                         # census the source rules over the whole project
+unbake rename OLD NEW                                # rename a symbol everywhere it is spelled
 ```
 
 A function that is exact in every version lands at once with a ROM proof and a commit.
-Run `unbake next` for the next step and `unbake --help` for every verb.
+Run `unbake --help` for every verb: `init`, `setup`, `report`, `compare`, `submit`, `land`, `check` and `rename`.
 Every command prints one JSON object on stdout. Human text goes to stderr.
 
-`compare FILE --flags` and a plateau in `search-variants FILE --method auto`
-use the same measured source × recipe frontier. Option episodes contain at most
-eight effective recipes crossed with four retained source parents. Saved sources,
-recipes, native refusals and next commands remain available under `build/work`.
-Proven technique hints match retained compare symptoms and print “this helped before”.
-Their evidence remains advisory and unknown symptoms stay unknown. A search attempt
-hands off after `search.no_gain_probes` distinct probes without a new measured
-frontier coordinate (default 32); a later attempt remains available. Cached pairs
-do not count. Each option recipe is crossed with retained source parents before
-the next recipe.
-
-External source/include inputs require explicit roots. Advisory subsystem hints
-read retained facts and launch no native jobs or type solve.
-
-Config schema 2 stores phase options by canonical translation-unit path. For an
-existing project, use `migrate-state --plan`, review the complete plan, then
-`migrate-state --apply PLAN` before normal work. See
-[compiler ownership](docs/compiler-families.md) and
+See [compiler ownership](docs/compiler-families.md) and
 [publication](docs/publication.md) for the recipe and proof contracts.
 
 ## Build without unbake
