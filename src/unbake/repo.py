@@ -231,7 +231,7 @@ def _built(snapshot: Snapshot) -> dict[str, dict[str, int]]:
     out = {v: {"built": 0, "withheld": 0} for v in snapshot.config.project.versions}
     for unit in snapshot.layout.units.values():
         if "compile" in phases[unit.kind]["phases"]:
-            for v in {v for n in unit.members for v in snapshot.layout.members[n].holders()}:
+            for v in snapshot.layout.held(unit.members):
                 out[v]["withheld" if v in unit.withheld else "built"] += 1
     return out
 def _paths(project) -> dict[str, str]:

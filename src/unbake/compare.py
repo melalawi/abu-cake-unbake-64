@@ -15,7 +15,7 @@ from unbake.contracts import Config, Finding, Json, Proof, Refusal, Snapshot, Un
 
 
 def holders(snapshot: Snapshot, unit: UnitSpec) -> tuple[str, ...]:
-    return tuple(sorted({v for name in unit.members for v in snapshot.layout.members[name].holders()}))
+    return tuple(sorted(snapshot.layout.held(unit.members)))
 
 
 def _export(snapshot: Snapshot, unit: UnitSpec, version: str, recipe: Any, work: Path,

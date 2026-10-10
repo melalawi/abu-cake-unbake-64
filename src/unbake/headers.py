@@ -1,13 +1,15 @@
 """Catalogue header declarations and fold candidate declarations into their owners."""
 
+import pickle
 import re
+from collections import defaultdict
 from collections.abc import Collection
 from copy import deepcopy
 
 from pycparser import CParser, c_ast, c_generator
 from pycparser.c_parser import ParseError
 
-from unbake import effort, pool, types
+from unbake import effort, pool, store, types
 from unbake.contracts import Finding, Refusal, Snapshot, SourceView, UnitSpec, digest
 
 
@@ -107,6 +109,18 @@ def landed(snapshot: Snapshot) -> dict[str, str]:
     paths = sources(snapshot, 'src', '.c')
     return {name: text for path, scanned in zip(paths, _scanned(snapshot, paths), strict=True)
             if not path.startswith('src/fuzzy/') for name, _, text in scanned['functions']}
+
+def externs(snapshot: Snapshot) -> dict[str, list[tuple[str, int, str]]]:
+    """Per name the (path, line, type) of every extern statement a landed source makes of it."""
+    paths = sources(snapshot, 'src', '.c')
+    def produce() -> bytes:
+        found = defaultdict(list)
+        for path, scanned in zip(paths, _scanned(snapshot, paths), strict=True):
+            for name, line, text in scanned['declared']:
+                found[name].append((path, line, _type_of(text, name).replace('@', '').strip()))
+        return pickle.dumps(dict(found))
+    key = digest([(p, snapshot.read(p)) for p in paths])
+    return pickle.loads(store.cached(snapshot.config, 'externs', key, produce))
 
 def catalog(snapshot: Snapshot, version: str) -> dict[str, tuple[str, int, str]]:
     with effort.stage('headers.catalog'):

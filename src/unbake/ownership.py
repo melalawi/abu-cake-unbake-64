@@ -167,15 +167,14 @@ def _vram_of(index: tuple, offset: int) -> int:
 def _job_key(item: tuple[Snapshot, UnitSpec, str | None]) -> str | None:
     """What the unit's placements read: its builds in every holder, the rows they can land on and its own text range."""
     snapshot, unit, only = item
-    held = sorted({v for n in unit.members for v in snapshot.layout.members[n].holders()} & ({only} if only else
-                  set(snapshot.versions)))
+    held = sorted(snapshot.layout.held(unit.members) & ({only} if only else set(snapshot.versions)))
     stamps = [native.stamp(snapshot, unit, v) for v in held]
     return None if None in stamps else digest((stamps, [_index(snapshot, v)[4] for v in held]))
 def _job(item: tuple[Snapshot, UnitSpec, str | None]) -> dict[str, dict | str]:
     snapshot, unit, only = item
     cfg, recipe, out = snapshot.config, recipes.resolve(snapshot.config, unit, {}), {}
     code = replace(unit, members=tuple(n for n in unit.members if snapshot.layout.members[n].kind == "function"))
-    for version in sorted({v for n in unit.members for v in snapshot.layout.members[n].holders()}):
+    for version in sorted(snapshot.layout.held(unit.members)):
         if only not in (None, version):
             continue
         try:
@@ -364,7 +363,7 @@ def exact(snapshot: Snapshot, units: dict[str, UnitSpec]) -> tuple[dict[str, Uni
         phases = config.load_resource("units.toml")["kind"]
         trial = replace(snapshot, layout=replace(snapshot.layout, units=units), digest=digest((snapshot.digest, units)))
         jobs = [(trial, u, v) for u in units.values() if "compile" in phases[u.kind]["phases"]
-                for v in sorted({v for n in u.members for v in snapshot.layout.members[n].holders()} - set(u.withheld))]
+                for v in sorted(snapshot.layout.held(u.members) - set(u.withheld))]
         gaps = pool.map(snapshot.config, "layout.exactness", _exact_job, jobs, _stamp_key)
         lost: dict[str, set[str]] = defaultdict(set)
         debt: dict[str, list[str]] = defaultdict(list)

@@ -36,7 +36,7 @@ def _segment(snapshot: Snapshot, p: Placement) -> str:
     return next(name for name, start, end, _ in snapshot.versions[p.version].segments if start <= p.rom_start < end)
 _WIDTH = {"lb": 1, "lbu": 1, "sb": 1, "lh": 2, "lhu": 2, "sh": 2, "lw": 4, "sw": 4, "lwc1": 4, "swc1": 4,
           "ld": 8, "sd": 8, "ldc1": 8, "sdc1": 8}
-def _scan_job(item) -> list[tuple[str, frozenset[int], frozenset[str], bool, dict[str, list]]]:
+def _scan_job(item) -> list[tuple[str, frozenset[int], frozenset[str], bool, dict[str, list[Any]]]]:
     """Per function of one chunk: the rodata addresses it loads, the functions it calls, whether padding ends it and
     its usage: accesses (address, width, mnemonic, how, base), calls (callee, ((argument, value),)), argument
     accesses (argument, offset, width) and steps (base address or "aN", constant) of incremented registers."""
@@ -49,7 +49,7 @@ def _scan_job(item) -> list[tuple[str, frozenset[int], frozenset[str], bool, dic
         tags = {28: "full"}  # "hi" after a lui, "full" for an address built on one; read only while a register is known
         args, indexed, stale, pending, pending_target = {4 + n: (n, 0) for n in range(4)}, {}, set(), None, ""
         loads, callees = set(), set()
-        use: dict[str, set] = {"accesses": set(), "calls": set(), "args": set(), "steps": set()}
+        use: dict[str, set[Any]] = {"accesses": set(), "calls": set(), "args": set(), "steps": set()}
         for i, (w, ins) in enumerate(code):
             op, rs, rt, imm = w >> 26, (w >> 21) & 31, (w >> 16) & 31, w & 65535
             mnemonic, address, signed = ins.getOpcodeName(), None, imm if imm < 32768 else imm - 65536
@@ -192,27 +192,32 @@ def _partition(members, evidence, cap):
     if current:
         result.append((tuple(current), tuple(sorted(signals))))
     return result
+def scan(snapshot: Snapshot) -> dict[str, list[Any]]:
+    """Per version the scan rows of its functions in ROM order: (name, loads, callees, padded, usage)."""
+    functions = [m for m in snapshot.layout.members.values() if m.kind == "function"]
+    held = {v: sorted(((p.rom_start, m.name, p) for m in functions for p in m.placements
+                       if p.version == v and p.section == ".text"), key=lambda row: row[:2])
+        for v in snapshot.versions}
+    chunks = []
+    for v, rows in held.items():
+        addresses = {p.vram: name for _, name, p in rows}
+        spans = [(p.vram, p.vram + p.rom_end - p.rom_start) for m in snapshot.layout.members.values()
+                 for p in m.placements if p.version == v and p.section == ".rodata"
+                 and any(r.start <= p.rom_start < r.end for r in snapshot.config.project.resident[v])]
+        chunks += [(snapshot, v, [(name, p) for _, name, p in rows[i:i + 128]], addresses, spans)
+                   for i in range(0, len(rows), 128)]
+    done = pool.map(snapshot.config, "infer.evidence", _scan_job, chunks, _scan_key)
+    scanned: dict[str, list[Any]] = defaultdict(list)
+    for chunk, rows in zip(chunks, done, strict=True):
+        scanned[chunk[1]].extend(rows)
+    return scanned
 def groups(snapshot: Snapshot) -> tuple[Group, ...]:
     with effort.stage("infer.groups"):
         kept = [g for g in snapshot.layout.groups.values() if g.evidence in {"authored", "proven"}]
         excluded = {n for g in kept for n in g.members}
         functions = [m for m in snapshot.layout.members.values() if m.kind == "function"]
         cap = snapshot.layout.cap
-        held = {v: sorted(((p.rom_start, m.name, p) for m in functions for p in m.placements
-                           if p.version == v and p.section == ".text"), key=lambda row: row[:2])
-            for v in snapshot.versions}
-        chunks = []
-        for v, rows in held.items():
-            addresses = {p.vram: name for _, name, p in rows}
-            spans = [(p.vram, p.vram + p.rom_end - p.rom_start) for m in snapshot.layout.members.values()
-                     for p in m.placements if p.version == v and p.section == ".rodata"
-                     and any(r.start <= p.rom_start < r.end for r in snapshot.config.project.resident[v])]
-            chunks += [(snapshot, v, [(name, p) for _, name, p in rows[i:i + 128]], addresses, spans)
-                       for i in range(0, len(rows), 128)]
-        done = pool.map(snapshot.config, "infer.evidence", _scan_job, chunks, _scan_key)
-        scanned = defaultdict(list)
-        for chunk, rows in zip(chunks, done, strict=True):
-            scanned[chunk[1]].extend(rows)
+        scanned = scan(snapshot)
         evidence = {v: _evidence(snapshot, functions, v, cap, scanned[v]) for v in snapshot.versions}
         source = snapshot.config.project.names_from
         segments = {m.name: _segment(snapshot, _placement(snapshot, m)) for m in functions}
@@ -453,8 +458,7 @@ def addresses(snapshot: Snapshot, debt: Sequence) -> dict[tuple[str, str], tuple
         names = {name for name, _ in wanted}
         failed = set(failing)
         users = [(snapshot, unit, version) for unit in units.values() if unit.path.endswith(".c")
-                 for version in sorted({v for n in unit.members for v in snapshot.layout.members[n].holders()}
-                                       - set(unit.withheld))
+                 for version in sorted(snapshot.layout.held(unit.members) - set(unit.withheld))
                  if (unit.path, version) not in failed
                  and names & symbols.tokens(snapshot.read(unit.path).decode(errors="replace"))]
         for key, rows in votes(users).items():

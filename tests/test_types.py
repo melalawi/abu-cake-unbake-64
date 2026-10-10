@@ -163,3 +163,35 @@ def test_types_toml_is_parsed_once_per_command(lane, monkeypatch):
     with effort.command("check", []):
         assert types.load(snapshot) is types.load(snapshot)
     assert len(parses) == 1
+
+
+def _use(*stores, calls=()):
+    accesses = [(a, 4, "sw", "based", a) for a in stores] + [(a, 0, "jal", "taken", None) for _, ((_, a), *_) in calls]
+    return {"accesses": accesses, "calls": list(calls), "args": [], "steps": []}
+
+
+def test_a_fill_and_two_stores_are_one_span_with_the_writer_and_far_stores_are_two():
+    near = _use(0x100, 0x108, calls=[("fill", ((0, 0x200), (2, 0x40)))])
+    assert types._spans(near) == [[0x100, 0x240, 2, 1]]
+    far = _use(0x100, 0x104, 0x108, 0x10C, 0x2000, 0x2004, 0x2008, 0x200C)
+    assert types._spans(far) == [[0x100, 0x110, 4, 0], [0x2000, 0x2010, 4, 0]]
+    assert types._spans(_use(0x100, 0x104, 0x108)) == []  # three stores and no fill are not a run
+
+
+def test_usage_rows_name_the_readers_spelling_span_base_and_stride(lane, monkeypatch):
+    snapshot, *_ = lane
+    members = {"w": replace(_member("w"), state="c"), "r": _member("r")}
+    versions = {"a": Mock(symbols={"obj": 0x100, "next": 0x200}, rom_sha256="x")}
+    snapshot = replace(snapshot, versions=versions, layout=replace(snapshot.layout, members=members))
+    uses = {"w": _use(0x100, 0x104, 0x108, 0x10C) | {"steps": [(0x100, 0xC)]},
+            "r": {"accesses": [(0x104, 4, "lw", "based", 0x100)], "calls": [], "args": [(0, 8, 4)], "steps": []}}
+    readers = {0x104: [("w", "based", 4, 0x100), ("r", "based", 4, 0x100)], 0x100: [("w", "based", 4, 0x100)]}
+    monkeypatch.setattr(types, "_tables", lambda s, v: (uses, readers))
+    monkeypatch.setattr(types.headers, "externs", lambda s: {"obj": [("src/w.c", 3, "Thing *")]})
+    rows = types.usage_at(snapshot, "obj")["a"]
+    assert [r["address"] for r in rows] == [0x100, 0x104]
+    row = rows[1]
+    assert row["readers"] == [("w", True), ("r", False)] and row["landed_readers"] == 1
+    assert row["span"] == {"start": 0x100, "size": 0x10, "writer": "w", "stores": 4, "fills": 0}
+    assert row["base"] == ("obj", 0) and row["stride"] == 0xC and rows[0]["spellings"] == [("src/w.c", 3, "Thing *")]
+    assert types.usage(snapshot, "r", "a")["args"] == {"a0": {"offsets": [8], "stride": None, "landed_callers": []}}

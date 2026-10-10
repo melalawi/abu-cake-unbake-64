@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field, is_dataclass
 from pathlib import Path
 from typing import Any, Protocol
@@ -174,6 +174,8 @@ class LayoutMap:
     digest: str
     authored: tuple[Json, ...]  # [[authored]] rows (layout.schema.json), preserved verbatim by dump_map
     fuzzy: Mapping[str, Json]  # member -> {"path": "src/fuzzy/<member>.c", "scores": {version: 0..1}}; not built
+    def held(self, names: Iterable[str]) -> set[str]:
+        return {v for n in names for v in self.members[n].holders()}
 @dataclass(frozen=True)
 class Snapshot:
     """Immutable view of one project state; overlays are proposed writes not yet installed."""

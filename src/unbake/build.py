@@ -114,7 +114,7 @@ def _headers(snapshot: Snapshot, unit: UnitSpec, version: str) -> tuple[tuple[st
     return cast("tuple[tuple[str, ...], tuple[str, ...]]",
                 effort.memo(("unit-headers", snapshot.digest, unit.path, version), scan))
 def _versions(snapshot: Snapshot, unit: UnitSpec) -> list[str]:
-    return sorted({v for n in unit.members for v in snapshot.layout.members[n].holders()} - set(unit.withheld))
+    return sorted(snapshot.layout.held(unit.members) - set(unit.withheld))
 def _unit_rules(snapshot: Snapshot, unit: UnitSpec, version: str) -> str:
     """The rules of one unit in one version. Their outputs live in a directory named by the digest of everything the
     recipe says, so a changed recipe has no outputs yet and the rules need not depend on the Makefile."""

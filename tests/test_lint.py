@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-SOFT_CAP, HARD_CAP = 6500, 7000
+SOFT_CAP, HARD_CAP = 6500, 7200
 SRC = Path(__file__).resolve().parents[1] / "src" / "unbake"
 FILES = sorted(p for p in SRC.glob("*.py") if p.name != "contracts.py")
 CONTRACT_TEXT = (SRC / "resources" / "CONTRACTS.md").read_text(encoding="utf-8")

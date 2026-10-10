@@ -98,6 +98,10 @@ sentence = "the candidate stops another landed file from building exactly"
 owner = "compare"
 sentence = "the build does not match the ROM in every holding version"
 
+[key."types.usage"]
+owner = "types"
+sentence = "the function has no usage rows in that version"
+
 [key."land.request"]
 owner = "compare"
 sentence = "the request does not name a publishable function"
