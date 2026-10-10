@@ -19,12 +19,11 @@ from unbake.contracts import (
     Project,
     Refusal,
     Snapshot,
-    SourceView,
-    UnitSpec,
 )
 
 AGREED: dict = {}  # what headers.disagreements answers: name -> the one type its declarations agree on
 CONFLICTS: list = []
+LANDED: dict = {}  # what headers.landed answers: name -> the head of a landed definition
 HEADER_DECLARATIONS: dict = {}  # what headers.catalog answers: name -> (path, line, statement)
 
 
@@ -83,40 +82,22 @@ def lane(tmp_path, monkeypatch):
                         lambda snap, place="include", suffix=".h": ["include/h.h"] * (place == "include"))
     monkeypatch.setattr(types.headers, "disagreements", lambda snap, defined=(): (AGREED, CONFLICTS))
     monkeypatch.setattr(types.headers, "catalog", lambda snap, version: HEADER_DECLARATIONS)
+    monkeypatch.setattr(types.headers, "landed", lambda snap: LANDED)
     HEADER_DECLARATIONS.clear()
+    LANDED.clear()
     AGREED.clear()
     CONFLICTS.clear()
     monkeypatch.setattr(types.config, "load_resource", Mock(side_effect=resources.__getitem__))
     return (snapshot,)
 
 
-@pytest.mark.parametrize("holders,section,size", [
-    (("a", "b"), ".data", 0x18), (("b",), ".bss", 0x21),
-])
-def test_scan_builds_globals(lane, holders, section, size):
-    snapshot, = lane
-    members = {"alpha": _member("alpha", holders=holders),
-               "buffer": _member("buffer", "data", holders, section, size),
-               "pad_padding_0": _member("pad_padding_0", "data", holders, section, 4)}
-    snapshot = replace(snapshot, layout=replace(snapshot.layout, members=members))
-    doc = tomllib.loads(types.scan(snapshot).decode())
-    assert doc["function"] == {} and doc["struct"] == {}
-    assert "pad_padding_0" not in doc["global"]  # alignment filler is not a global
-    assert doc["global"]["buffer"] == {
-        "declaration": f"extern u8 buffer[0x{size:X}];", "section": section, "size": size, "evidence": "splat",
-    }
-
-
 def test_scan_takes_the_type_the_landed_declarations_agree_on_and_only_in_types_it_knows(lane):
     snapshot, *_ = lane
     HEADER_DECLARATIONS["Word"] = ("include/h.h", 1, "typedef int Word;")
-    AGREED.update({"buffer": "const Word @[4]", "alpha": "void @(Word)", "zeta": "Local @(int)"})
-    members = {"buffer": _member("buffer", "data", section=".data", size=0x18), "alpha": _member("alpha"),
-               "zeta": _member("zeta")}
+    AGREED.update({"alpha": "void @(Word)", "zeta": "Local @(int)"})
+    members = {"alpha": _member("alpha"), "zeta": _member("zeta")}
     snapshot = replace(snapshot, layout=replace(snapshot.layout, members=members))
     doc = tomllib.loads(types.scan(snapshot).decode())
-    assert doc["global"]["buffer"] == {"declaration": "extern const Word buffer[4];", "section": ".data",
-                                       "size": 0x18, "evidence": "declared"}
     assert doc["function"]["alpha"] == {"signature": "void alpha(Word)", "evidence": "declared"}
     assert "zeta" not in doc["function"]  # Local is a type no header gives the type map
 
@@ -125,20 +106,6 @@ def test_conflicts_are_the_findings_of_the_names_the_declarations_disagree_on(la
     snapshot, *_ = lane
     CONFLICTS.append("finding")
     assert types.conflicts(_with_doc(snapshot, _document())) == ["finding"]
-
-
-def test_scan_keeps_landed_functions_and_authored_globals_only(lane):
-    snapshot, *_ = lane
-    kept = _document(
-        function={"alpha": {"signature": "void alpha(void)", "evidence": "landed"}},
-        global_={"buffer": {"declaration": "extern int buffer;", "section": ".data", "size": 4,
-                            "evidence": "authored"}},
-    )
-    old = {**kept, "function": {**kept["function"], "zeta": {"signature": "void s(void)", "evidence": "m2c"}},
-           "struct": {"Stale": {"declaration": "struct Stale { int a; };", "evidence": "authored"}}}
-    doc = tomllib.loads(types.scan(_with_doc(snapshot, old)).decode())
-    assert doc["function"] == kept["function"] and doc["global"]["buffer"] == kept["global"]["buffer"]
-    assert doc["struct"] == {}  # types come from the headers, not from the previous map
 
 
 def test_scan_records_the_headers_declarations_as_authored(lane):
@@ -151,12 +118,15 @@ def test_scan_records_the_headers_declarations_as_authored(lane):
         "known": ("include/h.h", 7, "extern int known(int a, void *b);"),
         "bare": ("include/h.h", 8, "void bare(void);"),
     })
-    landed = {"known": {"signature": "s32 known(s32 a, void *b)", "evidence": "landed"}}
-    doc = tomllib.loads(types.scan(_with_doc(snapshot, _document(function=landed))).decode())
+    LANDED["known"] = "s32 known(s32 a, void *b)"
+    doc = tomllib.loads(types.scan(snapshot).decode())
     assert doc["struct"] == {"Pair": {"declaration": "struct Pair { int a; int b; };", "evidence": "authored"},
                              "Word": {"declaration": "typedef int Word;", "evidence": "authored"}}
-    assert doc["function"] == {"known": landed["known"],  # a landed signature outranks the header's
+    assert doc["global"] == {"gCount": {"declaration": "extern int gCount;", "evidence": "authored"},
+                             "handler": {"declaration": "extern void (*handler)(int a);", "evidence": "authored"}}
+    assert doc["function"] == {"known": {"signature": "s32 known(s32 a, void *b)", "evidence": "landed"},  # outranks
                                "bare": {"signature": "void bare(void)", "evidence": "authored"}}
+    assert "splat" not in str(doc)
 
 
 def test_scan_deterministic(lane):
@@ -165,42 +135,6 @@ def test_scan_deterministic(lane):
     reordered = replace(snapshot, layout=replace(snapshot.layout,
                                                 members=dict(reversed(list(snapshot.layout.members.items())))))
     assert types.scan(reordered) == first
-
-
-@pytest.mark.parametrize("marker", ["src/alpha.c", "./src/alpha.c", "absolute", "build/views/abcd/src/alpha.c"])
-def test_landed_replaces_signature_and_keeps_authored_types(lane, marker):
-    snapshot, *_ = lane
-    authored = {"declaration": "struct Known { int a; };", "evidence": "authored"}
-    snapshot = _with_doc(snapshot, _document(function={"alpha": {"signature": "int alpha(void)", "evidence": "m2c"}},
-                                             struct={"Known": authored}))
-    if marker == "absolute":
-        marker = (snapshot.config.project.root / "src/alpha.c").as_posix()
-    unit = UnitSpec("src/alpha.c", "c", "group", ("alpha",), "test-tc", {})
-    text = f'# 1 "include/header.h"\nint header(void) {{ return 0; }}\n#line 1 "{marker}"\n'
-    text += 'void alpha(int value) { }\n#line 1 "include/tail.h"\nint tail(void) { return 0; }\n'
-    view = SourceView(unit.path, "a", "key", text, (), ())
-    doc = tomllib.loads(types.landed(snapshot, unit, view).decode())
-    assert doc["function"] == {"alpha": {"signature": "void alpha(int value)", "evidence": "landed"}}
-    assert doc["struct"] == {"Known": authored}
-
-
-def test_landed_parse_refusal_names_the_view_line_and_its_file(lane):
-    snapshot, *_ = lane
-    unit = UnitSpec("src/alpha.c", "c", "group", ("alpha",), "test-tc", {})
-    text = '# 1 "include/bad.h" 1\nint ok;\nextern foo;\n# 2 "src/alpha.c" 2\nvoid alpha(void) { }\n'
-    with pytest.raises(Refusal) as refused:
-        types.landed(snapshot, unit, SourceView(unit.path, "a", "key", text, (), ()))
-    finding = refused.value.findings[0]
-    assert finding.key == "headers.parse" and "include/bad.h" in finding.reason and "extern foo;" in finding.reason
-
-def test_landed_reads_the_c_the_way_the_fold_does(lane):
-    snapshot, *_ = lane
-    snapshot = _with_doc(snapshot, _document())
-    unit = UnitSpec("src/alpha.c", "c", "group", ("alpha",), "test-tc", {})
-    text = 'typedef struct __attribute__((packed)) { char a; int b; } P;\nvoid alpha(P *p) { }\n'
-    view = SourceView(unit.path, "a", "key", text, (), ())
-    doc = tomllib.loads(types.landed(snapshot, unit, view).decode())
-    assert doc["function"]["alpha"]["evidence"] == "landed"
 
 
 def test_load_missing_refuses(lane):

@@ -197,7 +197,7 @@ def plans(snapshot: Snapshot, unit: UnitSpec, proposed: Snapshot, extras: Mappin
         if conflicts:
             raise Refusal(*conflicts)
         options = [(owner, {})] if again else layout.unit_options(snapshot, unit.members[0], folded[unit.path])
-    return _option_plans(snapshot, unit, proposed, (folded, again, first, recipe, extras), options)
+    return _option_plans(snapshot, unit, proposed, (folded, again, extras), options)
 def _option_plans(snapshot: Snapshot, unit: UnitSpec, proposed: Snapshot, shared: tuple[Any, ...],
                   options: Sequence[tuple[UnitSpec, dict[str, bytes | None]]]) -> Iterator[Plan]:
     produced, last = False, ()
@@ -218,7 +218,7 @@ def _option_plans(snapshot: Snapshot, unit: UnitSpec, proposed: Snapshot, shared
                                         path=unit.path),))
 def _option_plan(snapshot: Snapshot, unit: UnitSpec, proposed: Snapshot, shared: tuple[Any, ...], option: UnitSpec,
                  writes: dict[str, bytes | None]) -> Plan | tuple[Finding, ...]:
-    folded, again, first, recipe, extras = shared
+    folded, again, extras = shared
     writes = {**extras, **writes}
     writes[option.path] = (_append(snapshot.read(option.path), folded[unit.path])
                           if option.path in snapshot.layout.units and not again else folded[unit.path])
@@ -236,9 +236,9 @@ def _option_plan(snapshot: Snapshot, unit: UnitSpec, proposed: Snapshot, shared:
     fuzzy = {k: v for k, v in overlay.layout.fuzzy.items() if k != member}
     writes["layout.toml"] = layout.dump_map(replace(overlay.layout, units=units, fuzzy=fuzzy))
     overlay = layout.overlay(snapshot, writes)
-    landed = types.landed(overlay, configured, view.get(overlay, configured, first, recipe))
-    if landed != snapshot.peek("types.toml"):
-        writes["types.toml"] = landed
+    scanned = types.scan(overlay)
+    if scanned != snapshot.peek("types.toml"):
+        writes["types.toml"] = scanned
     _generated(snapshot, writes)
     overlay = layout.overlay(snapshot, writes)
     group = proposed.layout.groups[unit.group]

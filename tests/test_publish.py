@@ -86,7 +86,7 @@ def lane(tmp_path, monkeypatch):
     monkeypatch.setattr(publish.policy, "evaluate", Mock(return_value=()))
     monkeypatch.setattr(publish.policy, "scope", Mock(return_value=((), ())))
     monkeypatch.setattr(publish.headers, "fold", Mock(return_value=({unit.path: files[unit.path]}, ())))
-    monkeypatch.setattr(publish.types, "landed", Mock(return_value=files["types.toml"]))
+    monkeypatch.setattr(publish.types, "scan", Mock(return_value=files["types.toml"]))
     monkeypatch.setattr(publish.repo, "files", Mock(return_value={"Makefile": files["Makefile"]}))
     monkeypatch.setattr(publish.store, "work", Mock(side_effect=lambda cfg: nullcontext(work)))
     monkeypatch.setattr(publish.pool, "map",
@@ -231,13 +231,12 @@ def test_plan_writes_changed_repo_files_only(lane):
     changed = {"README.md": b"new readme", "versions/a/symbols.ld": b"symbols",
                "versions/a/report.json": b"{}", ".github/workflows/ci.yml": b"ci"}
     publish.repo.files.return_value = {"Makefile": b"same make\n", **changed}
-    publish.types.landed.return_value = b"new types"
+    publish.types.scan.return_value = b"new types"
     plan, = publish.plans(lane["snapshot"], lane["unit"], lane["proposed"], {})
     assert "Makefile" not in plan.writes
     assert all(plan.writes[p] == data for p, data in changed.items())
     assert plan.writes["types.toml"] == b"new types"
     assert publish.repo.files.call_args.args[0].read("types.toml") == b"new types"
-    assert publish.types.landed.call_args.args[1] == lane["unit"]
     assert plan.affected == ("src/f.c",) and plan.operation == "publish"
     assert plan.digest == digest((plan.operation, plan.base, plan.writes, plan.affected,
                                   plan.blocking, plan.debt, plan.message))
@@ -311,13 +310,13 @@ def test_plan_tries_next_layout_option(lane):
 def test_plan_falls_through_an_option_that_refuses_outright(lane):
     second = replace(lane["unit"], path="src/second.c")
     publish.layout.unit_options.return_value = [(lane["unit"], {}), (second, {})]
-    publish.types.landed.side_effect = [Refusal(Finding("headers.parse", "no parse")), b"types"]
+    publish.types.scan.side_effect = [Refusal(Finding("headers.parse", "no parse")), b"types"]
     plan, = publish.plans(lane["snapshot"], lane["unit"], lane["proposed"], {})
     assert plan.affected == (second.path,)
 
 
 def test_plan_refuses_with_the_last_refusal_when_every_option_refuses(lane):
-    publish.types.landed.side_effect = Refusal(Finding("headers.parse", "no parse"))
+    publish.types.scan.side_effect = Refusal(Finding("headers.parse", "no parse"))
     with pytest.raises(Refusal) as exc:
         list(publish.plans(lane["snapshot"], lane["unit"], lane["proposed"], {}))
     assert exc.value.findings[0].key == "headers.parse"

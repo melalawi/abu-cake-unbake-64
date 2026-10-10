@@ -149,6 +149,14 @@ def test_fold_conflict_with_landed_signature(tmp_path, monkeypatch, evidence):
     assert "include/main/grp.h" not in writes
 
 
+def test_fold_spacing_and_parameter_names_are_no_conflict_with_a_landed_signature(tmp_path, monkeypatch):
+    monkeypatch.setattr(types, "load", lambda snap: {"function": {"fresh": {
+        "signature": "int fresh(int* a, s32 b)", "evidence": "landed"}}})
+    s = snap(tmp_path, {"include/g.h": HEADER, "src/a.c": "int fresh(int *x, s32 y);\n"})
+    _, findings = headers.fold(s, unit(), view('typedef int s32;\n# 1 "src/a.c"\nint fresh(int *x, s32 y);\n'))
+    assert findings == ()
+
+
 def test_fold_no_conflict_when_inferred_or_same(tmp_path, monkeypatch):
     _known(monkeypatch, "inferred")
     s = snap(tmp_path, {"include/g.h": HEADER, "src/a.c": "void fresh(int b);\n"})

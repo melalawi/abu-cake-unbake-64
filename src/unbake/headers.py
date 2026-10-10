@@ -102,6 +102,12 @@ def _scanned(snapshot: Snapshot, paths: list[str]) -> list[dict]:
     return pool.map(snapshot.config, 'headers.catalog', _file_job,
                     [(snapshot.read(path), path.endswith('.c')) for path in paths], _file_key)
 
+def landed(snapshot: Snapshot) -> dict[str, str]:
+    """The head of every function a landed source defines (a fuzzy candidate is not landed)."""
+    paths = sources(snapshot, 'src', '.c')
+    return {name: text for path, scanned in zip(paths, _scanned(snapshot, paths), strict=True)
+            if not path.startswith('src/fuzzy/') for name, _, text in scanned['functions']}
+
 def catalog(snapshot: Snapshot, version: str) -> dict[str, tuple[str, int, str]]:
     with effort.stage('headers.catalog'):
         paths = sources(snapshot)
@@ -321,7 +327,8 @@ def fold(snapshot: Snapshot, unit: UnitSpec, view: SourceView) -> tuple[dict[str
                     text = ' '.join(normal(generator.visit(node)).split())
                     if (entry and entry['evidence'] in ('authored', 'landed') and
                             isinstance(node.type, c_ast.FuncDecl) and
-                            ' '.join(normal(entry['signature']).split()) != text):
+                            _unnamed(_normal(_type_of(normal(entry['signature']), name))) !=
+                            _unnamed(_normal(_type_of(text, name)))):
                         findings.append(Finding('headers.conflict', path=unit.path,
                             reason=f"{name}: candidate declares {text}, the type map has {entry['signature']}"))
                     else:
