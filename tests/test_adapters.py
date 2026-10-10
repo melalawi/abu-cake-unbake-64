@@ -187,6 +187,7 @@ def test_script_quotes_words_and_preserves_variables(adapter_config, recipe, too
     recipe = replace(recipe, cflags=("-DVALUE=a b",))
     script = adapters.script(adapter_config, recipe, "a")
     assert script.startswith("#!/bin/sh\nset -e\n")
+    assert """trap 'rm -f "$3.i" "$3.s"' EXIT""" in script  # the intermediates never outlive the compile
     assert '"$1" > "$3.i"' in script
     assert '"$3.i" -o "$3"' in script
     assert "'-DVALUE=a b'" in script
@@ -196,7 +197,7 @@ def test_script_emitted_assembly(adapter_config, recipe, toolchains):
     row = toolchains["toolchain"]["gcc-test"]
     row.update(emits_asm=True, assemble=["{as}", "{asflags}", "{source}", "-o", "{out}"])
     script = adapters.script(adapter_config, recipe, "a")
-    assert len(script.splitlines()) == 5
+    assert len(script.splitlines()) == 6
     assert '"$3.i" -o "$3.s"' in script
     assert '"$3.s" -o "$3"' in script
 

@@ -239,7 +239,7 @@ def script(config: Config, recipe: Recipe, version: str) -> str:
                 raise _unknown(f"toolchain {recipe.toolchain} has no assemble template")
             steps.append((chain.argv("assemble", asflags=recipe.asflags, includes=[], name=["function"],
                                      source=['"$3.s"'], out=['"$3"']), ""))
-        lines = ["#!/bin/sh", "set -e"]
+        lines = ["#!/bin/sh", "set -e", """trap 'rm -f "$3.i" "$3.s"' EXIT"""]
         for argv, redirect in steps:
             lines.append(" ".join(w if w in _VARIABLES else shlex.quote(w) for w in argv) + redirect)
         return "\n".join(lines) + "\n"
