@@ -139,11 +139,13 @@ def read(config: Config, reader: Callable[[str], bytes], only: Collection[str] |
     with effort.stage("versions.read"):
         root, table = config.project.root, config.project.version_files
         cached = store.content(config).cached
-        named = symbols.load(reader, table, cached)
         wanted = [v for v in table if only is None or v in only]
+        if not wanted:  # a map-only overlay reads no version
+            return {}
         key = digest((str(root), wanted, [(reader(table[v].split), reader(table[v].symbols)) for v in wanted],
                       reader(symbols.path())))  # files the command rewrites itself drop the memos (effort.forget)
         def compute() -> dict[str, Version]:
+            named = symbols.load(reader, table, cached)
             seeds = {v: (x.symbols, x.code, {}) for v, x in (reuse or {}).items()}
             built = effort.memo(("generated", str(root), id(named)), lambda: (named, seeds))[1]
             todo = [v for v in wanted if v not in built]

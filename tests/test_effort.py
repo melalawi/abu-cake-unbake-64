@@ -225,3 +225,15 @@ def test_forget_drops_only_the_named_kinds():
         effort.memo(("b", 1), lambda: 2)
         effort.forget("a")
         assert effort.memo(("a", 1), lambda: 3) == 3 and effort.memo(("b", 1), lambda: 4) == 2
+
+
+def test_a_stage_that_fails_names_the_exception_and_the_frame_once():
+    from pathlib import Path
+
+    from unbake import land
+    with pytest.raises(FileNotFoundError), effort.command("land", []), effort.stage("outer"), effort.stage("inner"):
+        land._read(Path("/nonexistent/entry.json"))
+    failed = {r.path[-1]: r for r in effort._closed if r.status == "failed"}
+    note = failed["inner"].findings[0]
+    assert note.key == "internal.error" and "FileNotFoundError" in note.reason and " at land:_read:" in note.reason
+    assert failed["outer"].findings == ()  # the stage that raised names it, its parents do not repeat it

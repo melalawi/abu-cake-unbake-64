@@ -5,6 +5,7 @@ import json
 import os
 from collections import Counter
 from collections.abc import Sequence
+from contextlib import suppress
 from dataclasses import asdict
 from hashlib import sha256
 from pathlib import Path
@@ -73,12 +74,15 @@ def _move(config: Config, identity: str, destination: str) -> None:
 
 def inbox(config: Config) -> list[Submission]:
     with effort.stage("land.inbox"):
-        entries = []
-        paths = sorted((config.project.root / ".unbake/inbox").glob("*.json"),
-                       key=lambda path: (path.stat().st_mtime_ns, path.name))
-        for path in paths:
+        entries, stamped = [], []
+        for path in (config.project.root / ".unbake/inbox").glob("*.json"):
+            with suppress(FileNotFoundError):  # another drain landed it between the listing and now
+                stamped.append((path.stat().st_mtime_ns, path.name, path))
+        for _, _, path in sorted(stamped):
             try:
                 entries.append(_read(path))
+            except FileNotFoundError:
+                continue
             except (Refusal, ValueError, TypeError, KeyError, OSError) as error:
                 finding = Finding("inbox.corrupt", str(error), path=str(path.relative_to(config.project.root)))
                 _move(config, path.stem, "refused")

@@ -153,11 +153,12 @@ def context(snapshot: Snapshot, version: str) -> Path:
         try:
             output.parent.mkdir(parents=True, exist_ok=True)
             store.write(output, source.encode())
-            proposed = layout.overlay(snapshot, {path: source.encode()})
+            # a plain snapshot reads the file just written, so the view key never carries the snapshot digest
+            proposed = layout.overlay(snapshot, {path: source.encode()}) if snapshot.overlays else snapshot
             unit = UnitSpec(path, Path(path).suffix[1:], '', (), snapshot.config.project.toolchain,
                             {'add': [], 'omit': []})
             recipe = recipes.resolve(snapshot.config, unit, unit.options)
-            result = _view.get(proposed, unit, version, recipe)
+            result = _view.get(proposed, unit, version, recipe, lines=False)
             output = output.with_name(f'{version}-{digest((result.key, extra, _CODE))[:16]}.i')  # named by its content
             if not output.exists():
                 text = result.text.rstrip('\n') + '\n'

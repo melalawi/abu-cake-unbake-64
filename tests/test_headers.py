@@ -163,7 +163,7 @@ def _stub_context(monkeypatch, extra):
     monkeypatch.setattr(types, "context", lambda s: extra)
     monkeypatch.setattr(layout, "overlay", lambda s, w: s)
     monkeypatch.setattr(recipes, "resolve", lambda c, u, o: None)
-    monkeypatch.setattr(view_module, "get", lambda *a: SimpleNamespace(text="int cat;\n", key="view"))
+    monkeypatch.setattr(view_module, "get", lambda *a, **k: SimpleNamespace(text="int cat;\n", key="view"))
 
 
 def test_context_includes_type_map(tmp_path, monkeypatch):
@@ -185,7 +185,7 @@ def test_context_key_changes_with_types(tmp_path, monkeypatch):
 
 def test_context_refusal_is_draft_context(tmp_path, monkeypatch):
     _stub_context(monkeypatch, "x\n")
-    def boom(*a):
+    def boom(*a, **k):
         raise OSError("no")
     monkeypatch.setattr(view_module, "get", boom)
     with pytest.raises(Refusal) as error:

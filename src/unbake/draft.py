@@ -38,16 +38,25 @@ def hints(snapshot: Snapshot, subsystem: str, symptoms: Json) -> tuple[list[Json
     cap = configuration.load_resource("flow.toml")["packet"]["hints"]
     return matched, others[:cap]
 
-def _function_text(snapshot: Snapshot, member: str, version: str, stack_structs: bool) -> str:
+def _m2c_call(item: tuple[Snapshot, str, str, bool, Path]) -> tuple[list[str], str]:
+    """m2c's argv and its cache key. The context file is named by its content, so the argv, the assembly and the tool
+    are everything m2c reads."""
+    snapshot, member, version, stack_structs, context = item
     config = snapshot.config
     unit = layout.unit_of(snapshot, member)
     toolchain = unit.toolchain if unit is not None else config.project.toolchain
     target = configuration.load_resource("toolchains.toml")["toolchain"][toolchain]["m2c"]
     argv = [
         str(process.tool(config, "m2c")), "-t", target, "--valid-syntax", *["--stack-structs"] * stack_structs,
-        "--context", str(headers.context(snapshot, version)), "--function", member,
+        "--context", str(context), "--function", member,
         str(versions.asm_path(config, version, member)),
     ]
+    return argv, digest((argv, Path(argv[-1]).read_bytes(), os.stat(argv[0]).st_mtime_ns))
+def _text_key(item: tuple[Snapshot, str, str, bool, Path]) -> str:
+    return _m2c_call(item)[1]
+def _function_text(item: tuple[Snapshot, str, str, bool, Path]) -> str:
+    argv, key = _m2c_call(item)
+    config, member, version = item[0].config, item[1], item[2]
     def produce() -> bytes:
         result = process.run("m2c", argv, cwd=config.project.root, tmp=process.scratch(config.project.root))
         if result.exit != 0 or not result.stdout.strip():
@@ -57,12 +66,7 @@ def _function_text(snapshot: Snapshot, member: str, version: str, stack_structs:
             raise Refusal(Finding("draft.m2c", reason or f"m2c exited {result.exit} with no output", unit=member,
                                   versions=(version,)))
         return result.stdout
-    # the context file is named by its content, so the argv, the assembly and the tool are everything m2c reads
-    key = digest((argv, Path(argv[-1]).read_bytes(), os.stat(argv[0]).st_mtime_ns))
     return store.cached(config, "m2c-draft", key, produce).decode(errors="replace")
-
-def _text_job(item: tuple[Snapshot, str, str, bool]) -> str:
-    return _function_text(*item)
 
 def _data_text(snapshot: Snapshot, entry: Member, version: str) -> str:
     placements = sorted((p for p in entry.placements if p.version == version and p.section != ".bss"),
@@ -121,14 +125,15 @@ def refuse_fragment(snapshot: Snapshot, member: str) -> None:
         raise Refusal(Finding("member.split-delay-slot", f"{member} ends on a branch or jump whose delay slot "
                               f"is the first word of {successor}", unit=member))
 
-def _stages(snapshot: Snapshot, member: str, version: str, known: dict[str, str], callees: list[str]) -> Iterator[Json]:
+def _stages(snapshot: Snapshot, member: str, version: str, known: dict[str, str], callees: list[str],
+            context: Path) -> Iterator[Json]:
     """Candidate drafts, richest first: m2c with and without stack structs, with and without the GBI rewrites,
     with and without the project headers (m2c's own type definitions can clash with them)."""
     declared = headers.catalog(snapshot, version)
     head = "".join(f"{known[n]}\n" for n in callees if n in known and n not in declared)
     for stack in (True, False):
         raw = re.sub(r"^.*?(\w+)\(.*\);\s*/\* extern \*/\n", lambda m: "" if m[1] in known | declared else m[0],
-                     _function_text(snapshot, member, version, stack), flags=re.M)
+                     _function_text((snapshot, member, version, stack, context)), flags=re.M)
         for body, rewrites in dict.fromkeys([gbi.rewrite(raw), (raw, 0)]):
             names = set(re.findall(r"\w+", head + body)) & declared.keys()
             paths = sorted({declared[n][0].removeprefix("include/") for n in names})
@@ -171,11 +176,13 @@ def create(snapshot: Snapshot, member: str, out: Path) -> Json:
         if entry.kind == "function":
             asm = versions.asm_path(config, version, member).read_text(errors="replace")
             callees = [n for n in dict.fromkeys(re.findall(r"\bjal\s+(\w+)", asm)) if n != member]
+            context = headers.context(snapshot, version)  # built once here, never inside each m2c job
             pool.gather(config, [  # m2c on the target, both ways, beside the prototype searches the draft reads
-                ("draft.m2c", _text_job, [(snapshot, member, version, s) for s in (True, False)]),
+                ("draft.m2c", _function_text, [(snapshot, member, version, s, context) for s in (True, False)],
+                 _text_key),
                 types.signature_group(snapshot, [member, *callees])])
             known = types.declarations(snapshot, [member, *callees])  # now all cache hits
-            stages = list({s["text"]: s for s in _stages(snapshot, member, version, known, callees)}.values())
+            stages = list({s["text"]: s for s in _stages(snapshot, member, version, known, callees, context)}.values())
             results = pool.map(config, "draft.compile", _checked, [(snapshot, member, version, s) for s in stages])
             result = next((r for r in results if not r["reason"]), results[0])  # the richest that builds
         else:

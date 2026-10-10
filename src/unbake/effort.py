@@ -5,6 +5,7 @@ import json
 import os
 import resource
 import time
+import traceback
 from collections.abc import Callable, Sequence
 from contextlib import AbstractContextManager as ContextManager
 from contextlib import contextmanager
@@ -165,6 +166,12 @@ def _scope(opened: _Open):
                   "interrupted" if isinstance(exc, KeyboardInterrupt) else "failed")
         if isinstance(exc, Refusal):
             opened.findings.extend(exc.findings)
+        elif status == "failed" and not getattr(exc, "_named", False):  # the stage that raised names the cause once
+            own = [f for f in traceback.extract_tb(exc.__traceback__) if "/unbake/" in f.filename]
+            frames = [f for f in own if Path(f.filename).stem != "effort"]
+            at = f" at {Path(frames[-1].filename).stem}:{frames[-1].name}:{frames[-1].lineno}" if frames else ""
+            opened.findings.append(Finding("internal.error", f"{type(exc).__name__}: {exc}{at}"))
+            exc._named = True  # type: ignore[attr-defined]
         raise
     finally:
         try:

@@ -14,7 +14,7 @@ from dataclasses import asdict, replace
 from functools import cache, partial
 from itertools import chain, pairwise
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from unbake import config as configuration
 from unbake import contracts, effort, process, store, symbols
@@ -121,6 +121,12 @@ def _overlay(snapshot: Snapshot, writes: Mapping[str, bytes | None]) -> Snapshot
 def _rows(snapshot: Snapshot, version: Version) -> list[tuple[str, str, Placement]]:
     return version_data.rows(version, snapshot.read, store.content(snapshot.config).cached)
 def load_map(config: Config, versions: Mapping[str, Version], text: bytes, reader: Callable[[str], bytes]) -> LayoutMap:
+    """The map of `text` over these versions, built once per command however many overlays ask for it."""
+    held = effort.memo(("load-map", config.digest, digest(text), tuple(id(v) for v in versions.values())),
+                       lambda: (versions, _load_map(config, versions, text, reader)))  # holds versions: ids stay unique
+    return cast(LayoutMap, held[1])  # type: ignore[index]
+def _load_map(config: Config, versions: Mapping[str, Version], text: bytes,
+              reader: Callable[[str], bytes]) -> LayoutMap:
     with effort.stage("layout.load_map"):
         doc = configuration.toml("layout", text, "layout.toml", "layout.map", store.content(config).cached)
         groups = {r["name"]: Group(**{**r, "members": tuple(r["members"]), "signals": tuple(r["signals"])})

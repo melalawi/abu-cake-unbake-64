@@ -19,7 +19,8 @@ def load(snapshot: Snapshot) -> Json:
         if raw is None:
             raise Refusal(Finding("config.missing", "types.toml does not exist", path="types.toml",
                                   action="unbake setup"))
-        return effort.memo(("types", digest(raw)), lambda: config.toml("types", raw, "types.toml"))  # megabytes
+        cached = store.content(snapshot.config).cached
+        return effort.memo(("types", digest(raw)), lambda: config.toml("types", raw, "types.toml", cache=cached))
 def _dump(doc):  # inline tables written directly: the document is megabytes and a TOML library walks it for seconds
     lines = [f"schema = {doc['schema']}"]
     for kind in ("function", "global", "struct"):
