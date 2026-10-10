@@ -225,6 +225,20 @@ def test_resolve_picks_among_ambiguous_ranges_by_the_previous_owner_else_names_t
     assert resolved == set() and debt == ["ambiguous: src/f.c a .rodata among 2 ranges 0x4-0x8, 0x0-0x4"]
 
 
+def test_a_range_that_is_exactly_an_owned_row_beats_ranges_that_overlap_it():
+    hits = [[0, 8], [4, 12], [8, 16]]
+    assert ownership._range(hits, [(4, 12)]) == ([4, 12], "")
+    assert ownership._range(hits, [(2, 6)])[0] is None  # two overlap, none is exact
+
+
+def test_content_search_cut_short_still_counts_the_row_starts():
+    count = ownership._MANY + 4
+    rom = word(*([7] * (count + 1)))
+    rows = [(0, 4, "a", ".rodata", 0x80000000), (4 * count, 4 * count + 4, "r", ".rodata", 0x80000100)]
+    assert 4 * count in ownership._content(index(rom, rows), word(7), {}, None)
+    assert len(ownership._content(index(rom, rows), word(7), {}, None)) == ownership._MANY + 1
+
+
 def test_resolve_withholds_a_holder_where_the_unit_does_not_compile():
     _, resolved, _, debt = resolve(unit("f", "old1"), {"a": "preprocess.error: boom"})
     assert resolved == set() and debt == ["compile failed (preprocess.error): src/f.c a boom"]

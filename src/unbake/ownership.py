@@ -132,6 +132,9 @@ def _content(index: tuple, data: bytes, words: dict[int, bool], vram: int | None
     while len(found) < _MANY and (at := rom.find(data, max(at, low), high)) >= 0:
         found.append(at)
         at += 1
+    if len(found) == _MANY:  # the count was cut short: the places a row starts at still count
+        rows_at = first.get(int.from_bytes(data[:4], "big"), [])
+        found = sorted({*found, *(s for s in rows_at if rom[s:s + len(data)] == data)})
     return found
 def locate(index: tuple, blob: bytes, text: tuple[int, int] | None) -> dict[str, list | dict]:
     """Per emitted section the ROM ranges [start, end) that hold its bytes (relocated .text words shifted by the
@@ -192,9 +195,10 @@ def _job(item: tuple[Snapshot, UnitSpec, str | None]) -> dict[str, dict | str]:
     return out
 def _range(hits: list, here: list[tuple[int, int]]) -> tuple[list | None, str]:
     """The one range of hits the unit owns, else None and why not. Several ranges that hold the same bytes are
-    told apart by the rows the unit owns now."""
+    told apart by the rows the unit owns now: a range that is exactly one of them wins over overlapping ones."""
     if len(hits) > 1:
-        owned = [h for h in hits if any(a < h[1] and h[0] < b for a, b in here)]
+        owned = [h for h in hits if (h[0], h[1]) in here] or [
+            h for h in hits if any(a < h[1] and h[0] < b for a, b in here)]
         if len(owned) != 1:
             shown = ", ".join(f"0x{s:X}-0x{e:X}" for s, e in hits[:4])
             return None, f"ambiguous among {len(hits)} ranges {shown}"
