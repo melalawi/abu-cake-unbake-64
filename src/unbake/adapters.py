@@ -223,7 +223,7 @@ def assembler(config: Config, kind: str) -> Assembler:
 def linker(config: Config) -> Linker:
     return N64Link(config)
 def script(config: Config, recipe: Recipe, version: str) -> str:
-    """POSIX sh compiling "$1" to "$3" with the permuter convention; every word quoted except the "$n" words."""
+    """POSIX sh compiling "$1" to "$3" as a compile script; every word quoted except the "$n" words."""
     with effort.stage("adapters.script"):
         chain = toolchain(config, recipe.toolchain)
         macros = config.project.version_macros

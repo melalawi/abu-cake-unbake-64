@@ -31,7 +31,7 @@ _KEYWORDS = frozenset(("extern", "const", "volatile", "unsigned", "signed", "cha
 _CODE = digest(Path(__file__).read_bytes())  # cached scans are only valid for the code that made them
 def scan(snapshot: Snapshot) -> bytes:
     """Setup's type map: globals from data placements, the prototypes and type definitions the headers declare
-    (authored) and the landed definitions. No m2c runs here. Cached on the inputs it reads."""
+    (authored) and the landed definitions. Cached on the inputs it reads."""
     with effort.stage("types.scan"):
         try:
             current = snapshot.read("types.toml")

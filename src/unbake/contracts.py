@@ -44,7 +44,7 @@ class Finding:
     origin: Origin | None = None  # config value that caused it
     blocking: bool = True  # False = project debt, reported but never refuses the operation
     action: str = ""  # exact next command or edit
-    symptoms: Json = field(default_factory=dict)  # measured compare facts; absent facts never match hints
+    symptoms: Json = field(default_factory=dict)  # measured compare facts; absent facts are unknown, not zero
 class Refusal(Exception):
     def __init__(self, *findings: Finding) -> None:
         if not findings:
@@ -237,7 +237,7 @@ class Proof:
     exact: bool
     missing: tuple[str, ...]  # nonempty iff not exact
     score: float  # matched fraction of the member's owned bytes in this version, 0..1; 1.0 iff exact
-    symptoms: Json  # symptoms.measure vocabulary (resources/schemas/hint.schema.json match keys); {} when exact
+    symptoms: Json  # symptoms.measure vocabulary; {} when exact
 @dataclass(frozen=True)
 class Plan:
     operation: str  # "publish" | "fuzzy" | "layout" | "setup"
@@ -259,7 +259,7 @@ class Receipt:
 # ---------------------------------------------------------------- flow: inbox
 @dataclass(frozen=True)
 class Submission:
-    """One inbox entry (.unbake/inbox/<id>.json + <id>.c). Crackers write it; only land.drain consumes it."""
+    """One inbox entry (.unbake/inbox/<id>.json + <id>.c). Submit and compare write it; only land.drain consumes it."""
     id: str  # digest((member, source_sha256, overrides, operation))
     operation: str  # "publish" | "fuzzy"
     member: str
@@ -309,7 +309,7 @@ class Linker(Protocol):
         """abucache link: ld and one objcopy per section, with only the symbols the object needs.
         outputs[section] holds source-derived bytes for each owned .text/.rodata/.data section.
         outputs[".bss"] is an ASCII size witness after the linker asserts its memory size.
-        A draft is scored: ld keeps its ELF when a size assert fails, so the sizes and bytes are measured by the
+        A candidate is scored: ld keeps its ELF when a size assert fails, so the sizes and bytes are measured by the
         caller. A failed command, a signal or a missing output refuses link.error. Build uses the same
         link_script and link_commands. Native proofs aggregate all a member owns."""
         ...
