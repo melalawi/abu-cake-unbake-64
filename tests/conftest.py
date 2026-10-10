@@ -24,6 +24,7 @@ TOOLCHAIN_ROW = {
     "emits_asm": False,
     "preserves_padding": True,
     "paired": [],
+    "preprocessor_options": ["-D", "-U", "-I"],
     "small_data": [8],
     "isa": [3],
     "pins": {},

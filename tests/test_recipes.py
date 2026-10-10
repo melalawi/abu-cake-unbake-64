@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 
+from unbake import config as configuration
 from unbake import recipes
 from unbake.contracts import Config, Refusal, UnitSpec, digest
 
@@ -36,9 +37,9 @@ def test_precedence_order(cfg: Config, toolchains: dict[str, Any]) -> None:
     row = toolchains["toolchain"]["gcc-test"]
     toolchains["toolchain"]["gcc-test"] = {**row, "supported_options": ["-O1", "-O2", "-Wall", "-g"]}
     cfg = _config(cfg, cflags=["-P1", "-P2"])
-    unit = _unit(add=["-U1", "-U2"], omit=["-P1"])
-    recipe = recipes.resolve(cfg, unit, {"omit": ["-U1", "-O2"], "add": ["-Wall", "-g"]})
-    assert recipe.cflags == ("-P2", "-U2", "-Wall", "-g")
+    unit = _unit(add=["-V1", "-V2"], omit=["-P1"])
+    recipe = recipes.resolve(cfg, unit, {"omit": ["-V1", "-O2"], "add": ["-Wall", "-g"]})
+    assert recipe.cflags == ("-P2", "-V2", "-Wall", "-g")
     assert recipe.toolchain == "gcc-test"
 
 
@@ -101,3 +102,18 @@ def test_digest_changes_only_with_flags(cfg: Config) -> None:
     assert one.digest == two.digest
     changed = recipes.resolve(cfg, _unit(), {"omit": ["-O2"], "add": ["-O1"]})
     assert changed.digest != one.digest
+
+
+def test_a_unit_preprocessor_option_goes_to_the_preprocessor_and_codegen_stays_with_the_compiler(cfg: Config) -> None:
+    cfg = _config(cfg, cppflags=["-DGBI", "-undef"])
+    for toolchain in ("gcc-test", "ido-7.1"):
+        recipe = recipes.resolve(cfg, _unit(toolchain=toolchain, add=["-UGBI", "-G8"]), {})
+        assert recipe.cppflags[:3] == ("-DGBI", "-undef", "-UGBI") and "-UGBI" not in recipe.cflags
+        assert "-G8" in recipe.cflags
+    assert recipes.resolve(cfg, _unit(), {"omit": ["-DGBI"]}).cppflags[0] == "-undef"
+
+
+def test_every_shipped_toolchain_preprocesses_with_the_shared_preprocessor() -> None:
+    rows = configuration.load_resource("toolchains.toml")["toolchain"]
+    shared = ("{cpp}", "{cppflags}", "{defines}", "{includes}", "{source}")
+    assert {tuple(row["preprocess"]) for row in rows.values()} == {shared}

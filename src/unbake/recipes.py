@@ -22,15 +22,15 @@ def _groups(tokens: Sequence[str], paired: Sequence[str]) -> list[tuple[str, ...
     return out
 def _words(items: Sequence[str]) -> list[str]:
     return [word for item in items for word in item.split()]
-def _omit(groups: list[tuple[str, ...]], omitted: Sequence[str]) -> list[tuple[str, ...]]:
+def _omit(lists: list[list[tuple[str, ...]]], omitted: Sequence[str]) -> list[list[tuple[str, ...]]]:
     for text in omitted:
-        if not any(text in (g[0], " ".join(g)) for g in groups):
+        if not any(text in (g[0], " ".join(g)) for groups in lists for g in groups):
             raise Refusal(Finding("recipe.option", f"cannot omit {text}: not in the compiler flags"))
-        groups = [g for g in groups if text not in (g[0], " ".join(g))]
-    return groups
-def _make(toolchain: str, config: Config, cflags: Sequence[str]) -> Recipe:
+        lists = [[g for g in groups if text not in (g[0], " ".join(g))] for groups in lists]
+    return lists
+def _make(toolchain: str, config: Config, cppflags: Sequence[str], cflags: Sequence[str]) -> Recipe:
     build = config.project.build
-    cppflags = (*build["cppflags"], f"-D__UNBAKE_STDARG_{_row(toolchain)['family'].upper()}")
+    cppflags = (*cppflags, f"-D__UNBAKE_STDARG_{_row(toolchain)['family'].upper()}")
     asflags = tuple(build["asflags"]) + tuple(build["gnu_asflags"])
     flags = tuple(cflags)
     return Recipe(toolchain, cppflags, flags, asflags, digest((toolchain, cppflags, flags, asflags)))
@@ -48,13 +48,17 @@ def resolve(config: Config, unit: UnitSpec, overrides: Json) -> Recipe:
         if text in omits:
             raise Refusal(Finding("recipe.conflict", f"{text} is both added and omitted", unit=unit.path))
     base = [*row["cflags"], *config.project.build["cflags"], *unit.options.get("add", ())]
-    groups = _groups(_words(base), paired)
-    groups = _omit(groups, unit.options.get("omit", ()))
-    groups = _omit(groups, omits)
+    groups, pre = _omit([_groups(_words(base), paired), _groups(config.project.build["cppflags"], paired)],
+                        unit.options.get("omit", ()))
+    groups, pre = _omit([groups, pre], omits)
+    preprocessor = tuple(row["preprocessor_options"])
     present = {word for g in groups for word in g}
     for text in adds:
         words = text.split()
-        if not words or (words[0] not in supported and words[0] not in present):
+        if not words or (words[0] not in supported and words[0] not in present
+                         and not words[0].startswith(preprocessor)):
             raise Refusal(Finding("recipe.option", f"cannot add {text}: not supported by {toolchain}", unit=unit.path))
         groups.extend(_groups(words, paired))
-    return _make(toolchain, config, [word for g in groups for word in g])
+    moved = [g for g in groups if g[0].startswith(preprocessor)]
+    return _make(toolchain, config, [w for g in (*pre, *moved) for w in g],
+                 [w for g in groups if g not in moved for w in g])

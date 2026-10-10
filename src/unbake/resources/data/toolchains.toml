@@ -11,10 +11,11 @@ emits_asm = false
 preserves_padding = false
 error_pattern = '^cfe: Warning 605: (.+?): (\d+): #\s*error\b([^\n]*)'
 paired = ["-G", "-I", "-D", "-U", "-include", "-imacros", "-isystem", "-iquote"]
+preprocessor_options = ["-D", "-U", "-I", "-include", "-imacros", "-isystem", "-iquote"]
 small_data = [0, 1, 2, 3, 4, 8]
 isa = [2, 3]
 decompme = "ido7.1"
-preprocess = ["{cc}", "{cppflags}", "{defines}", "{includes}", "-E", "{source}"]
+preprocess = ["{cpp}", "{cppflags}", "{defines}", "{includes}", "{source}"]
 compile = ["{cc}", "-Wab,-r4300_mul", "{codegen}", "-c", "{source}", "-o", "{out}"]
 
 [toolchain."ido-7.1".pins]
@@ -50,10 +51,11 @@ emits_asm = false
 preserves_padding = false
 error_pattern = '^cfe: Warning 605: (.+?): (\d+): #\s*error\b([^\n]*)'
 paired = ["-G", "-I", "-D", "-U", "-include", "-imacros", "-isystem", "-iquote"]
+preprocessor_options = ["-D", "-U", "-I", "-include", "-imacros", "-isystem", "-iquote"]
 small_data = [0, 1, 2, 3, 4, 8]
 isa = [2, 3]
 decompme = "ido5.3"
-preprocess = ["{cc}", "{cppflags}", "{defines}", "{includes}", "-E", "{source}"]
+preprocess = ["{cpp}", "{cppflags}", "{defines}", "{includes}", "{source}"]
 compile = ["{cc}", "-Wab,-r4300_mul", "{codegen}", "-c", "{source}", "-o", "{out}"]
 
 [toolchain."ido-5.3".pins]
@@ -97,6 +99,7 @@ splat = "KMC"
 emits_asm = true
 preserves_padding = true
 paired = ["-G", "-I", "-D", "-U", "-include", "-imacros", "-isystem", "-iquote"]
+preprocessor_options = ["-D", "-U", "-I", "-include", "-imacros", "-isystem", "-iquote"]
 small_data = [0, 1, 2, 3, 4, 8]
 isa = [2, 3]
 decompme = "gcc2.7.2kmc"
@@ -122,6 +125,7 @@ splat = "SN64"
 emits_asm = true
 preserves_padding = true
 paired = ["-G", "-I", "-D", "-U", "-include", "-imacros", "-isystem", "-iquote"]
+preprocessor_options = ["-D", "-U", "-I", "-include", "-imacros", "-isystem", "-iquote"]
 small_data = [0, 1, 2, 3, 4, 8]
 isa = [2, 3]
 decompme = "gcc2.8.1sn"

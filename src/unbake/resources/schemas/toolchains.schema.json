@@ -65,6 +65,13 @@
        "minLength": 1
       }
      },
+     "preprocessor_options": {
+      "type": "array",
+      "items": {
+       "type": "string",
+       "minLength": 1
+      }
+     },
      "small_data": {
       "type": "array",
       "items": {
@@ -150,6 +157,7 @@
      "emits_asm",
      "preserves_padding",
      "paired",
+     "preprocessor_options",
      "small_data",
      "isa",
      "pins",
