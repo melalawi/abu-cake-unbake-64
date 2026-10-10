@@ -1,10 +1,8 @@
 # unbake host configuration. Every value is required; unbake never guesses one.
 # cores and workers take an integer or "auto" (resolved to the CPUs this process may run on, recorded with its origin).
-schema = 3
+schema = 2
 
 [resources]
-# One absolute directory shared by every command on this machine.
-budget_dir = ""
 cores = ${cores}
 workers = ${workers}
 memory_parent_bytes = ${memory_parent_bytes}

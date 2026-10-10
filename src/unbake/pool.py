@@ -31,12 +31,11 @@ _executor: ProcessPoolExecutor | None = None
 _host_digest: str | None = None
 _in_worker = False
 _creating = threading.Lock()
-def _init(limit: int, config: Config) -> None:
+def _init(limit: int) -> None:
     global _in_worker
     resource.setrlimit(resource.RLIMIT_DATA, (limit, limit))
     ctypes.CDLL(None).prctl(1, signal.SIGKILL)  # PR_SET_PDEATHSIG: a worker never outlives the process that forked it
     _in_worker = True
-    effort.bind(config)
 def _short_socket_dir() -> None:
     """The fork server's socket must fit an AF_UNIX path (about 100 bytes), so its directory is a short private one
     under the user's runtime directory, never under the project path or the shared temp directory."""
@@ -72,17 +71,16 @@ def _get_executor(config: Config) -> ProcessPoolExecutor:
                 max_workers=config.host.workers,
                 mp_context=context,
                 initializer=_init,
-                initargs=(config.host.memory_worker_bytes, config),
+                initargs=(config.host.memory_worker_bytes,),
             )
             _host_digest = config.host.digest
         return _executor
-def _job(function: Callable[[Any], Any], item: Any, floor: float, config: Config) -> tuple[bool, Any, Json]:
+def _job(function: Callable[[Any], Any], item: Any, floor: float) -> tuple[bool, Any, Json]:
     start_ns = time.monotonic_ns()
     before = resource.getrusage(resource.RUSAGE_SELF)
     with effort.capture() as records:
         try:
-            with store.slots(config, 1):
-                value, ok = function(item), True
+            value, ok = function(item), True
         except Exception as exc:
             here = [f for f in traceback.extract_tb(exc.__traceback__) if "/unbake/" in f.filename]
             if here:  # the traceback does not cross the process boundary, a note does
@@ -101,13 +99,15 @@ def _job(function: Callable[[Any], Any], item: Any, floor: float, config: Config
         "end_ns": time.monotonic_ns(),
     }
 _SNAPSHOTS: dict[str, Snapshot] = {}  # per worker: the snapshots it has loaded, by digest
+_STORED: set[str] = set()  # in the parent: the snapshots already in the content cache, so a dispatch never asks again
 class _Pickler(pickle.Pickler):
     """Items travel without the snapshot they run against: it is stored once in the content cache by digest."""
     def persistent_id(self, obj: Any) -> tuple | None:
         if isinstance(obj, Snapshot):
             key = hashlib.sha256((str(obj.config.project.root) + obj.digest).encode()).hexdigest()
-            if ("snapshot", key) not in store.content(obj.config):
+            if key not in _STORED and ("snapshot", key) not in store.content(obj.config):
                 store.put(obj.config, "snapshot", key, pickle.dumps(obj, protocol=5))
+            _STORED.add(key)
             return ("snapshot", key, obj.config)
         return None
 class _Unpickler(pickle.Unpickler):
@@ -121,17 +121,16 @@ class _Unpickler(pickle.Unpickler):
                 raise Refusal(Finding("worker.crash", f"snapshot {digest[:12]} is missing from the cache"))
             _SNAPSHOTS[digest] = pickle.loads(value)
         return _SNAPSHOTS[digest]
-def _chunk(function: Callable, items: Sequence, floor: float, sink: tuple | None,
-           config: Config) -> list[tuple[bool, Any, Json]]:
-    outcomes = [_job(function, item, floor, config) for item in items]
+def _chunk(function: Callable, items: Sequence, floor: float, sink: tuple | None) -> list[tuple[bool, Any, Json]]:
+    outcomes = [_job(function, item, floor) for item in items]
     if sink:
         store.put_many(sink[0], sink[1], [(key, pickle.dumps(value, protocol=5)) for (ok, value, _), key in
                                           zip(outcomes, sink[2], strict=True) if ok and key is not None])
     return outcomes
-def _dispatch(blob: bytes, floor: float, config: Config) -> list[tuple[bool, Any, Json]]:
+def _dispatch(blob: bytes, floor: float) -> list[tuple[bool, Any, Json]]:
     """One chunk travels as its own pickle, so a worker only unpacks the items it runs and stores their results."""
     function, items, sink = _Unpickler(io.BytesIO(blob)).load()
-    return _chunk(function, items, floor, sink, config)
+    return _chunk(function, items, floor, sink)
 def _raise_failure(config: Config, name: str, index: int, exc: Any) -> None:
     if isinstance(exc, Refusal):
         raise exc
@@ -230,12 +229,12 @@ def gather(config: Config, groups: Sequence[tuple]) -> list[list[Any]]:
                     if inline:
                         pending[future := Future()] = (run, picked)
                         future.set_result(_chunk(run.function, [run.items[i] for i in picked], floor,
-                                                 run.sink(config, picked), config))
+                                                 run.sink(config, picked)))
                     else:
                         stream = io.BytesIO()
                         _Pickler(stream, protocol=5).dump(
                             (run.function, [run.items[i] for i in picked], run.sink(config, picked)))
-                        pending[executor.submit(_dispatch, stream.getvalue(), floor, config)] = (run, picked)
+                        pending[executor.submit(_dispatch, stream.getvalue(), floor)] = (run, picked)
                     run.submitted += len(picked)
                 if not pending:
                     break

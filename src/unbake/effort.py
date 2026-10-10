@@ -196,8 +196,6 @@ def command(name: str, argv: Sequence[str]) -> ContextManager[None]:
             yield None
     finally:
         _stack.reset(token)
-def resources() -> Config | None:
-    return _config
 def bind(config: Config) -> None:
     global _config, _sink, _buffer
     with stage("effort.bind"):

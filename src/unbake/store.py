@@ -12,8 +12,7 @@ import tempfile
 import time
 import uuid
 from collections.abc import Callable, Iterable, Iterator
-from contextlib import ExitStack, contextmanager
-from contextvars import ContextVar
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from functools import cache
 from pathlib import Path
@@ -142,43 +141,6 @@ def exclusive(config: Config, name: str, *, wait: bool) -> Iterator[bool]:
             os.ftruncate(fd, 0)
             os.write(fd, f"{os.getpid()} {effort.invocation()}\n".encode())
         yield fd is not None
-_held: ContextVar[tuple[int, str, int] | None] = ContextVar("slots", default=None)
-@cache
-def _capacity(home: Path, workers: int, pid: int) -> None:
-    with _flock(home / "allocate.lock", fcntl.LOCK_EX):
-        capacity = home / "workers"
-        if capacity.exists() and capacity.read_text() != str(workers):
-            raise Refusal(Finding("config.schema", "resources.workers differs from the shared budget",
-                                  path="host:resources.workers"))
-        if not capacity.exists():
-            capacity.write_text(str(workers))
-@contextmanager
-def slots(config: Config, want: int) -> Iterator[int]:
-    """Lease host tokens with independent flocks; nested work uses its caller's lease. Closing releases all tokens."""
-    host, held = config.host, _held.get()
-    home = str(host.budget_dir.resolve())
-    if held and held[:2] == (os.getpid(), home):
-        yield min(want, held[2])
-        return
-    _capacity(host.budget_dir, host.workers, os.getpid())
-    start, count = None, 0
-    with ExitStack() as stack:
-        while not count:
-            for index in range(host.workers):
-                if stack.enter_context(_flock(host.budget_dir / str(index), fcntl.LOCK_EX, wait=False)) is not None:
-                    count += 1
-                    if count == want:
-                        break
-            if not count:
-                start = start or time.perf_counter()
-                time.sleep(0.01)
-        if start is not None:
-            effort.waited(time.perf_counter() - start)
-        token = _held.set((os.getpid(), home, count))
-        try:
-            yield count
-        finally:
-            _held.reset(token)
 @contextmanager
 def work(config: Config) -> Iterator[Path]:
     """Yield a fresh scratch directory under the host cache and remove it on exit."""

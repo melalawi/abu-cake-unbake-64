@@ -4,7 +4,7 @@
  "type": "object",
  "properties": {
   "schema": {
-   "const": 3
+   "const": 2
   },
   "resources": {
    "type": "object",
@@ -38,18 +38,13 @@
     "memory_worker_bytes": {
      "type": "integer",
      "minimum": 1
-    },
-    "budget_dir": {
-     "type": "string",
-     "minLength": 1
     }
    },
    "required": [
     "cores",
     "workers",
     "memory_parent_bytes",
-    "memory_worker_bytes",
-    "budget_dir"
+    "memory_worker_bytes"
    ],
    "additionalProperties": false
   },

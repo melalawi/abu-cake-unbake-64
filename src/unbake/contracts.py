@@ -57,7 +57,7 @@ class Refusal(Exception):
 @dataclass(frozen=True)
 class Host:
     cores: int  # host.toml integer, or "auto" resolved by config to len(os.sched_getaffinity(0)) (Origin.note says so)
-    workers: int  # same rule; pool width, flock host slots and make -j all use this one value
+    workers: int  # same rule; pool width and make -j both use this one value
     memory_parent_bytes: int
     memory_worker_bytes: int
     cache_max_bytes: int
@@ -72,7 +72,6 @@ class Host:
     author: tuple[str, str]  # (publish.author_name, publish.author_email) for journal commits
     origins: Mapping[str, Origin]
     digest: str
-    budget_dir: Path
 @dataclass(frozen=True)
 class Resident:
     start: int

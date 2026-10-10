@@ -36,13 +36,8 @@ unbake requires a host configuration supplied with `--host FILE` or `$UNBAKE_HOS
 There is no default path. Without either, it refuses with "no host config".
 `unbake init` writes an example; fill in its machine limits and tools before `setup`.
 
-Host schema 3 requires `[resources] budget_dir` to be an absolute directory shared
-by every unbake command on the machine. `cores` and `workers` accept an integer or
-`"auto"`; workers are bounded by cores and the parent/worker memory budgets.
-Workers and native tools lease slots in `budget_dir` while executing. Concurrent
-commands share the worker limit. make receives the slots available to it as JOBS.
-All configurations sharing that directory must specify the same worker count.
-A missing `budget_dir` refuses by name.
+`cores` and `workers` accept an integer or `"auto"`; workers are bounded by cores and
+the parent/worker memory budgets, and make runs with `-j` set to `workers`.
 
 ## Start
 
