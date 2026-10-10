@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import asdict, replace
 from hashlib import sha256
 from itertools import pairwise
 from pathlib import Path
+from typing import Any
 
 import abucache
 from abucache import compile
@@ -31,12 +32,13 @@ from unbake.contracts import (
 
 _WORD = 0xFFFFFFFF
 @contextmanager
-def _tools(unit: UnitSpec):
+def _tools(unit: UnitSpec, *context: Any) -> Iterator[None]:
     try:
         yield
     except Refusal as error:
-        raise Refusal(*(replace(f, reason=f"{f.reason}; unit kind {unit.kind}")
-                        if f.key == "native.missing_tool" else f for f in error.findings)) from error
+        raise Refusal(*(replace(f, reason=f"{f.reason}; unit kind {unit.kind}" if f.key == "native.missing_tool"
+                                else view.diagnostic(*context, f.reason) if context else f.reason)
+                        for f in error.findings)) from error
 def _phases(unit: UnitSpec) -> tuple[str, ...]:
     return tuple(config.load_resource("units.toml")["kind"][unit.kind]["phases"])
 def _held(snapshot: Snapshot, unit: UnitSpec, version: str) -> tuple[tuple[str, Placement], ...]:
@@ -128,7 +130,7 @@ def recorded(snapshot: Snapshot, unit: UnitSpec, version: str, recipe: Recipe) -
     return None if kept_json is None else tuple(json.loads(kept_json))
 def warnings(snapshot: Snapshot, unit: UnitSpec, version: str, recipe: Recipe, work: Path) -> tuple[str, ...]:
     """The refused-view warnings of the unit's own compile, kept by the text compiled."""
-    with effort.stage("native.warnings"), _tools(unit):
+    with effort.stage("native.warnings"), _tools(unit, snapshot, unit, version, recipe):
         cfg = snapshot.config
         if not config.load_resource("units.toml")["kind"][unit.kind]["cacheable"]:
             return ()
@@ -149,7 +151,7 @@ def _include(snapshot: Snapshot, unit: UnitSpec, version: str) -> tuple[Path, ..
             project.root / macros.format(version=version, name=project.name))
 def objects(snapshot: Snapshot, unit: UnitSpec, version: str, recipe: Recipe,
             work: Path) -> tuple[Path, tuple[NativeResult, ...]]:
-    with effort.stage("native.objects"), _tools(unit):
+    with effort.stage("native.objects"), _tools(unit, snapshot, unit, version, recipe):
         work.mkdir(parents=True, exist_ok=True)
         phases = _phases(unit)
         row = config.load_resource("toolchains.toml")["toolchain"][recipe.toolchain]
@@ -189,7 +191,7 @@ def _finding(row: dict) -> Finding:
     return Finding(**{**row, "origin": origin, "versions": tuple(row["versions"]), "missing": tuple(row["missing"])})
 def measure(snapshot: Snapshot, unit: UnitSpec, version: str, recipe: Recipe,
             obj: Path, work: Path) -> tuple[Proof, ...]:
-    with effort.stage("native.measure"), _tools(unit):
+    with effort.stage("native.measure"), _tools(unit, snapshot, unit, version, recipe):
         ranges = sections(snapshot, unit, version)
         if not ranges:
             return ()
