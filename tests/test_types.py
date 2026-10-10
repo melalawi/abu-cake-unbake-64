@@ -8,7 +8,7 @@ from unittest.mock import Mock
 import pytest
 import tomlkit
 
-from unbake import types
+from unbake import config, types
 from unbake.contracts import (
     Config,
     Finding,
@@ -127,6 +127,7 @@ def test_scan_records_the_headers_declarations_as_authored(lane):
     assert doc["function"] == {"known": {"signature": "s32 known(s32 a, void *b)", "evidence": "landed"},  # outranks
                                "bare": {"signature": "void bare(void)", "evidence": "authored"}}
     assert "splat" not in str(doc)
+    config.validate("types", doc, "types.toml")
 
 
 def test_scan_deterministic(lane):

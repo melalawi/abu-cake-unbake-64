@@ -40,17 +40,8 @@
       "type": "string",
       "minLength": 1
      },
-     "section": {
-      "type": "string",
-      "minLength": 1
-     },
-     "size": {
-      "type": "integer",
-      "minimum": 0
-     },
      "evidence": {
       "enum": [
-       "splat",
        "landed",
        "declared",
        "authored"
@@ -59,8 +50,6 @@
     },
     "required": [
      "declaration",
-     "section",
-     "size",
      "evidence"
     ],
     "additionalProperties": false
