@@ -242,7 +242,7 @@ class Proof:
     symptoms: Json  # symptoms.measure vocabulary (resources/schemas/hint.schema.json match keys); {} when exact
 @dataclass(frozen=True)
 class Plan:
-    operation: str  # "publish" | "fuzzy" | "withdraw" | "layout" | "repair" | "setup"
+    operation: str  # "publish" | "fuzzy" | "layout" | "setup"
     base: str  # Snapshot.digest it was made from
     writes: Mapping[str, bytes | None]
     affected: tuple[str, ...]  # unit paths whose objects must be reproved
@@ -263,10 +263,10 @@ class Receipt:
 class Submission:
     """One inbox entry (.unbake/inbox/<id>.json + <id>.c). Crackers write it; only land.drain consumes it."""
     id: str  # digest((member, source_sha256, overrides, operation))
-    operation: str  # "publish" | "fuzzy" | "repair" | "withdraw"
+    operation: str  # "publish" | "fuzzy"
     member: str
     function: str | None  # --function given at submit time
-    source: str  # project-relative inbox copy, ".unbake/inbox/<id>.c" ("" for withdraw)
+    source: str  # project-relative inbox copy, ".unbake/inbox/<id>.c"
     source_sha256: str
     overrides: Json  # {"toolchain"?: str, "add": [str], "omit": [str]}
     base: str  # git HEAD the proofs were measured at

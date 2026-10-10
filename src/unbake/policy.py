@@ -221,17 +221,3 @@ def census(snapshot: Snapshot) -> tuple[Finding, ...]:
             for finding in findings:
                 unique[(finding.key, finding.path, finding.line)] = replace(finding, blocking=False)
         return tuple(unique.values())
-
-def repair(snapshot: Snapshot, finding: Finding) -> dict[str, bytes | None] | None:
-    with effort.stage("policy.repair"):
-        if finding.key != "source.volatile-storage":
-            return None
-        lines = snapshot.read(finding.path).splitlines(keepends=True)
-        if not 1 <= finding.line <= len(lines):
-            return None
-        index = finding.line - 1
-        changed, count = re.subn(rb"\bvolatile\b ?", b"", lines[index], count=1)
-        if not count:
-            return None
-        lines[index] = changed
-        return {finding.path: b"".join(lines)}

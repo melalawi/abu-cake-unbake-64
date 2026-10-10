@@ -9,9 +9,9 @@ from dataclasses import asdict
 from hashlib import sha256
 from pathlib import Path
 
-from unbake import build, compare, effort, infer, layout, native, policy, pool, publish, store, types
+from unbake import compare, effort, layout, policy, publish, store
 from unbake import config as configuration
-from unbake.contracts import Config, Finding, Json, Proof, Receipt, Refusal, Snapshot, Submission, UnitSpec, digest
+from unbake.contracts import Config, Finding, Json, Proof, Receipt, Refusal, Submission, UnitSpec, digest
 
 _ATTEMPTS = 3  # a commit that finds HEAD moved is measured again, up to this many times
 
@@ -30,7 +30,7 @@ def _enqueue(config: Config, request: Json, member: str, operation: str, source:
         path = directory / f"{identity}.json"
         if path.is_file():
             return _read(path)
-    source_path = f".unbake/inbox/{identity}.c" if operation != "withdraw" else ""
+    source_path = f".unbake/inbox/{identity}.c"
     entry = Submission(identity, operation, member, request["function"], source_path, source_hash,
                        request["overrides"], base, tuple(proofs), origin, request["note"], effort.invocation())
     value = json.loads(json.dumps(asdict(entry)))
@@ -120,8 +120,7 @@ def drain(config: Config) -> Json:
                             _move(config, entry.id, "refused")
                         else:
                             landed.append({**body, "operation": receipt.operation, "commit": receipt.commit})
-                            store.log(config, "withdrawal" if receipt.operation == "withdraw" else "receipt",
-                                      {**body, **asdict(receipt)})
+                            store.log(config, "receipt", {**body, **asdict(receipt)})
                             _move(config, entry.id, "done")
                 (config.project.root / f".unbake/inbox/{entry.id}.lock").unlink(missing_ok=True)
             busy = not claimed  # what is left belongs to other drains
@@ -151,26 +150,6 @@ def land_command(config: Config, params: Json) -> Json:
     with effort.stage("land.land_command"):
         return drain(config)
 
-def _prove_job(job: tuple[Snapshot, UnitSpec, str]) -> tuple[Proof, ...] | Refusal:
-    with effort.stage("land.reprove"):
-        try:
-            return native.prove_job(job)
-        except Refusal as error:
-            return error
-
-def _samples(snapshot: Snapshot, path: Path) -> Json:
-    """Known cross-version pairs and known types: how many the tool resolves, and the ones it misses."""
-    if not path.is_file():
-        raise Refusal(Finding("config.missing", f"the samples file {path} does not exist", path=str(path)))
-    wanted = json.loads(path.read_text())
-    found = infer.pairs(snapshot, sorted({(r["from"], r["to"]) for r in wanted["pairs"]}))
-    rows = [{**r, "found": found[r["from"], r["to"]].get(r["from_member"])} for r in wanted["pairs"]]
-    known = types.load(snapshot)
-    names = [n for n in wanted["types"] if not any(n in known[kind] for kind in ("function", "global", "struct"))]
-    return {"pairs": {"hits": sum(r["found"] == r["to_member"] for r in rows), "total": len(rows),
-                      "misses": [r for r in rows if r["found"] != r["to_member"]]},
-            "types": {"hits": len(wanted["types"]) - len(names), "total": len(wanted["types"]), "misses": names}}
-
 def check_command(config: Config, params: Json) -> Json:
     with effort.stage("land.check_command"):
         snapshot = layout.capture(config)
@@ -179,60 +158,7 @@ def check_command(config: Config, params: Json) -> Json:
         store.write(config.project.root / ".unbake/check.json", json.dumps(
             {"commit": snapshot.commit, "counts": counts, "findings": [asdict(f) for f in findings]},
             sort_keys=True).encode())
-        reprove, repair, drained = {"exact": [], "withheld": [], "debt": []}, {"submitted": 0, "withdraw": 0}, None
-        if params["both"] and not params["reprove"]:
-            raise Refusal(Finding("check.both", "--both compares the Makefile build with the reprove: pass --reprove"))
-        jobs = outcomes = []
-        if params["reprove"]:
-            kinds = configuration.load_resource("units.toml")["kind"]
-            jobs = [(snapshot, unit, version) for _, unit in sorted(snapshot.layout.units.items())
-                    if kinds[unit.kind]["decompiled"] for version in compare.holders(snapshot, unit)]
-            if params["unit"]:
-                wanted = sorted(set(params["unit"]))
-                units = snapshot.layout.units
-                bad = [Finding("check.unit", f"--unit {u} is not a decompiled unit of this project", path=u)
-                       for u in wanted if u not in units or not kinds[units[u].kind]["decompiled"]]
-                if bad:
-                    raise Refusal(*bad)
-                jobs = [job for job in jobs if job[1].path in wanted]
-            identities = {}
-            outcomes = pool.map(config, "land.reprove", _prove_job, jobs, lambda j: native.stamp(j[0], j[1], j[2]))
-            for (_, unit, version), outcome in zip(jobs, outcomes, strict=True):
-                proofs = {} if isinstance(outcome, Refusal) else {p.member: p for p in outcome}
-                for member in unit.members:
-                    if version not in snapshot.layout.members[member].holders():
-                        continue
-                    proof = proofs.get(member)
-                    identity = {"member": member, "version": version}
-                    missing = list(proof.missing) if proof else ([f"version {version}: {f.key}: {f.reason}"
-                        for f in outcome.findings] if isinstance(outcome, Refusal) else [])
-                    exact = bool(proof and proof.exact)
-                    identities[member, version] = (exact, identity if exact else {
-                        **identity, "missing": missing or [f"version {version}: no measurement"]})
-            for (member, version), (exact, identity) in identities.items():
-                unit = next(u for _, u, v in jobs if v == version and member in u.members)
-                reprove["exact" if exact else "withheld" if version in unit.withheld else "debt"].append(identity)
-        proved = None
-        if params["both"]:
-            proved = build.both_paths(snapshot, [(u, v) for _, u, v in jobs if v not in u.withheld], {
-                (p.member, v): p for (_, _, v), o in zip(jobs, outcomes, strict=True)
-                if not isinstance(o, Refusal) for p in o})
-        if params["repair"]:
-            for _, finding in sorted({(f.path, f.key): f for f in findings if not f.blocking}.items()):
-                unit = snapshot.layout.units.get(finding.path)
-                if unit is None:
-                    continue
-                writes = policy.repair(snapshot, finding)
-                source = writes.get(unit.path) if writes is not None else None
-                operation = "repair" if source is not None else "withdraw"
-                request = {"function": None, "overrides": {"add": [], "omit": []}, "note": finding.reason}
-                _enqueue(config, request, unit.members[0], operation, source if source is not None else b"",
-                         (), "check", snapshot.commit)
-                repair["submitted" if operation == "repair" else "withdraw"] += 1
-            drained = drain(config)
-        samples = _samples(snapshot, params["samples"]) if params["samples"] else None
         if params["strict"] and findings:
             raise Refusal(Finding("check.debt", f"{len(findings)} findings", missing=tuple(sorted(counts)),
-                                  action="unbake check --repair"))
-        return {"commit": snapshot.commit, "counts": counts, "reprove": reprove, "repair": repair, "drain": drained,
-                "samples": samples, "both": proved}
+                                  action="fix each finding in the source"))
+        return {"commit": snapshot.commit, "counts": counts}

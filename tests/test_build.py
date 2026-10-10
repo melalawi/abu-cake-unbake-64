@@ -371,17 +371,3 @@ def test_make_check_reports_every_failed_target(build_snapshot, native_mock):
     assert caught.value.findings[0].reason == "\n".join([lines[0], lines[2]])
 
 
-def test_both_paths_names_pairs_make_did_not_build_instead_of_crashing(build_snapshot, native_mock, monkeypatch):
-    unit = _unit(build_snapshot)
-    out = "build/a/src/group/tag"
-    monkeypatch.setattr(build, "_unit_rules", lambda snap, u, v: f"header\n{out}/text.bin {out}/rodata.bin &: x\n")
-    native_mock.return_value = fixture.native_result(
-        exit=2, stderr=f"make: *** No rule to make target '{out}/text.bin'.\n".encode())
-    (build_snapshot.config.project.root / out).mkdir(parents=True)
-    (build_snapshot.config.project.root / out / "rodata.bin").write_bytes(b"\0" * 8)
-    proof = fixture.proof(unit.path, "function", "a", True)
-    result = build.both_paths(build_snapshot, [(unit, "a")], {("function", "a"): proof})
-    row, = result["disagree"]
-    assert result["agree"] == 0 and result["make_exit"] == 2
-    assert row["absent"] == [f"{out}/text.bin"]
-    assert row["make_errors"] == [f"make: *** No rule to make target '{out}/text.bin'."]

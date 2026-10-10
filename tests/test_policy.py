@@ -137,34 +137,6 @@ def test_scope_key_includes_rule_path_and_reason():
     assert policy.scope((), (), ()) == ((), ())
 
 
-@pytest.mark.parametrize(("text", "expected"), [
-    (b"volatile s32 x;\n", b"s32 x;\n"),
-    (b"int keep;\r\n  volatile volatile s32 x;\r\n", b"int keep;\r\n  volatile s32 x;\r\n"),
-    (b"volatile\tint x;", b"\tint x;"),
-    (b"volatile  int x;", b" int x;"),
-])
-def test_repair_removes_qualifier(snapshot, text, expected):
-    snapshot.read.return_value = text
-    line = 2 if text.startswith(b"int keep") else 1
-    finding = Finding("source.volatile-storage", "qualifier", path=PATH, line=line)
-    assert policy.repair(snapshot, finding) == {PATH: expected}
-    snapshot.read.assert_called_once_with(PATH)
-
-
-@pytest.mark.parametrize(("key", "line", "text"), [
-    ("source.inline-asm", 1, b"volatile int x;"),
-    ("source.volatile-storage", 0, b"volatile int x;"),
-    ("source.volatile-storage", 2, b"volatile int x;"),
-    ("source.volatile-storage", 1, b"nonvolatile int x;"),
-    ("source.volatile-storage", 1, b""),
-])
-def test_repair_returns_none(snapshot, key, line, text):
-    snapshot.read.return_value = text
-    assert policy.repair(snapshot, Finding(key, "reason", path=PATH, line=line)) is None
-    if key != "source.volatile-storage":
-        snapshot.read.assert_not_called()
-
-
 @pytest.mark.parametrize("text", [
     "/* volatile int x; */", "// volatile int x;", 'char *s = "volatile int x;";',
     "int c = 'volatile';", 'char *s = "escaped \\\" volatile";',

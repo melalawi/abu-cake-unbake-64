@@ -2,13 +2,9 @@
 import json
 from collections.abc import Sequence
 from dataclasses import replace
-from hashlib import sha256
 from pathlib import Path
 
-import yaml
-
 from unbake import (
-    build,
     compare,
     crack,
     effort,
@@ -226,12 +222,6 @@ def land(config: Config, submission: Submission) -> Receipt:
         snapshot = layout.capture(config)
         member = submission.member
         unit = layout.unit_of(snapshot, member)
-        if unit is None and submission.operation in ("repair", "withdraw"):
-            raise Refusal(Finding("land.request", "The requested unit does not exist.", unit=member))
-        if submission.operation == "withdraw":
-            return withdraw(config, unit.path, Finding(
-                "repair.not_exact", submission.note or "no mechanical repair exists",
-                unit=member, missing=("mechanical repair",)))
         inbox = config.project.root / submission.source
         if submission.operation == "publish":
             kinds = configuration.load_resource("units.toml")["kind"]
@@ -275,69 +265,7 @@ def land(config: Config, submission: Submission) -> Receipt:
             writes = {path: inbox.read_bytes(), "layout.toml": layout.dump_map(replace(snapshot.layout, fuzzy=fuzzy))}
             _generated(snapshot, writes)
             plan = _plan("fuzzy", snapshot, writes, (), (), f"fuzzy {member} {score * 100:.1f}%")
-        elif submission.operation == "repair":
-            writes = {unit.path: inbox.read_bytes()}
-            overlay = layout.overlay(snapshot, writes)
-            affected = {unit.path}
-            if Path(unit.path).suffix == ".h":
-                affected.update(_consumers(overlay, unit.path))
-            proofs, gaps = _proofs(overlay, tuple(sorted(affected)))
-            if gaps:
-                return withdraw(config, unit.path, Finding(
-                    "repair.not_exact", gaps[0].reason, unit=unit.path, missing=gaps[0].missing))
-            plan = _plan("repair", snapshot, writes, tuple(sorted(affected)), (), f"repair: {unit.path}")
         else:
             raise Refusal(Finding("land.request", "Unknown submission operation.", unit=member))
         commit = journal.apply(config, plan, snapshot.commit)
         return Receipt(submission.operation, commit, plan.digest, proofs, 0, effort.invocation())
-def _restore_rows(node, placements, compiled, assembly):
-    if isinstance(node, dict):
-        for value in node.values():
-            _restore_rows(value, placements, compiled, assembly)
-    elif isinstance(node, list):
-        restored = []
-        for index, row in enumerate(node):
-            if isinstance(row, list) and len(row) >= 2 and row[1] == compiled and isinstance(row[0], int):
-                end = next((r[0] for r in node[index + 1:]
-                            if isinstance(r, list) and r and isinstance(r[0], int)), float("inf"))
-                matches = [(offset, name) for offset, name in placements if row[0] <= offset < end]
-                if matches:
-                    restored.extend([offset, assembly, name] for offset, name in sorted(matches))
-                    continue
-            _restore_rows(row, placements, compiled, assembly)
-            restored.append(row)
-        node[:] = restored
-def withdraw(config: Config, unit_path: str, cause: Finding) -> Receipt:
-    with effort.stage("publish.withdraw"):
-        snapshot = layout.capture(config)
-        unit = snapshot.layout.units.get(unit_path)
-        if unit is None:
-            raise Refusal(Finding("land.request", "The requested unit does not exist.", path=unit_path))
-        source = snapshot.read(unit_path)
-        archive = config.project.root / ".unbake" / "withdrawn" / f"{sha256(source).hexdigest()}.c"
-        archive.parent.mkdir(parents=True, exist_ok=True)
-        with store.work(config) as work:
-            temporary = work / "withdrawn.c"
-            temporary.write_bytes(source)
-            temporary.replace(archive)
-        writes = {unit_path: None}
-        units = dict(snapshot.layout.units)
-        del units[unit_path]
-        writes["layout.toml"] = layout.dump_map(replace(snapshot.layout, units=units))
-        kinds = configuration.load_resource("units.toml")["kind"]
-        assembly = next(k for k, spec in kinds.items() if spec["phases"] == ["assemble", "link"])
-        holders = compare.holders(snapshot, unit)
-        for version in holders:
-            path = snapshot.versions[version].split
-            document = yaml.safe_load(snapshot.read(path))
-            placements = [(p.rom_start, name) for name in unit.members
-                          for p in snapshot.layout.members[name].placements
-                          if p.version == version and p.section == ".text"]
-            _restore_rows(document, placements, unit.kind, assembly)
-            writes[path] = yaml.safe_dump(document, sort_keys=False).encode()
-        _generated(snapshot, writes)
-        plan = _plan("withdraw", snapshot, writes, (), (), f"withdraw {unit_path}: {cause.key}")
-        commit = journal.apply(config, plan, snapshot.commit)
-        for version in holders:
-            build.extract(config, version)
-        return Receipt("withdraw", commit, plan.digest, (), 0, effort.invocation())

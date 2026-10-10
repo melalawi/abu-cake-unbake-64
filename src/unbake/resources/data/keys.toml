@@ -25,14 +25,6 @@ sentence = "a pool dispatched work although every cache lookup was warm"
 owner = "effort"
 sentence = "the same long stage closed twice in one command"
 
-[key."check.both"]
-owner = "land"
-sentence = "--both needs --reprove"
-
-[key."check.unit"]
-owner = "land"
-sentence = "the named unit is not a decompiled unit of the project"
-
 [key."check.debt"]
 owner = "land"
 sentence = "the project has rule debt"
@@ -158,10 +150,6 @@ sentence = "the same option is added and omitted"
 [key."recipe.option"]
 owner = "recipes"
 sentence = "a compiler option is unknown or absent"
-
-[key."repair.not_exact"]
-owner = "publish"
-sentence = "the repaired header does not keep every consumer exact"
 
 [key."setup.splat"]
 owner = "build"

@@ -66,15 +66,10 @@ handler = "land.land_command"
 params = []
 
 [command.check]
-help = "Census source rules over the whole project; optionally reprove every unit or repair debt through the inbox."
+help = "Census source rules over the whole project."
 handler = "land.check_command"
 params = [
-  { name = "repair", kind = "flag", type = "str", required = false, multiple = false, help = "submit a repair or withdrawal for every debt finding" },
-  { name = "reprove", kind = "flag", type = "str", required = false, multiple = false, help = "remeasure every built unit in every holder" },
-  { name = "unit", kind = "option", type = "str", required = false, multiple = true, help = "with --reprove: only this unit path (repeatable)" },
-  { name = "both", kind = "flag", type = "str", required = false, multiple = false, help = "with --reprove: also build the same units through make and compare bytes, link script and sections" },
   { name = "strict", kind = "flag", type = "str", required = false, multiple = false, help = "exit 1 when any debt exists" },
-  { name = "samples", kind = "option", type = "path", required = false, multiple = false, help = "json of known cross-version pairs and types: report how many resolve" },
 ]
 
 [command.rename]

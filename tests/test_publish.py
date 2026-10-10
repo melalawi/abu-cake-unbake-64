@@ -3,8 +3,7 @@
 import json
 from contextlib import nullcontext
 from dataclasses import replace
-from hashlib import sha256
-from unittest.mock import Mock, call
+from unittest.mock import Mock
 
 import fixture
 import pytest
@@ -97,7 +96,6 @@ def lane(tmp_path, monkeypatch):
     monkeypatch.setattr(publish.versions, "undefined", Mock(return_value=()))
     monkeypatch.setattr(publish.versions, "resolve", Mock(return_value=()))
     monkeypatch.setattr(publish.journal, "apply", Mock(return_value="new-commit"))
-    monkeypatch.setattr(publish.build, "extract", Mock())
     monkeypatch.setattr(publish.crack, "history", Mock(return_value=[]))
     submission = fixture.submission(member="f", source="candidate.c", proofs=proofs)
     return {"snapshot": snapshot, "proposed": proposed, "config": config, "unit": unit,
@@ -461,65 +459,6 @@ def test_land_fuzzy_compile_failed_refuses(lane, symptom):
     publish.journal.apply.assert_not_called()
 
 
-@pytest.mark.parametrize("gap", [False, True])
-def test_land_repair_exact_and_withdraw_on_gaps(lane, monkeypatch, gap):
-    snapshot, unit = lane["snapshot"], lane["unit"]
-    snapshot = replace(snapshot, layout=replace(snapshot.layout, units={unit.path: unit}))
-    publish.layout.capture.return_value = snapshot
-    finding = _gap()
-    monkeypatch.setattr(publish, "_proofs", Mock(return_value=(lane["proofs"], (finding,) if gap else ())))
-    fallback = Receipt("withdraw", "withdraw-commit", "withdraw-plan", (), 0, "invocation")
-    monkeypatch.setattr(publish, "withdraw", Mock(return_value=fallback))
-    receipt = publish.land(lane["config"], replace(lane["submission"], operation="repair"))
-    assert publish._proofs.call_args.args[1] == (unit.path,)
-    if gap:
-        assert receipt == fallback
-        cause = publish.withdraw.call_args.args[2]
-        assert cause.key == "repair.not_exact" and cause.missing == finding.missing
-        assert cause.reason == finding.reason and cause.unit == unit.path
-        publish.withdraw.assert_called_once()
-        publish.journal.apply.assert_not_called()
-    else:
-        plan = publish.journal.apply.call_args.args[1]
-        assert plan.writes == {unit.path: lane["source"].read_bytes()}
-        assert plan.message == f"repair: {unit.path}"
-        assert receipt.operation == "repair" and receipt.proofs == lane["proofs"]
-        publish.withdraw.assert_not_called()
-        publish.journal.apply.assert_called_once()
-
-
-def test_land_repair_header_reproves_consumers(lane, monkeypatch):
-    snapshot, unit = lane["snapshot"], lane["unit"]
-    header = replace(unit, path="include/main/group.h")
-    consumer = replace(unit, path="src/consumer.c", members=("consumer",))
-    snapshot = replace(snapshot, layout=replace(snapshot.layout, units={u.path: u for u in (header, consumer)}),
-                       overlays={**snapshot.overlays, consumer.path: b'#include "main/group.h"\n'})
-    publish.layout.capture.return_value = snapshot
-    monkeypatch.setattr(publish, "_proofs", Mock(return_value=(lane["proofs"], ())))
-    publish.land(lane["config"], replace(lane["submission"], operation="repair"))
-    assert publish._proofs.call_args.args[1] == tuple(sorted((header.path, consumer.path)))
-
-
-@pytest.mark.parametrize("operation", ["repair", "withdraw"])
-def test_land_missing_owner_refuses(lane, operation):
-    with pytest.raises(Refusal) as exc:
-        publish.land(lane["config"], replace(lane["submission"], operation=operation))
-    assert exc.value.findings[0].key == "land.request"
-    publish.journal.apply.assert_not_called()
-
-
-@pytest.mark.parametrize("note", ["", "no safe transformation"])
-def test_land_withdraw_dispatch(lane, monkeypatch, note):
-    snapshot, unit = lane["snapshot"], lane["unit"]
-    publish.layout.capture.return_value = replace(snapshot, layout=replace(snapshot.layout, units={unit.path: unit}))
-    expected = Receipt("withdraw", "commit", "plan", (), 0, "invocation")
-    monkeypatch.setattr(publish, "withdraw", Mock(return_value=expected))
-    assert publish.land(lane["config"], replace(lane["submission"], operation="withdraw", note=note)) == expected
-    cause = publish.withdraw.call_args.args[2]
-    assert cause.reason == (note or "no mechanical repair exists")
-    assert cause.key == "repair.not_exact" and cause.unit == "f" and cause.missing
-
-
 @pytest.mark.parametrize("history,existing,expected", [
     ([], None, {}),
     ([fixture.attempt(member="f", symptoms={"score": 0.5, "bytes_differ": True}),
@@ -550,36 +489,3 @@ def test_learned_hint_row_valid(lane, history, existing, expected):
     publish.crack.history.assert_called_once_with(lane["config"], "f")
 
 
-def test_withdraw_archives_before_apply_and_restores_rows(lane):
-    snapshot, unit = lane["snapshot"], lane["unit"]
-    snapshot = replace(snapshot, layout=replace(snapshot.layout, units={unit.path: unit}), overlays={
-        **snapshot.overlays, **{f"versions/{v}/Game.yaml":
-                               b"segments:\n- subsegments:\n  - [4096, c, f]\n  - [4104]\n" for v in ("a", "b")}})
-    publish.layout.capture.return_value = snapshot
-    publish.repo.files.return_value = {"Makefile": b"same make\n", "README.md": b"withdrawn readme"}
-    archive = lane["config"].project.root / ".unbake" / "withdrawn" / (
-        sha256(snapshot.read(unit.path)).hexdigest() + ".c")
-
-    def apply(config, plan, head):
-        assert archive.read_bytes() == snapshot.read(unit.path)
-        assert plan.writes[unit.path] is None
-        assert unit.path not in lane["dumps"][plan.writes["layout.toml"]].units
-        assert all(b"asm" in plan.writes[f"versions/{v}/Game.yaml"] for v in ("a", "b"))
-        assert "Makefile" not in plan.writes and plan.writes["README.md"] == b"withdrawn readme"
-        assert head == snapshot.commit
-        publish.build.extract.assert_not_called()
-        return "withdraw-commit"
-
-    publish.journal.apply.side_effect = apply
-    receipt = publish.withdraw(lane["config"], unit.path, _gap())
-    assert receipt.operation == "withdraw" and receipt.commit == "withdraw-commit" and receipt.proofs == ()
-    publish.journal.apply.assert_called_once()
-    assert publish.build.extract.call_args_list == [call(lane["config"], v) for v in ("a", "b")]
-
-
-def test_withdraw_missing_unit_refuses(lane):
-    with pytest.raises(Refusal) as exc:
-        publish.withdraw(lane["config"], "src/absent.c", _gap())
-    assert exc.value.findings[0].key == "land.request"
-    publish.journal.apply.assert_not_called()
-    publish.store.work.assert_not_called()

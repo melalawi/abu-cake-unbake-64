@@ -67,7 +67,7 @@ def stem(member: str) -> str:
     """One file-name segment per member: slashes become dots, a name too long for a file keeps head and digest."""
     flat = member.replace("/", ".")
     return flat if len(flat) <= 120 else f"{flat[:80]}-{hashlib.sha256(member.encode()).hexdigest()[:16]}"
-_LOG_KINDS = frozenset({"receipt", "refusal", "withdrawal", "drain"})
+_LOG_KINDS = frozenset({"receipt", "refusal", "drain"})
 _STREAM = re.compile(r"^[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)?$")
 def _stream_path(config: Config, stream: str) -> Path:
     if not _STREAM.match(stream) or any(part in {".", ".."} for part in stream.split("/")):

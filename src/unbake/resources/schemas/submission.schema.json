@@ -10,9 +10,7 @@
   "operation": {
    "enum": [
     "publish",
-    "fuzzy",
-    "repair",
-    "withdraw"
+    "fuzzy"
    ]
   },
   "member": {

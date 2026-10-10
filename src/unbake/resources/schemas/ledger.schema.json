@@ -10,7 +10,6 @@
    "enum": [
     "receipt",
     "refusal",
-    "withdrawal",
     "drain"
    ]
   },

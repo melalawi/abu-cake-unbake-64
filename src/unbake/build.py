@@ -16,7 +16,7 @@ import yaml
 
 from unbake import adapters, effort, native, pool, process, recipes, store, symbols
 from unbake import config as configuration
-from unbake.contracts import Config, Finding, Json, NativeResult, Proof, Refusal, Snapshot, UnitSpec, digest
+from unbake.contracts import Config, Finding, Json, NativeResult, Refusal, Snapshot, UnitSpec, digest
 
 _REPO = configuration.load_resource("repo.toml")
 _WORD = 0xFFFFFFFF
@@ -350,56 +350,3 @@ def make_check(config: Config) -> Json:
         lines = result.stderr.decode(errors="replace").splitlines()
         failed = [line for line in lines if "***" in line]  # make -k ran everything it could: every failed target
         raise Refusal(Finding("setup.make", "\n".join(failed or lines[-20:]), missing=(f"make exit {result.exit}",)))
-def _unit_material(snapshot: Snapshot, unit: UnitSpec, version: str, built: dict[str, bytes]) -> dict[str, bytes]:
-    """Per member, the bytes a built unit puts at the member's placements: the measurement `native.measure` makes."""
-    by_section = {p.section: p for p in native.sections(snapshot, unit, version)}
-    material: dict[str, bytes] = {}
-    held = [(n, p) for n in unit.members for p in snapshot.layout.members[n].placements if p.version == version]
-    for name, p in held:
-        base, data = by_section[p.section], built.get(p.section, b"")
-        low = p.rom_start - base.rom_start
-        part = str(base.size).encode() if p.section == ".bss" else data[low:low + p.rom_end - p.rom_start]
-        material[name] = material.get(name, b"") + part
-    return material
-def both_paths(snapshot: Snapshot, jobs: list[tuple[UnitSpec, str]], proofs: dict[tuple[str, str], Proof]) -> Json:
-    """Builds the same (unit, version) pairs through the generated Makefile and compares the bytes with the native
-    proof. A disagreement carries the Makefile's link script, the sections and the first differing offsets."""
-    with effort.stage("build.both_paths"):
-        config, root = snapshot.config, snapshot.config.project.root
-        rules = {(u.path, v): _unit_rules(snapshot, u, v) for u, v in jobs}
-        outputs = {key: text.splitlines()[1].split(" &:")[0].split() for key, text in rules.items()}
-        targets = sorted({o for row in outputs.values() for o in row})
-        argv = [str(process.tool(config, "make")), "-k", f"-j{config.host.workers}"]
-        make = process.run("make units", [*argv, *targets], root, tmp=process.scratch(root))
-        agree, disagree = [], []
-        for unit, version in jobs:
-            ranges = native.sections(snapshot, unit, version)
-            absent = [o for o in outputs[unit.path, version] if not (root / o).is_file()]
-            files = {Path(o).name: (root / o).read_bytes() for o in outputs[unit.path, version]
-                     if o.endswith(".bin") and (root / o).is_file()}
-            built = ({ranges[0].section: files["data.bin"]} if "data.bin" in files and len(ranges) == 1 and
-                     "armips" in configuration.load_resource("units.toml")["kind"][unit.kind]["phases"] else
-                     {f".{name[:-4]}": data for name, data in files.items()})
-            material = _unit_material(snapshot, unit, version, built)
-            row = {"unit": unit.path, "version": version}
-            wrong = [name for name, data in material.items() if (name, version) in proofs
-                     and hashlib.sha256(data).hexdigest() != proofs[name, version].built_sha256]
-            if not wrong and not absent:
-                agree.append(row)
-                continue
-            work = Path(outputs[unit.path, version][0]).parent
-            ld = root / work / "unit.ld"
-            differ = {}
-            for name in wrong:
-                native_bytes = store.get(config, "bytes", proofs[name, version].built_sha256) or b""
-                at = [i for i, (a, b) in enumerate(zip(material[name], native_bytes, strict=False)) if a != b]
-                differ[name] = {"make_size": len(material[name]), "native_size": len(native_bytes),
-                                "differing": len(at), "first_offset": at[0] if at else None}
-            disagree.append({**row, "absent": absent, "members": differ,
-                             "sections": [f"{p.section} rom {p.rom_start:#x}-{p.rom_end:#x} vram {p.vram:#x}"
-                                          for p in ranges],
-                             "link_script": ld.read_text().splitlines() if ld.is_file() else [],
-                             "make_exit": make.exit,
-                             "make_errors": [x for x in make.stderr.decode(errors="replace").splitlines()
-                                             if "***" in x and Path(outputs[unit.path, version][0]).parent.name in x]})
-        return {"agree": len(agree), "disagree": disagree, "make_exit": make.exit}

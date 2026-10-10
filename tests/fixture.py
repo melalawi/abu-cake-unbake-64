@@ -249,7 +249,7 @@ def submission(**fields: Any) -> Submission:
     values.setdefault("proofs", (proof(f"src/{member}.c", member, "a", True),))
     id_basis = (values["member"], values["source_sha256"], values["overrides"], values["operation"])
     values.setdefault("id", digest(id_basis))
-    values.setdefault("source", f".unbake/inbox/{values['id']}.c" if values["operation"] != "withdraw" else "")
+    values.setdefault("source", f".unbake/inbox/{values['id']}.c")
     return Submission(**values)
 
 

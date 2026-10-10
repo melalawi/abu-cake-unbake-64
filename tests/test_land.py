@@ -329,115 +329,7 @@ def test_drain_refuses_after_the_attempts_when_head_keeps_moving(lane):
 
 
 def _flags(**overrides):
-    return {"reprove": False, "repair": False, "strict": False, "samples": None, "unit": (), "both": False, **overrides}
-
-
-def test_check_reprove_identities_once(lane, monkeypatch):
-    cfg, unit, snapshot, capture = lane[:4]
-    duplicate = replace(unit, path="src/duplicate.c")
-    missing = replace(unit, path="src/missing.c", members=("g",))
-    unresolved = replace(unit, path="src/unresolved.c", members=("h",))
-    raw = replace(unit, path="asm/raw.s", kind="asm")
-    members = {name: replace(snapshot.layout.members["f"], name=name) for name in ("f", "g", "h")}
-    units = {u.path: u for u in (unit, duplicate, missing, unresolved, raw)}
-    capture.return_value = replace(snapshot, layout=replace(snapshot.layout, units=units, members=members))
-    monkeypatch.setattr(land.policy, "census", lambda snap: ())
-    monkeypatch.setattr(land.compare, "holders", lambda snap, u: ("a", "b"))
-    def prove(job):
-        _, u, version = job
-        if u == missing:
-            return ()
-        if u == unresolved:
-            raise Refusal(Finding("land.request", "cannot prove"))
-        exact = version == "a"
-        return (fixture.proof(u.path, "f", version, exact, () if exact else ("bytes differ",)),)
-
-    native = Mock(side_effect=prove)
-    monkeypatch.setattr(land.native, "prove_job", native)
-
-    def map_jobs(cfg, name, function, jobs, key=None):
-        assert name == "land.reprove"
-        assert len(jobs) == 8
-        assert all(job[1].kind == "c" for job in jobs)
-        return [function(job) for job in jobs]
-
-    monkeypatch.setattr(land.pool, "map", map_jobs)
-    result = land.check_command(cfg, _flags(reprove=True))
-    assert result["reprove"]["exact"] == [{"member": "f", "version": "a"}]
-    debt = {(row["member"], row["version"]): row["missing"] for row in result["reprove"]["debt"]}
-    assert len(debt) == 5
-    assert debt["f", "b"] == ["bytes differ"]
-    assert all(debt["g", v] == [f"version {v}: no measurement"] for v in ("a", "b"))
-    assert all(debt["h", v] == [f"version {v}: land.request: cannot prove"] for v in ("a", "b"))
-    assert native.call_count == 8
-
-
-def test_check_reprove_unit_filter_runs_only_the_named_units_and_names_every_bad_one(lane, monkeypatch):
-    cfg, unit, snapshot, capture = lane[:4]
-    other = replace(unit, path="src/other.c")
-    capture.return_value = replace(snapshot, layout=replace(snapshot.layout, units={u.path: u for u in (unit, other)}))
-    monkeypatch.setattr(land.policy, "census", lambda snap: ())
-    monkeypatch.setattr(land.compare, "holders", lambda snap, u: ("a",))
-    seen = []
-    def map_jobs(cfg_, name, function, jobs, key=None):
-        seen.extend(j[1].path for j in jobs)
-        return [()] * len(jobs)
-
-    monkeypatch.setattr(land.pool, "map", map_jobs)
-    land.check_command(cfg, _flags(reprove=True, unit=(other.path,)))
-    assert seen == [other.path]
-    with pytest.raises(Refusal) as refusal:
-        land.check_command(cfg, _flags(reprove=True, unit=("src/x.c", "src/y.c")))
-    assert [f.path for f in refusal.value.findings] == ["src/x.c", "src/y.c"]
-
-
-def test_check_both_needs_reprove(lane, monkeypatch):
-    cfg = lane[0]
-    monkeypatch.setattr(land.policy, "census", lambda snap: ())
-    with pytest.raises(Refusal) as refusal:
-        land.check_command(cfg, _flags(both=True))
-    assert refusal.value.findings[0].key == "check.both"
-
-
-def test_check_repair_enqueues_repair_and_withdraw(lane, monkeypatch):
-    cfg, unit, snapshot, capture = lane[:4]
-    other = replace(unit, path="src/g.c", members=("g",))
-    capture.return_value = replace(
-        snapshot, layout=replace(snapshot.layout, units={unit.path: unit, other.path: other}))
-    repair = Finding("check.debt", "repair source", path=unit.path, blocking=False)
-    withdraw = Finding("check.debt", "withdraw source", path=other.path, blocking=False)
-    findings = (repair, repair, withdraw,
-                Finding("land.request", "blocked", path=unit.path),
-                Finding("check.debt", "outside units", path="include/header.h", blocking=False))
-    monkeypatch.setattr(land.policy, "census", lambda snap: findings)
-    repairer = Mock(side_effect=lambda snap, f: {unit.path: b"fixed"} if f.path == unit.path else {other.path: None})
-    monkeypatch.setattr(land.policy, "repair", repairer)
-    observed = []
-
-    def publish(cfg, entry):
-        observed.append(entry)
-        if entry.operation == "repair":
-            assert (cfg.project.root / entry.source).read_bytes() == b"fixed"
-        else:
-            assert entry.source == ""
-        return Receipt(entry.operation, "b" * 40, "plan", (), 0, "test")
-
-    lane[6].side_effect = publish
-    result = land.check_command(cfg, _flags(repair=True))
-    assert result["repair"] == {"submitted": 1, "withdraw": 1}
-    assert repairer.call_count == 2
-    assert {e.operation for e in observed} == {"repair", "withdraw"}
-    for entry in observed:
-        source = b"fixed" if entry.operation == "repair" else b""
-        assert entry.id == digest((entry.member, sha256(source).hexdigest(), entry.overrides, entry.operation))
-        assert entry.origin == "check" and entry.base == snapshot.commit and entry.proofs == ()
-        assert entry.note == (repair.reason if entry.operation == "repair" else withdraw.reason)
-    assert [call.args[1] for call in lane[4].call_args_list].count("withdrawal") == 1
-    check = json.loads((cfg.project.root / ".unbake/check.json").read_text())
-    assert check == json.loads(json.dumps({"commit": snapshot.commit,
-                                          "counts": {"check.debt": 4, "land.request": 1},
-                                          "findings": [asdict(f) for f in findings]}))
-    configuration.validate("result.check", result, "check")
+    return {"strict": False, **overrides}
 
 
 @pytest.mark.parametrize("schema", ["result.submit", "result.land", "result.check"])
@@ -468,9 +360,7 @@ def test_results_validate(lane, monkeypatch, schema):
     else:
         monkeypatch.setattr(land.policy, "census", lambda snap: ())
         result = land.check_command(cfg, _flags())
-        assert result["reprove"] == {"exact": [], "withheld": [], "debt": []}
-        assert result["repair"] == {"submitted": 0, "withdraw": 0}
-        assert result["drain"] is None
+        assert set(result) == {"commit", "counts"}
     configuration.validate(schema, json.loads(json.dumps(result)), schema)
 
 
@@ -490,41 +380,6 @@ def test_check_strict_reports_debt_after_census_written(lane, monkeypatch):
     assert error.value.findings[0].key == "check.debt"
     assert error.value.findings[0].missing == ("check.debt",)
     assert (lane[0].project.root / ".unbake/check.json").is_file()
-
-
-def test_samples_report_hits_and_misses(tmp_path, monkeypatch):
-    path = tmp_path / "samples.json"
-    path.write_text('{"pairs": [{"from": "a", "to": "b", "from_member": "f", "to_member": "g"},'
-                    ' {"from": "a", "to": "b", "from_member": "h", "to_member": "i"}], "types": ["T", "U"]}')
-    monkeypatch.setattr(land.infer, "pairs", lambda snap, directions: {("a", "b"): {"f": "g", "h": "x"}})
-    monkeypatch.setattr(land.types, "load", lambda snap: {"function": {}, "global": {}, "struct": {"T": {}}})
-    result = land._samples(None, path)
-    assert (result["pairs"]["hits"], result["pairs"]["total"]) == (1, 2)
-    assert [m["from_member"] for m in result["pairs"]["misses"]] == ["h"]
-    assert result["types"] == {"hits": 1, "total": 2, "misses": ["U"]}
-
-
-def test_a_missing_samples_file_is_refused_by_name(tmp_path):
-    with pytest.raises(Refusal) as error:
-        land._samples(None, tmp_path / "nope.json")
-    assert error.value.findings[0].key == "config.missing"
-
-
-def test_check_reprove_reports_withheld_holders_apart_from_debt_and_skips_them_in_both(lane, monkeypatch):
-    cfg, unit, snapshot, capture = lane[:4]
-    held = replace(unit, withheld=("b",))
-    capture.return_value = replace(snapshot, layout=replace(snapshot.layout, units={held.path: held}))
-    monkeypatch.setattr(land.policy, "census", lambda snap: ())
-    monkeypatch.setattr(land.compare, "holders", lambda snap, u: ("a", "b"))
-    monkeypatch.setattr(land.native, "prove_job", lambda job: (
-        fixture.proof(job[1].path, "f", job[2], False, ("bytes differ",)),))
-    monkeypatch.setattr(land.pool, "map", lambda c, name, function, jobs, key=None: [function(j) for j in jobs])
-    both = Mock(return_value={"agree": 0, "disagree": [], "make_exit": 0})
-    monkeypatch.setattr(land.build, "both_paths", both)
-    result = land.check_command(cfg, _flags(reprove=True, both=True))
-    assert [r["version"] for r in result["reprove"]["withheld"]] == ["b"]
-    assert [r["version"] for r in result["reprove"]["debt"]] == ["a"]
-    assert [(u.path, v) for u, v in both.call_args.args[1]] == [(held.path, "a")]
 
 
 def test_drain_measures_again_when_another_lane_moved_head(lane):
