@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import re
+import threading
 from collections.abc import Sequence
 from dataclasses import replace
 from pathlib import Path
@@ -49,7 +50,10 @@ def _link_relative(overlay: Path, root: Path, path: str, content: bytes) -> None
         real, target = root / relative, overlay / relative
         if not relative.startswith("..") and real.is_file() and not (target.exists() or target.is_symlink()):
             target.parent.mkdir(parents=True, exist_ok=True)
-            target.symlink_to(real)
+            pending = target.with_name(f".{target.name}.{os.getpid()}.{threading.get_ident()}")
+            pending.unlink(missing_ok=True)
+            pending.symlink_to(real)
+            os.replace(pending, target)  # atomic: another job making the same link finds it whole, never half-made
             _link_relative(overlay, root, relative, real.read_bytes())
 def headers(snapshot: Snapshot, unit: UnitSpec, argv: Sequence[str]) -> tuple[tuple[str, ...], tuple[str, ...]]:
     """(the project files the unit can include, the paths a quoted or forced name found nowhere would be read from)

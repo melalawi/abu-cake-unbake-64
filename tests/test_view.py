@@ -4,6 +4,7 @@ import json
 from contextlib import nullcontext
 from dataclasses import replace
 from hashlib import sha256
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -309,3 +310,18 @@ def test_a_relative_include_beside_an_overlaid_header_is_linked_from_the_real_tr
     overlay = lane.root / "build/views" / snapshot.digest[:16]
     assert (overlay / "include/types.h").resolve() == (lane.root / "include/types.h").resolve()
     assert (overlay / "include/z.h").is_symlink()
+
+
+def test_two_creators_of_the_same_overlay_link_both_succeed(tmp_path, monkeypatch):
+    root, overlay = tmp_path / "root", tmp_path / "overlay"
+    (root / "include").mkdir(parents=True)
+    (root / "include/a.h").write_text("int a;\n")
+    (overlay / "include").mkdir(parents=True)
+    (overlay / "include/a.h").symlink_to(root / "include/a.h")  # the other job's link, made after our check
+    with monkeypatch.context() as stale:  # our check ran before it existed
+        stale.setattr(Path, "exists", lambda self: False)
+        stale.setattr(Path, "is_symlink", lambda self: False)
+        view._link_relative(overlay, root, "include/b.h", b'#include "a.h"\n')
+    link = overlay / "include/a.h"
+    assert link.is_symlink() and link.resolve() == (root / "include/a.h").resolve()
+    assert [p.name for p in (overlay / "include").iterdir()] == ["a.h"]
