@@ -2,7 +2,7 @@
 import posixpath
 import re
 from collections import defaultdict
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -163,9 +163,9 @@ def _generated(snapshot, writes):
     for path, data in repo.files(overlay).items():
         if data != snapshot.peek(path):
             writes[path] = data
-def plans(snapshot: Snapshot, unit: UnitSpec, proposed: Snapshot) -> Iterator[Plan]:
+def plans(snapshot: Snapshot, unit: UnitSpec, proposed: Snapshot, extras: Mapping[str, bytes]) -> Iterator[Plan]:
     """The publication layout options, each planned only when the caller asks for it: the first option that proves
-    lands, so the others cost nothing."""
+    lands, so the others cost nothing. `extras` are a change set's other files, written in every plan."""
     with effort.stage("publish.plans"):
         recipe = recipes.resolve(proposed.config, unit, unit.options)
         first = compare.holders(proposed, unit)[0]
@@ -179,7 +179,7 @@ def plans(snapshot: Snapshot, unit: UnitSpec, proposed: Snapshot) -> Iterator[Pl
         if conflicts:
             raise Refusal(*conflicts)
         options = [(owner, {})] if again else layout.unit_options(snapshot, unit.members[0], folded[unit.path])
-    return _option_plans(snapshot, unit, proposed, (folded, again, first, recipe), options)
+    return _option_plans(snapshot, unit, proposed, (folded, again, first, recipe, extras), options)
 def _option_plans(snapshot: Snapshot, unit: UnitSpec, proposed: Snapshot, shared: tuple[Any, ...],
                   options: Sequence[tuple[UnitSpec, dict[str, bytes | None]]]) -> Iterator[Plan]:
     produced, last = False, ()
@@ -200,8 +200,8 @@ def _option_plans(snapshot: Snapshot, unit: UnitSpec, proposed: Snapshot, shared
                                         path=unit.path),))
 def _option_plan(snapshot: Snapshot, unit: UnitSpec, proposed: Snapshot, shared: tuple[Any, ...], option: UnitSpec,
                  writes: dict[str, bytes | None]) -> Plan | tuple[Finding, ...]:
-    folded, again, first, recipe = shared
-    writes = dict(writes)
+    folded, again, first, recipe, extras = shared
+    writes = {**extras, **writes}
     writes[option.path] = (_append(snapshot.read(option.path), folded[unit.path])
                           if option.path in snapshot.layout.units and not again else folded[unit.path])
     writes.update((p, b) for p, b in folded.items() if p != unit.path)
@@ -224,7 +224,7 @@ def _option_plan(snapshot: Snapshot, unit: UnitSpec, proposed: Snapshot, shared:
     _generated(snapshot, writes)
     overlay = layout.overlay(snapshot, writes)
     group = proposed.layout.groups[unit.group]
-    affected = {option.path}
+    affected = {option.path, *extras.keys() & overlay.layout.units.keys()}
     edited = [p for p, data in writes.items() if p.endswith(".h") and data != snapshot.peek(p)]
     affected.update(_consumers(overlay, edited))
     before, after = [], []
@@ -252,14 +252,18 @@ def land(config: Config, submission: Submission) -> Receipt:
         inbox = config.project.root / submission.source
         if submission.operation == "publish":
             kinds = configuration.load_resource("units.toml")["kind"]
-            if unit is not None and kinds[unit.kind]["decompiled"] and snapshot.read(unit.path) == inbox.read_bytes():
+            extras = {path: (config.project.root / copy).read_bytes() for path, copy in submission.extras.items()}
+            if (unit is not None and kinds[unit.kind]["decompiled"] and snapshot.read(unit.path) == inbox.read_bytes()
+                    and not extras):
                 raise Refusal(Finding("land.duplicate", f"{member} is already landed in {unit.path}", unit=member))
             request = {"file": str(inbox), "function": submission.function or member,
                        "overrides": submission.overrides, "note": submission.note}
-            unit, proposed, _ = admit(snapshot, request)
-            for plan in plans(snapshot, unit, proposed):
+            unit, proposed, _ = admit(layout.overlay(snapshot, extras) if extras else snapshot, request)
+            touched = (*unit.members, *(m for p in extras if p in snapshot.layout.units
+                                        for m in snapshot.layout.units[p].members))
+            for plan in plans(snapshot, unit, proposed, extras):
                 proofs, gaps = _proofs(layout.overlay(snapshot, plan.writes), plan.affected)
-                gaps = _regressions(snapshot, gaps, unit.members, unit.path)
+                gaps = _regressions(snapshot, gaps, touched, unit.path)
                 if not gaps:
                     commit = journal.apply(config, plan, snapshot.commit)
                     return Receipt("publish", commit, plan.digest, proofs, len(plan.debt), effort.invocation())

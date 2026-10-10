@@ -12,6 +12,14 @@
       "type": "string",
       "minLength": 1
      },
+     "files": {
+      "type": "array",
+      "items": {
+       "type": "string",
+       "minLength": 1
+      },
+      "minItems": 1
+     },
      "member": {
       "type": "string",
       "minLength": 1
@@ -140,6 +148,7 @@
     },
     "required": [
      "file",
+     "files",
      "member",
      "id",
      "operation",

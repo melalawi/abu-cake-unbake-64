@@ -202,6 +202,13 @@
   "invocation": {
    "type": "string",
    "minLength": 1
+  },
+  "extras": {
+   "type": "object",
+   "additionalProperties": {
+    "type": "string",
+    "minLength": 1
+   }
   }
  },
  "required": [
@@ -216,7 +223,8 @@
   "proofs",
   "origin",
   "note",
-  "invocation"
+  "invocation",
+  "extras"
  ],
  "additionalProperties": false
 }

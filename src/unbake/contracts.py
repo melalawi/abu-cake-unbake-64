@@ -272,6 +272,7 @@ class Submission:
     origin: str  # command that submitted: "submit" | "compare" | "check"
     note: str  # free-text note given at submit time ("" when none)
     invocation: str
+    extras: Json  # change set: project path -> inbox copy, landed with the source; {} for one file
 # ---------------------------------------------------------------- observability
 @dataclass(frozen=True)
 class StageRecord:

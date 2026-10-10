@@ -5,6 +5,7 @@ import os
 from contextlib import nullcontext
 from dataclasses import asdict, replace
 from hashlib import sha256
+from pathlib import Path
 from unittest.mock import Mock
 
 import fixture
@@ -364,7 +365,7 @@ def test_results_validate(lane, monkeypatch, schema):
     configuration.validate(schema, json.loads(json.dumps(result)), schema)
 
 
-@pytest.mark.parametrize("files,function", [([], None), (["one", "two"], "f")])
+@pytest.mark.parametrize("files,function", [([], None)])
 def test_submit_command_rejects_invalid_request(lane, files, function):
     with pytest.raises(Refusal) as error:
         land.submit_command(lane[0], {"files": files, "function": function, "note": ""})
@@ -401,3 +402,16 @@ def test_drain_refuses_after_the_attempts_run_out_and_never_retries_other_refusa
     result = land.drain(cfg)
     assert [r["findings"][0]["key"] for r in result["refused"]] == ["journal.changed", "land.request"]
     assert lane[6].call_count == land._ATTEMPTS + 1
+
+
+def test_change_set_is_one_entry_with_its_files_and_moves_as_one(lane):
+    cfg = lane[0]
+    entry = _submit(lane, extras={"include/x.h": b"extern int g;\n", "src/g.c": b"int g;\n"})
+    assert sorted(entry.extras) == ["include/x.h", "src/g.c"]
+    assert {(cfg.project.root / copy).read_bytes() for copy in entry.extras.values()} == {
+        b"extern int g;\n", b"int g;\n"}
+    assert _submit(lane).id != entry.id
+    assert [r["id"] for r in land.drain(cfg)["landed"]].count(entry.id) == 1
+    done = cfg.project.root / ".unbake/inbox/done"
+    assert all((cfg.project.root / copy).exists() is False and (done / Path(copy).name).exists()
+               for copy in entry.extras.values())

@@ -208,7 +208,7 @@ def test_plan_removes_fuzzy_row_when_exact(lane):
     snapshot = replace(snapshot, layout=replace(snapshot.layout, fuzzy={
         "f": {"path": fuzzy_path, "scores": {"a": 0.7, "b": 0.6}},
         "other": {"path": "src/fuzzy/other.c", "scores": {"a": 0.5}}}))
-    plan, = publish.plans(snapshot, lane["unit"], lane["proposed"])
+    plan, = publish.plans(snapshot, lane["unit"], lane["proposed"], {})
     assert plan.writes[fuzzy_path] is None
     mapped = lane["dumps"][plan.writes["layout.toml"]]
     assert "f" not in mapped.fuzzy and "other" in mapped.fuzzy
@@ -220,7 +220,7 @@ def test_plan_replaces_the_file_of_a_member_that_is_already_landed(lane):
     snapshot = replace(snapshot, layout=replace(snapshot.layout, units={unit.path: unit},
                        members={"f": replace(snapshot.layout.members["f"], state="c")}))
     publish.layout.unit_options.side_effect = AssertionError("a landed member needs no new unit option")
-    plan, = publish.plans(snapshot, unit, lane["proposed"])
+    plan, = publish.plans(snapshot, unit, lane["proposed"], {})
     assert plan.writes[unit.path] == lane["source"].read_bytes()
     publish.headers.fold.assert_not_called()
     assert lane["dumps"][plan.writes["layout.toml"]].units[unit.path] == unit
@@ -231,7 +231,7 @@ def test_plan_writes_changed_repo_files_only(lane):
                "versions/a/report.json": b"{}", ".github/workflows/ci.yml": b"ci"}
     publish.repo.files.return_value = {"Makefile": b"same make\n", **changed}
     publish.types.landed.return_value = b"new types"
-    plan, = publish.plans(lane["snapshot"], lane["unit"], lane["proposed"])
+    plan, = publish.plans(lane["snapshot"], lane["unit"], lane["proposed"], {})
     assert "Makefile" not in plan.writes
     assert all(plan.writes[p] == data for p, data in changed.items())
     assert plan.writes["types.toml"] == b"new types"
@@ -261,7 +261,7 @@ def test_plan_appends_and_reproves_every_unit_that_includes_the_edited_header_th
     publish.headers.fold.return_value = ({unit.path: folded, header: b"new header"}, ())
     debt = Finding("land.request", "existing debt", blocking=False)
     publish.policy.scope.return_value = ((), (debt,))
-    plan, = publish.plans(snapshot, unit, lane["proposed"])
+    plan, = publish.plans(snapshot, unit, lane["proposed"], {})
     assert plan.writes[unit.path] == b'#include "old.h"\n#include "new.h"\nint old(void);\n\nint f(void);\n'
     assert plan.affected == tuple(sorted((unit.path, consumer.path, outsider.path)))  # not the bystander
     assert plan.debt == (debt,)
@@ -293,7 +293,7 @@ def test_plan_refusals(lane, reason):
     else:
         publish.layout.unit_options.return_value = []
     with pytest.raises(Refusal) as exc:
-        list(publish.plans(lane["snapshot"], lane["unit"], lane["proposed"]))
+        list(publish.plans(lane["snapshot"], lane["unit"], lane["proposed"], {}))
     assert exc.value.findings[0].key == "land.request"
     publish.journal.apply.assert_not_called()
 
@@ -302,7 +302,7 @@ def test_plan_tries_next_layout_option(lane):
     second = replace(lane["unit"], path="src/second.c")
     publish.layout.unit_options.return_value = [(lane["unit"], {}), (second, {})]
     publish.policy.scope.side_effect = [((_gap(),), ()), ((), ())]
-    plan, = publish.plans(lane["snapshot"], lane["unit"], lane["proposed"])
+    plan, = publish.plans(lane["snapshot"], lane["unit"], lane["proposed"], {})
     assert plan.affected == (second.path,)
     assert lane["dumps"][plan.writes["layout.toml"]].units[second.path] == second
 
@@ -311,14 +311,14 @@ def test_plan_falls_through_an_option_that_refuses_outright(lane):
     second = replace(lane["unit"], path="src/second.c")
     publish.layout.unit_options.return_value = [(lane["unit"], {}), (second, {})]
     publish.types.landed.side_effect = [Refusal(Finding("headers.parse", "no parse")), b"types"]
-    plan, = publish.plans(lane["snapshot"], lane["unit"], lane["proposed"])
+    plan, = publish.plans(lane["snapshot"], lane["unit"], lane["proposed"], {})
     assert plan.affected == (second.path,)
 
 
 def test_plan_refuses_with_the_last_refusal_when_every_option_refuses(lane):
     publish.types.landed.side_effect = Refusal(Finding("headers.parse", "no parse"))
     with pytest.raises(Refusal) as exc:
-        list(publish.plans(lane["snapshot"], lane["unit"], lane["proposed"]))
+        list(publish.plans(lane["snapshot"], lane["unit"], lane["proposed"], {}))
     assert exc.value.findings[0].key == "headers.parse"
 
 
@@ -330,6 +330,36 @@ def test_land_publish_commits_once(lane):
     publish.compare.bind.assert_called_once_with(lane["snapshot"], lane["source"], "f")
     assert publish.native.prove.call_count == 2
     assert [c.args[-1] for c in publish.native.prove.call_args_list] == [lane["work"] / "0", lane["work"] / "1"]
+
+
+def _change_set(lane, tmp_path_files):
+    snapshot, g = lane["snapshot"], replace(lane["unit"], path="src/g.c", members=("g",))
+    units = {lane["unit"].path: lane["unit"], g.path: g}
+    publish.layout.capture.return_value = replace(snapshot, layout=replace(snapshot.layout, units=units))
+    extras = {}
+    for path, data in tmp_path_files.items():
+        copy = f"set.{len(extras)}"
+        (lane["config"].project.root / copy).write_bytes(data)
+        extras[path] = copy
+    return replace(lane["submission"], extras=extras)
+
+
+def test_land_change_set_is_one_plan_and_one_commit(lane):
+    entry = _change_set(lane, {"src/g.c": b"int g;\n", "include/x.h": b"extern int g;\n"})
+    publish.land(lane["config"], entry)
+    plan, = (c.args[1] for c in publish.journal.apply.call_args_list)
+    assert plan.writes["src/g.c"] == b"int g;\n" and plan.writes["include/x.h"] == b"extern int g;\n"
+    assert {"src/f.c", "src/g.c"} <= set(plan.affected)
+
+
+def test_land_change_set_refuses_every_file_when_one_unit_is_not_exact(lane, monkeypatch):
+    entry = _change_set(lane, {"src/g.c": b"int g;\n", "include/x.h": b"extern int g;\n"})
+    bad = Finding("land.not_exact", "g differs", unit="g", versions=("a",), missing=("bytes",))
+    monkeypatch.setattr(publish, "_proofs", Mock(return_value=(lane["proofs"], (bad,))))
+    with pytest.raises(Refusal) as exc:
+        publish.land(lane["config"], entry)
+    assert [f.unit for f in exc.value.findings] == ["g"]
+    publish.journal.apply.assert_not_called()
 
 
 @pytest.mark.parametrize("same,decompiled", [(True, True), (False, True), (True, False)])
@@ -492,5 +522,5 @@ def test_a_later_layout_option_is_planned_only_when_the_first_does_not_prove(lan
     monkeypatch.setattr(publish.headers, "fold", Mock(return_value=({lane["unit"].path: b"x"}, ())))
     monkeypatch.setattr(publish.view, "get", Mock())
     monkeypatch.setattr(publish.compare, "holders", Mock(return_value=("a",)))
-    taken = publish.plans(lane["snapshot"], lane["unit"], lane["proposed"])
+    taken = publish.plans(lane["snapshot"], lane["unit"], lane["proposed"], {})
     assert next(taken) is first and publish._option_plan.call_count == 1
