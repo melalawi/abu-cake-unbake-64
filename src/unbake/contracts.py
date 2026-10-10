@@ -259,7 +259,7 @@ class Receipt:
 # ---------------------------------------------------------------- flow: inbox
 @dataclass(frozen=True)
 class Submission:
-    """One inbox entry (.unbake/inbox/<id>.json + <id>.c). Submit and compare write it; only land.drain consumes it."""
+    """One inbox entry (.unbake/inbox/<id>.json + <id>.c). land.submit writes it; only land.drain consumes it."""
     id: str  # digest((member, source_sha256, overrides, operation))
     operation: str  # "publish" | "fuzzy"
     member: str
