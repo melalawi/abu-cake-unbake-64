@@ -4,11 +4,13 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shlex
 import shutil
 import tarfile
 import urllib.request
 from bisect import bisect_right
+from itertools import pairwise
 from pathlib import Path
 from string import Template
 from typing import cast
@@ -304,6 +306,21 @@ def _publish(stage: Path, root: Path, owned: Path) -> None:
         store.write(target, source.read_bytes().replace(old, new))
     for stale in (p for p in (root / owned).rglob("*") if p.is_file() and p not in written):
         stale.unlink()
+def _label_tables(asm: Path, segments: list[Json], mask: int) -> None:
+    """A jump table word that lies in a segment under the project's text mask names the label of its target, as the
+    function's own assembly spells it, so a reader of the table needs no knowledge of the mask."""
+    spans = [((s["vram"] & mask), (s["vram"] & mask) + n["start"] - s["start"], s["vram"] & ~mask)
+             for s, n in pairwise(segments) if s.get("vram")]
+    def label(word: re.Match[str]) -> str:
+        value = int(word[2], 16)
+        high = next((h for lo, hi, h in spans if lo <= value < hi), None)
+        return word[0] if high is None else f"{word[1]}.Lauto_{high | value:08X}"
+    def table(block: re.Match[str]) -> str:
+        return re.sub(r"(\.word )0x([0-9A-F]{8})\b", label, block[0])
+    for path in asm.rglob("*.s"):
+        text = path.read_text(errors="replace")
+        if "dlabel jtbl_" in text:
+            path.write_text(re.sub(r"(?ms)^dlabel jtbl_\w+$.*?^enddlabel", table, text))
 def extract(config: Config, version: str) -> NativeResult:
     with effort.stage("build.extract"):
         root = config.project.root
@@ -331,6 +348,9 @@ def extract(config: Config, version: str) -> NativeResult:
                                          "--make-full-disasm-for-code"], root,
                                  tmp=process.scratch(root))
             if result.exit == 0:
+                mask = config.project.build.get("text_mask", _WORD)
+                if mask != _WORD:
+                    _label_tables(Path(options["asm_path"]), document["segments"], mask)
                 _publish(stage, root, Path(options["asm_path"]).relative_to(stage))
                 facts = root / ".unbake" / "symbols" / version
                 facts.mkdir(parents=True, exist_ok=True)

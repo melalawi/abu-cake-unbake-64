@@ -45,8 +45,9 @@ def scan(snapshot: Snapshot) -> bytes:
         return store.cached(snapshot.config, "types-scan", key, lambda: _scan(snapshot))
 def _scan(snapshot: Snapshot) -> bytes:
     names_from = snapshot.config.project.names_from
-    doc: dict[str, Any] = {"schema": int(snapshot.read("types.toml").split(b"=", 1)[1].split(b"\n", 1)[0]),  # a stale file is replaced
-           "struct": {}, "global": {}, "function": {}}
+    stale = snapshot.read("types.toml")  # read without validation: this scan replaces a file the schema refuses
+    schema = int(stale.split(b"=", 1)[1].split(b"\n", 1)[0])
+    doc: dict[str, Any] = {"schema": schema, "struct": {}, "global": {}, "function": {}}
     for name, text in headers.landed(snapshot).items():
         doc["function"][name] = {"signature": text, "evidence": "landed"}
     for name, (_, _, text) in headers.catalog(snapshot, names_from).items():

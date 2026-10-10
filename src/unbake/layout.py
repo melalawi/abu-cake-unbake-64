@@ -505,7 +505,7 @@ def _boundary(snapshot: Snapshot) -> tuple[Plan, Json]:
         for name, was, p in _rows(snapshot, version):
             gap = -p.vram % 4
             cut = p.section in (".data", ".rodata") and version_data.unowned(name) and 0 < gap < p.size
-            retype = p.section == ".data" and was == raw['data'] and version_data.unowned(name) and any(
+            retype = p.section == ".data" and not was.startswith(".") and version_data.unowned(name) and any(
                 p.vram <= a < p.vram + p.size for a in tables)
             state = raw['rodata'] if retype else was  # only read-only data has its jump table words labelled
             data[holder].append((name, state, p))
