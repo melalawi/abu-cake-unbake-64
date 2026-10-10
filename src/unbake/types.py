@@ -4,6 +4,7 @@ import json
 import re
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
 from pycparser import CParser, c_ast, c_generator
 from pycparser.c_parser import ParseError
@@ -92,33 +93,41 @@ def conflicts(snapshot: Snapshot) -> list[Finding]:
     with effort.stage("types.conflicts"):
         return headers.disagreements(snapshot, {n for n, r in load(snapshot)["function"].items()
                                                 if r["evidence"] == "landed"})[1]
+def _signature_jobs(
+        snapshot: Snapshot, names: Sequence[str]) -> tuple[dict[str, str], list[tuple[Any, ...]], list[Finding]]:
+    """The prototypes already known for `names`, the m2c jobs that would find the rest, and why some have no job."""
+    cfg, doc = snapshot.config, load(snapshot)
+    found = {n: doc["function"][n]["signature"] for n in names if n in doc["function"]}
+    toolchains = config.load_resource("toolchains.toml")["toolchain"]
+    jobs, contexts, debt = [], {}, []
+    for name in dict.fromkeys(names):
+        member = snapshot.layout.members.get(name)
+        if name in found or member is None or member.kind != "function":
+            continue
+        version = member.reference(cfg.project.names_from)
+        if version not in contexts:
+            try:
+                ctx = headers.context(snapshot, version)
+                contexts[version] = ctx, digest(ctx.read_bytes())
+            except Refusal as refusal:  # no context: no signatures, never a refusal
+                contexts[version] = None
+                debt.append(Finding("types.m2c", f"no header context for {version}: {refusal.findings[0].reason}",
+                                    blocking=False))
+        if contexts[version] is None:
+            continue
+        unit = layout.unit_of(snapshot, name)
+        asm = snapshot.read(versions.asm_path(cfg, version, name).relative_to(cfg.project.root).as_posix())
+        target = toolchains[unit.toolchain if unit else cfg.project.toolchain]["m2c"]
+        jobs.append((cfg, name, asm, target, *contexts[version], process.tool(cfg, "m2c")))
+    return found, jobs, debt
+def signature_group(snapshot: Snapshot, names: Sequence[str]) -> tuple[Any, ...]:
+    """The pool group (name, function, items, key) finding what `signature` would, to run beside other work."""
+    return "types.m2c", _m2c_job, _signature_jobs(snapshot, names)[1], _m2c_key
 def signature(snapshot: Snapshot, names: Sequence[str]) -> dict[str, str]:
     """Prototypes for named functions: authored/landed ones from types.toml, the rest from m2c (pool, content cache)."""
     with effort.stage("types.signature") as span:
-        cfg, doc = snapshot.config, load(snapshot)
-        found = {n: doc["function"][n]["signature"] for n in names if n in doc["function"]}
-        toolchains = config.load_resource("toolchains.toml")["toolchain"]
-        jobs, contexts, debt = [], {}, []
-        for name in dict.fromkeys(names):
-            member = snapshot.layout.members.get(name)
-            if name in found or member is None or member.kind != "function":
-                continue
-            version = member.reference(cfg.project.names_from)
-            if version not in contexts:
-                try:
-                    ctx = headers.context(snapshot, version)
-                    contexts[version] = ctx, digest(ctx.read_bytes())
-                except Refusal as refusal:  # no context: no signatures, never a refusal
-                    contexts[version] = None
-                    debt.append(Finding("types.m2c", f"no header context for {version}: {refusal.findings[0].reason}",
-                                        blocking=False))
-            if contexts[version] is None:
-                continue
-            unit = layout.unit_of(snapshot, name)
-            asm = snapshot.read(versions.asm_path(cfg, version, name).relative_to(cfg.project.root).as_posix())
-            target = toolchains[unit.toolchain if unit else cfg.project.toolchain]["m2c"]
-            jobs.append((cfg, name, asm, target, *contexts[version], process.tool(cfg, "m2c")))
-        results = pool.map(cfg, "types.m2c", _m2c_job, jobs, _m2c_key)
+        found, jobs, debt = _signature_jobs(snapshot, names)
+        results = pool.map(snapshot.config, "types.m2c", _m2c_job, jobs, _m2c_key)
         span.add(items=len(jobs), findings=[*debt, *(row[3] for row in results if row[3] is not None)])
         found.update({name: sig for name, sig, _output, _finding in results if sig})
         return found

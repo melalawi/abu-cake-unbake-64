@@ -8,7 +8,6 @@ from unbake.contracts import Json
 _NUMBER = r"(?:0[xX][0-9a-fA-F]+|0[bB][01]+|0[0-7]*|[1-9][0-9]*)(?:[uU](?:[lL]{1,2})?|[lL]{1,2}[uU]?)?"
 _OPAQUE = re.compile(r'/\*.*?\*/|//[^\n]*|"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'', re.S)
 _POINTER = r"[A-Za-z_]\w*(?:\s*\[[^;{}]+?\]|\s*(?:->|\.)\s*[A-Za-z_]\w*)*?"
-_IMPURE = re.compile(r"\+\+|--|(?<![=!<>])=(?!=)|\b[A-Za-z_]\w*\s*\(")  # an expression with a side effect or a call
 _ASSIGN = re.compile(rf"\s*({_POINTER})\s*(?:->|\.)\s*words\s*\.\s*w([01])\s*=\s*(.+);\s*", re.S)
 
 
@@ -31,8 +30,16 @@ def _integer(text: str) -> int | None:
     if not re.fullmatch(_NUMBER, text):
         return None
     text = re.sub(r"[uUlL]+$", "", text)
-    prefix = text[:2].lower()
-    return int(text, 16 if prefix == "0x" else 2 if prefix == "0b" else 8 if text.startswith("0") else 10)
+    base = (
+        16
+        if text.lower().startswith("0x")
+        else 2
+        if text.lower().startswith("0b")
+        else 8
+        if text.startswith("0")
+        else 10
+    )
+    return int(text, base)
 
 
 def _word(text: str) -> tuple[int, list[tuple[str, int, int]]] | None:
@@ -66,8 +73,15 @@ def _word(text: str) -> tuple[int, list[tuple[str, int, int]]] | None:
         else:
             expression, mask, shift = match.groups()
         mask, shift = _integer(mask), _integer(shift)
-        if (mask is None or shift is None or mask <= 0 or mask & (mask + 1) or shift > 31 or mask << shift > 0xFFFFFFFF
-                or _IMPURE.search(expression)):
+        if (
+            mask is None
+            or shift is None
+            or mask <= 0
+            or mask & (mask + 1)
+            or shift > 31
+            or mask << shift > 0xFFFFFFFF
+            or re.search(r"\+\+|--|(?<![=!<>])=(?!=)|\b[A-Za-z_]\w*\s*\(", expression)
+        ):
             return None
         if any((m << s) & (mask << shift) for _, m, s in terms) or literal & (mask << shift):
             return None
@@ -81,7 +95,9 @@ def _format(value: int) -> str:
 
 def _value(field: Json, value: str, previous: dict[str, str]) -> str | None:
     number = _integer(value)
-    xor, divisor, bias, scale = (field.get(k, d) for k, d in (("xor", 0), ("divisor", 1), ("bias", 0), ("scale", 1)))
+    xor, divisor, bias, scale = (
+        field.get(k, default) for k, default in (("xor", 0), ("divisor", 1), ("bias", 0), ("scale", 1))
+    )
     if "match" in field:
         return "" if number == field["match"] else None
     if number is not None:
@@ -102,8 +118,13 @@ def _value(field: Json, value: str, previous: dict[str, str]) -> str | None:
         flags = field.get("flags", {})
         if flags:
             remainder = number & ~sum(int(bit) for bit in flags)
-            names = [n for bit, n in flags.items() if number & int(bit)] + ([_format(remainder)] if remainder else [])
-            return " | ".join(names) or "0"
+            return (
+                " | ".join(
+                    [name for bit, name in flags.items() if number & int(bit)]
+                    + ([_format(remainder)] if remainder else [])
+                )
+                or "0"
+            )
         return _format(number)
     if field.get("strict") or "reverse" in field or "subtract" in field:
         return None
@@ -112,7 +133,12 @@ def _value(field: Json, value: str, previous: dict[str, str]) -> str | None:
         if product is None or _integer(product[2]) != divisor:
             return None
         value, divisor = _strip(product[1]), 1
-    for op, amount in (("^", xor), ("/", divisor * (divisor != 1)), ("+", bias), ("*", scale * (scale != 1))):
+    for op, amount in (
+        ("^", xor),
+        ("/", divisor if divisor != 1 else 0),
+        ("+", bias),
+        ("*", scale if scale != 1 else 0),
+    ):
         if amount:
             value = f"({value}) {op} {_format(amount)}"
     return value
@@ -122,7 +148,8 @@ def _decode(row: Json, literal: int, terms: list[tuple[str, int, int]], word1: s
     low = _word(word1)
     if low is None:
         fields = [f for f in row["fields"] if f["word"] == 1 and "constant" not in f]
-        if len(fields) != 1 or (fields[0]["shift"], fields[0]["bits"]) != (0, 32) or _IMPURE.search(word1):
+        pure = not re.search(r"\+\+|--|(?<![=!<>])=(?!=)|\b[A-Za-z_]\w*\s*\(", word1)
+        if len(fields) != 1 or (fields[0]["shift"], fields[0]["bits"]) != (0, 32) or not pure:
             return None
         low = (0, [(_strip(word1), 0xFFFFFFFF, 0)])
     words, covered, used, values = [(literal, terms), low], [0xFF000000, 0], [set(), set()], {}
@@ -180,14 +207,19 @@ def rewrite(text: str) -> tuple[str, int]:
             continue
         if parens:
             continue
-        opens = re.match(rf"\s*{_POINTER}\s*(?:->|\.)\s*words\s*\.\s*w[01]\s*=", masked[start:end])
-        if char == "{" and (braces or opens):
+        if char == "{" and (
+            braces or re.match(rf"\s*{_POINTER}\s*(?:->|\.)\s*words\s*\.\s*w[01]\s*=", masked[start:end])
+        ):
             braces += 1
             continue
         if braces:
             braces -= char == "}"
             continue
-        statements.append((start, end, _ASSIGN.fullmatch(masked[start:end]) if char == ";" else None))
+        if boundary[0] == ";":
+            match = _ASSIGN.fullmatch(masked[start:end])
+            statements.append((start, end, match))
+        else:
+            statements.append((start, end, None))
         start = end
     if variant is None:
         evidence = set()
@@ -201,8 +233,10 @@ def rewrite(text: str) -> tuple[str, int]:
                     evidence.update(microcodes)
         if len(evidence) == 1:
             variant = evidence.pop()
-    opcodes = {op: [row for row, microcode in rows if variant is None or microcode in (None, variant)]
-               for op, rows in encodings.items()}
+    opcodes = {
+        opcode: [row for row, microcode in rows if variant is None or microcode in (None, variant)]
+        for opcode, rows in encodings.items()
+    }
     edits, consumed, count = [], set(), 0
     for index, (start, end, match) in enumerate(statements):
         if index in consumed or match is None or match[2] != "0":
@@ -212,7 +246,7 @@ def rewrite(text: str) -> tuple[str, int]:
             continue
         literal, terms = word
         pointer = re.sub(r"\s+", "", match[1])
-        if _IMPURE.search(pointer):
+        if re.search(r"\+\+|--|(?<![=!<>])=(?!=)|\b[A-Za-z_]\w*\s*\(", pointer):
             continue
         for other in range(index + 1, min(index + 4, len(statements))):
             second_start, second_end, second = statements[other]
