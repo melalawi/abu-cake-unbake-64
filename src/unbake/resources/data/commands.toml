@@ -32,7 +32,7 @@ params = [
   { name = "flag", kind = "option", type = "str", required = false, multiple = true, help = "add one compiler option" },
   { name = "omit-flag", kind = "option", type = "str", required = false, multiple = true, help = "remove one compiler option (with its operand)" },
   { name = "out", kind = "option", type = "path", required = false, multiple = false, help = "new directory for artifacts" },
-  { name = "note", kind = "option", type = "str", required = false, multiple = false, help = "technique tried, recorded with the attempt" },
+  { name = "note", kind = "option", type = "str", required = false, multiple = false, help = "a free-text note recorded with the submission" },
 ]
 
 [command.submit]
@@ -41,7 +41,7 @@ handler = "land.submit_command"
 params = [
   { name = "files", kind = "argument", type = "path", required = true, multiple = true, help = "C sources" },
   { name = "function", kind = "option", type = "str", required = false, multiple = false, help = "member, only with exactly one file" },
-  { name = "note", kind = "option", type = "str", required = false, multiple = false, help = "technique that cracked it" },
+  { name = "note", kind = "option", type = "str", required = false, multiple = false, help = "a free-text note recorded with the submission" },
 ]
 
 [command.land]

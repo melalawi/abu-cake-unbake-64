@@ -9,7 +9,7 @@ retired = [
   { file = "host", key = "cache.memory_bytes", replacement = "", note = "no in-process memo layer" },
   { file = "host", key = "tools.path", replacement = "tools.<name>", note = "every tool is an absolute path" },
   { file = "host", key = "tools.mips_readelf", replacement = "", note = "pyelftools reads objects" },
-  { file = "host", key = "tools.permuter_archive", replacement = "tools.permuter", note = "path of the extracted permuter.py" },
+  { file = "host", key = "tools.permuter_archive", replacement = "", note = "path of the extracted permuter.py" },
   { file = "host", key = "tools.permuter_sha256", replacement = "", note = "the migration verifies it once" },
   { file = "host", key = "setup", replacement = "", note = "setup has no tunables; version extraction runs in the pool" },
   { file = "host", key = "search", replacement = "search --seconds", note = "search bounds are explicit command options" },

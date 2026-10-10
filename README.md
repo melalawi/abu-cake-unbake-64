@@ -16,13 +16,12 @@ Only toolchains that assemble with `n64link` need it. Download it from the
 [abu-mas-n64 releases](https://github.com/melalawi/abu-mas-n64/releases) and set `tools.n64link` in the config.
 A project that needs it and lacks it is refused by name.
 
-Install unbake with splat and m2c in a virtual environment.
+Install unbake with splat in a virtual environment.
 
 ```sh
 python3 -m venv ~/.venvs/unbake
 . ~/.venvs/unbake/bin/activate
 pip install "splat64[mips]==0.50.0" spimdisasm==1.42.4 rabbitizer==1.16.2 \
-  "m2c @ git+https://github.com/matt-kempster/m2c@708d2d2cb2698f091a92492b328f73b24209f72d" \
   git+https://github.com/melalawi/abu-cache-64 \
   git+https://github.com/melalawi/abu-cake-unbake-64
 ```

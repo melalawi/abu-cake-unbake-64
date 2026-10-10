@@ -270,7 +270,7 @@ class Submission:
     base: str  # git HEAD the proofs were measured at
     proofs: tuple[Proof, ...]
     origin: str  # command that submitted: "submit" | "compare" | "check"
-    note: str  # cracker's technique note ("" when none); becomes a project hint row when it lands exact
+    note: str  # free-text note given at submit time ("" when none)
     invocation: str
 # ---------------------------------------------------------------- observability
 @dataclass(frozen=True)
