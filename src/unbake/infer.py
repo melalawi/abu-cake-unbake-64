@@ -36,6 +36,15 @@ def _segment(snapshot: Snapshot, p: Placement) -> str:
     return next(name for name, start, end, _ in snapshot.versions[p.version].segments if start <= p.rom_start < end)
 _WIDTH = {"lb": 1, "lbu": 1, "sb": 1, "lh": 2, "lhu": 2, "sh": 2, "lw": 4, "sw": 4, "lwc1": 4, "swc1": 4,
           "ld": 8, "sd": 8, "ldc1": 8, "sdc1": 8}
+def _shape(text: str) -> str:
+    calls = re.findall(r"\bjal\s+([\w.$]+)", text)
+    references = re.findall(r"%(?:hi|lo)\(([\w.$+]+)\)", text)
+    seen: dict[str, int] = {}
+    evidence = (calls, [seen.setdefault(r, len(seen)) for r in references],
+                re.findall(r"[\s,](-?0x[0-9A-Fa-f]+|-?\d+)\s*(?:$|[,(])", text, re.M))
+    return digest((re.findall(r"^\s*/\*[^*]*\*/\s+([a-z][\w.]*)", text, re.M), evidence)) if any(evidence) else ""
+def _asm(snapshot: Snapshot, version: str, name: str) -> bytes:
+    return snapshot.read(versions.asm_path(snapshot.config, version, name).relative_to(snapshot.config.project.root).as_posix())
 def _scan_job(item) -> list[tuple[str, frozenset[int], frozenset[str], bool, dict[str, Any]]]:
     """Per function of one chunk: the rodata addresses it loads, the functions it calls, whether padding ends it and
     its usage: accesses (address, width, mnemonic, how, base), calls (callee, ((argument, value),)), argument
@@ -114,7 +123,8 @@ def _scan_job(item) -> list[tuple[str, frozenset[int], frozenset[str], bool, dic
         zeros = len(words) - next((i for i, w in enumerate(reversed(words)) if w), len(words))
         padding = len(words) - zeros - (1 if zeros and words[zeros - 1] == 0x03E00008 else 0)
         out.append((name, frozenset(loads), frozenset(callees), bool(zeros and padding > 0),
-                    {"mask": _masked(code), **{key: sorted(found, key=repr) for key, found in use.items()}}))
+                    {"mask": _masked(code), "shape": _shape(_asm(snapshot, version, name).decode(errors="replace")),
+                     **{key: sorted(found, key=repr) for key, found in use.items()}}))
     return out
 def _evidence(snapshot, functions, version, cap, scanned):
     held = [(m, p) for m in functions for p in m.placements if p.version == version and p.section == ".text"]
@@ -276,7 +286,7 @@ _PASSES = 3  # rows from claims, claims on those rows, and one pass that proves 
 def _scan_key(item) -> str:
     snapshot, version, rows, addresses, spans = item
     return digest((snapshot.versions[version].rom_sha256, snapshot.versions[version].symbols.get("_gp"), rows,
-                   addresses, spans, _CODE))
+                   addresses, spans, [_asm(snapshot, version, n) for n, _ in rows], _CODE))
 def _masks(snapshot: Snapshot, wanted) -> dict[str, tuple[list[str], list[bytes]]]:
     return {v: ([r[0] for r in rows], [r[4]["mask"] for r in rows])
             for v, rows in scan(snapshot).items() if v in wanted}
@@ -313,16 +323,14 @@ def pairs(snapshot: Snapshot, directions: Sequence[tuple[str, str]]) -> dict[tup
         return dict(zip(directions, found, strict=True))
 def _votes_key(job: Any) -> str:
     snapshot, a, b, rows = job
-    return digest((a, b, [(snapshot.read(versions.asm_path(snapshot.config, v, n).relative_to(
-        snapshot.config.project.root).as_posix())) for left, right in rows for v, n in ((a, left), (b, right))]))
+    return digest((a, b, [_asm(snapshot, v, n) for left, right in rows for v, n in ((a, left), (b, right))]))
 def _votes_job(item) -> Counter:
     snapshot, a, b, rows = item
     counts: Counter = Counter()
     for left, right in rows:
         operands = []
         for v, name in ((a, left), (b, right)):
-            path = versions.asm_path(snapshot.config, v, name)
-            text = snapshot.read(path.relative_to(snapshot.config.project.root).as_posix()).decode()
+            text = _asm(snapshot, v, name).decode()
             operands.append([next(x for x in match if x) for match in _OPERANDS.findall(text)])
         if len(operands[0]) == len(operands[1]):
             counts.update((x, y) for x, y in zip(*operands, strict=True) if x != y)
