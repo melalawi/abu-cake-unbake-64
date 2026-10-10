@@ -66,6 +66,10 @@ sentence = "a local declaration disagrees with a header"
 owner = "headers"
 sentence = "the preprocessed source cannot be parsed"
 
+[key."land.view-conversion"]
+owner = "adapters"
+sentence = "the compiler converted between an integer and a pointer without a cast"
+
 [key."types.conflict"]
 owner = "headers"
 sentence = "a name is declared with different types and no source defines it"

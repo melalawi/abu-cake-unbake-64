@@ -165,6 +165,10 @@ class TemplateToolchain:
             start = stderr.rfind("\n", 0, match.start()) + 1
             end = stderr.find("\n", match.end())
             return (Finding("preprocess.error", reason=stderr[start:end if end >= 0 else None].strip()),)
+        for line in stderr.splitlines():
+            if any(re.search(warning, line) for warning in self.row["refused_warnings"]):
+                return (Finding("land.view-conversion", reason=line.strip(),
+                                action="type the variable as the pointer it holds"),)
         return ()
     @staticmethod
     def _raise(findings: tuple[Finding, ...]) -> None:

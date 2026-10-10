@@ -146,6 +146,13 @@
        "type": "string",
        "minLength": 1
       }
+     },
+     "refused_warnings": {
+      "type": "array",
+      "items": {
+       "type": "string",
+       "minLength": 1
+      }
      }
     },
     "required": [
@@ -163,7 +170,8 @@
      "pins",
      "downloads",
      "preprocess",
-     "compile"
+     "compile",
+     "refused_warnings"
     ],
     "additionalProperties": false,
     "oneOf": [

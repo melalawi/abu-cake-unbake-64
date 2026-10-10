@@ -23,6 +23,7 @@ TOOLCHAIN_ROW = {
     "splat": "splat",
     "emits_asm": False,
     "preserves_padding": True,
+    "refused_warnings": ["makes pointer from integer without a cast", "from incompatible pointer type"],
     "paired": [],
     "preprocessor_options": ["-D", "-U", "-I"],
     "small_data": [8],
