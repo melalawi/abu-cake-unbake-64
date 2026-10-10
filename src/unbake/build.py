@@ -274,7 +274,7 @@ def _text_spans(snapshot: Snapshot, version: str) -> list[tuple[int, int]]:
         return merged
     return effort.memo(("spans", snapshot.digest, version), spans)
 def _split_input(text: str):
-    document, changed = yaml.safe_load(text), False
+    document = yaml.load(text, Loader=yaml.CSafeLoader)
     for segment in document["segments"]:
         if not isinstance(segment, dict):
             continue
@@ -288,9 +288,8 @@ def _split_input(text: str):
             bounded = "/".join(part if len(part.encode()) <= 240 else
                                part.encode()[:180].decode(errors="ignore") + "_" +
                                hashlib.sha256(part.encode()).hexdigest()[:16] for part in name.split("/"))
-            if bounded != name:
-                row[key], changed = bounded, True
-    return document if changed else None
+            row[key] = bounded
+    return document
 _READ_PATHS = ("target_path", "symbol_addrs_path", "reloc_addrs_path", "extensions_path")
 _UNTOUCHED = ("base_path", "data_path", "nonmatchings_path", "matchings_path")
 def _publish(stage: Path, root: Path, owned: Path) -> None:
@@ -326,7 +325,7 @@ def extract(config: Config, version: str) -> NativeResult:
     with effort.stage("build.extract"):
         root = config.project.root
         split = root / config.project.version_files[version].split
-        document = _split_input(split.read_text()) or yaml.safe_load(split.read_text())
+        document = _split_input(split.read_text())
         with store.work(config) as work:
             stage = work / "tree"
             options = document.setdefault("options", {})

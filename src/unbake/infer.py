@@ -44,7 +44,8 @@ def _shape(text: str) -> str:
                 re.findall(r"[\s,](-?0x[0-9A-Fa-f]+|-?\d+)\s*(?:$|[,(])", text, re.M))
     return digest((re.findall(r"^\s*/\*[^*]*\*/\s+([a-z][\w.]*)", text, re.M), evidence)) if any(evidence) else ""
 def _asm(snapshot: Snapshot, version: str, name: str) -> bytes:
-    return snapshot.read(versions.asm_path(snapshot.config, version, name).relative_to(snapshot.config.project.root).as_posix())
+    path = versions.asm_path(snapshot.config, version, name).relative_to(snapshot.config.project.root)
+    return snapshot.read(path.as_posix())
 def _scan_job(item) -> list[tuple[str, frozenset[int], frozenset[str], bool, dict[str, Any]]]:
     """Per function of one chunk: the rodata addresses it loads, the functions it calls, whether padding ends it and
     its usage: accesses (address, width, mnemonic, how, base), calls (callee, ((argument, value),)), argument

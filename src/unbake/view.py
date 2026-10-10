@@ -186,3 +186,15 @@ def active_lines(view: SourceView, path: str) -> dict[int, str]:
     with effort.stage("view.active_lines"):
         text = view.text.splitlines()
         return {source: text[output - 1] for output, file, source in view.lines if file == path}
+
+def diagnostic(snapshot: Snapshot, unit: UnitSpec, version: str, recipe: Recipe, text: str) -> str:
+    """Map physical view lines and out-of-file coordinates; valid source coordinates stay source coordinates."""
+    def fix(match: re.Match[str]) -> str:
+        path, _ = _path(match[1], snapshot.config.project.root.resolve(), None)
+        line, raw = int(match[2]), snapshot.peek(path)
+        if not path.endswith(".i") and (raw is None or line <= len(raw.splitlines())):
+            return f"{path}:{line}"
+        source = get(snapshot, unit, version, recipe)
+        path, line = next(((p, n) for output, p, n in source.lines if output == line), (path, line))
+        return f"{path}:{line}"
+    return re.sub(r"([\w./-]+):(\d+)", fix, text)

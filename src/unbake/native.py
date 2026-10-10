@@ -289,6 +289,6 @@ def prove(snapshot: Snapshot, unit: UnitSpec, version: str, recipe: Recipe,
         except Refusal as refusal:
             if any(f.key == "native.missing_tool" for f in refusal.findings):
                 raise
-            missing = tuple(f"version {version}: {finding.key}: {finding.reason}"
-                            for finding in refusal.findings)
+            missing = tuple(f"version {version}: {finding.key}: " + view.diagnostic(
+                snapshot, unit, version, recipe, finding.reason) for finding in refusal.findings)
             return _gaps(snapshot, unit, version, recipe, object_sha, missing)
