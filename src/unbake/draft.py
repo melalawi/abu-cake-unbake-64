@@ -97,15 +97,23 @@ def _data_text(snapshot: Snapshot, entry: Member, version: str) -> str:
     symbol = reverse.get(placements[0].vram) or f"D_{placements[0].vram:08X}"  # a C name, not the member path
     return "\n".join([*head, f"{qualifier}{kind} {symbol}[] = {{", *lines, "};", ""])
 
+def _text_starts(snapshot: Snapshot) -> dict[tuple[str, int], str]:
+    """The first member whose text starts at each (version, ROM offset), built once per command."""
+    def build() -> dict[tuple[str, int], str]:
+        starts: dict[tuple[str, int], str] = {}
+        for name, member in snapshot.layout.members.items():
+            for p in member.placements:
+                if p.section == ".text":
+                    starts.setdefault((p.version, p.rom_start), name)
+        return starts
+    return effort.memo(("text-starts", snapshot.digest), build)  # type: ignore[return-value]
 def split_slot(snapshot: Snapshot, member: str) -> str | None:
     """The member holding the delay slot of `member`'s last instruction when that slot lies outside it."""
     for place in snapshot.layout.members[member].placements:
         version = snapshot.versions[place.version]
         if place.section == ".text" and place.size >= 4 and versions.delay_slot(
                 int.from_bytes(versions.rom_bytes(version, place.rom_end - 4, place.rom_end), "big")):
-            return next((n for n, m in snapshot.layout.members.items() if any(
-                p.version == place.version and p.section == ".text" and p.rom_start == place.rom_end
-                for p in m.placements)), "an unowned range")
+            return _text_starts(snapshot).get((place.version, place.rom_end), "an unowned range")
     return None
 def refuse_fragment(snapshot: Snapshot, member: str) -> None:
     successor = split_slot(snapshot, member)

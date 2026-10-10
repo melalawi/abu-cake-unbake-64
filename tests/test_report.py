@@ -175,14 +175,14 @@ def test_items_order_rank_state_size(snapshot_factory, monkeypatch):
     seconds = configuration.load_resource("flow.toml")["work"]["permuter_seconds"]
     for row in rows:
         name = row["member"]
-        assert row["best"] == (.4 if name == "fuzzy" else .8)
+        assert row["best"] == (.4 if name == "fuzzy" else 0.0 if row["state"] == "open" else .8)
         command = (f"unbake crack {name} --seconds {seconds}" if row["state"] in ("open", "tool")
                    else f"unbake compare .unbake/work/{name}.c --function {name}")
         assert row["command"] == command
         if row["state"] == "creative":
             assert row["packet"] == f".unbake/packets/{name}.json"
     assert all(c.args[0] is snapshot.config for c in history.call_args_list)
-    assert "fuzzy" not in [c.args[1] for c in history.call_args_list]
+    assert not {"fuzzy", "large", "late", "z_tie", "a_tie"} & {c.args[1] for c in history.call_args_list}  # no file, no read
     assert [r["member"] for r in report.items(snapshot, {"subsystem": "sdk"})] == ["sdk_creative"]
 
 
@@ -236,7 +236,7 @@ def test_items_count(snapshot_factory, monkeypatch, count):
     rows = report.items(snapshot, {"count": count})
     assert len(rows) == (3 if count is None else min(count, 3))
     assert [r["member"] for r in rows] == [f"m{i}" for i in range(len(rows))]
-    assert history.call_count == len(rows)
+    history.assert_not_called()  # an open member has no attempts file to read
 
 
 @pytest.mark.parametrize("subsystem", ["not-a-subsystem", "", 1, True])

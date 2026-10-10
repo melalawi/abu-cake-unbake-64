@@ -110,6 +110,7 @@ def items(snapshot: Snapshot, params: Json) -> list[Json]:
         for row in rows[:count]:
             name = row["member"]
             row["best"] = (min(snapshot.layout.fuzzy[name]["scores"].values()) if row["state"] == "fuzzy"
+                           else 0.0 if row["state"] == "open"  # no attempts file, so no history to read
                            else max((a.score for a in crack.history(snapshot.config, name)), default=0.0))
             source = row.pop("source")  # a withheld member has source: compare it, never crack it
             row["command"] = (f"unbake compare {source} --function {name}" if source

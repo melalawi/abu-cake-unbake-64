@@ -32,9 +32,9 @@ def _attempts(member: str) -> str:
 def state(snapshot: Snapshot, member: str) -> str:
     if member in snapshot.layout.fuzzy:
         return "fuzzy"
-    root = snapshot.config.project.root / ".unbake"
-    return "creative" if (root / f"packets/{store.stem(member)}.json").exists() else (
-        "tool" if (root / f"{_attempts(member)}.jsonl").exists() else "open")
+    stem, config = store.stem(member), snapshot.config
+    return "creative" if f"{stem}.json" in store.listing(config, "packets") else (
+        "tool" if f"{stem}.jsonl" in store.listing(config, "attempts") else "open")
 
 def history(config: Config, member: str) -> list[Attempt]:
     with effort.stage("crack.history"):

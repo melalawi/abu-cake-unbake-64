@@ -10,7 +10,7 @@ import fixture
 import pytest
 
 from unbake import config as configuration
-from unbake import crack
+from unbake import crack, effort
 from unbake.contracts import (
     Config,
     Group,
@@ -144,10 +144,12 @@ def test_state_derivation(lane):
     attempts = root / f"attempts/{MEMBER}.jsonl"
     attempts.parent.mkdir(parents=True)
     attempts.touch()
+    effort.forget("listing")
     assert crack.state(snapshot, MEMBER) == "tool"
     packet = root / f"packets/{MEMBER}.json"
     packet.parent.mkdir()
     packet.touch()
+    effort.forget("listing")
     assert crack.state(snapshot, MEMBER) == "creative"
     fuzzy = replace(snapshot, layout=replace(snapshot.layout, fuzzy={MEMBER: {}}))
     assert crack.state(fuzzy, MEMBER) == "fuzzy"

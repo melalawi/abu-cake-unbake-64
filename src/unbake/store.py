@@ -34,7 +34,7 @@ def write(path: Path, content: bytes) -> bool:
     part = path.with_name(f"{path.name}.{uuid.uuid4().hex}.part")
     part.write_bytes(content)
     part.replace(path)
-    effort.forget("pin", "includes", "edges", "closure")  # the memoised reads of project files are stale now
+    effort.forget("pin", "includes", "edges", "closure", "listing")  # the memoised reads of project files are stale now
     return True
 def content(config: Config) -> ContentCache:
     """The project's content cache, in .unbake/cache, limited by the host's cache.max_bytes."""
@@ -74,6 +74,10 @@ def _stream_path(config: Config, stream: str) -> Path:
     if not _STREAM.match(stream) or any(part in {".", ".."} for part in stream.split("/")):
         raise Refusal(Finding("store.corrupt", f"bad stream name {stream!r}"))
     return config.project.root / ".unbake" / f"{stream}.jsonl"
+def listing(config: Config, folder: str) -> frozenset[str]:
+    """The file names in .unbake/<folder>, read once per command: a thousand questions about files are one listing."""
+    path = f"{config.project.root}/.unbake/{folder}"
+    return effort.memo(("listing", path), lambda: frozenset(os.listdir(path)) if os.path.isdir(path) else frozenset())
 def append(config: Config, stream: str, row: Json) -> None:
     """Append one JSON line to .unbake/<stream>.jsonl as a single O_APPEND write under an exclusive lock."""
     path = _stream_path(config, stream)
@@ -81,6 +85,7 @@ def append(config: Config, stream: str, row: Json) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with _flock(path.with_name(path.name + ".lock"), fcntl.LOCK_EX), path.open("ab") as stream:
         stream.write(line.encode())
+    effort.forget("listing")
 def rows(config: Config, stream: str) -> list[Json]:
     """Read every line of .unbake/<stream>.jsonl; a line that does not parse refuses with store.corrupt."""
     path = _stream_path(config, stream)
