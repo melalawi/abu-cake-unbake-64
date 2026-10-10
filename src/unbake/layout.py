@@ -193,8 +193,10 @@ def asm_unit(snapshot: Snapshot, member: str, version: str) -> UnitSpec:
 def _edit(text: bytes, name: str, *, state: str | None = None, start: int | None = None,
           rename: str | None = None, additions: tuple[tuple[int, str], ...] = (), drop: bool = False,
           types: frozenset[str] | None = None) -> bytes:
-    lines = text.decode().splitlines(keepends=True)
-    for index, line in enumerate(lines):
+    body = text.decode()
+    for hit in re.finditer(re.escape(name), body):
+        lo, hi = body.rfind("\n", 0, hit.start()) + 1, body.find("\n", hit.end())
+        line = body[lo:len(body) if hi < 0 else hi + 1]
         match = _LINE.match(line.rstrip("\r\n"))
         if not match or match[7] != name:
             continue
@@ -217,8 +219,7 @@ def _edit(text: bytes, name: str, *, state: str | None = None, start: int | None
             if replacement and not replacement[-1].endswith("\n"):
                 replacement[-1] += "\n"
             replacement.append("".join(added) + ending)
-        lines[index:index + 1] = replacement
-        return "".join(lines).encode()
+        return (body[:lo] + "".join(replacement) + body[lo + len(line):]).encode()
     raise Refusal(Finding("layout.member", reason="member has no editable subsegment line", unit=name))
 def _claim_row(version: Version, rows: list[list], names: set[str], c: Claim) -> bool:
     """Make the claim's bytes one row named by the claim: the rows it covers are replaced, the row it starts inside
@@ -411,7 +412,8 @@ def _rename(name: str, old: int, new: int) -> str:
 def boundary_plan(snapshot: Snapshot) -> tuple[Plan, Json]:
     """The plan is a function of the snapshot and this code, so one computation serves every later command."""
     with effort.stage("layout.boundary_plan"):
-        key = digest((dump_map(replace(snapshot.layout, fuzzy={})), snapshot.config.digest, snapshot.read(symbols.path()),
+        key = digest((dump_map(replace(snapshot.layout, fuzzy={})), snapshot.config.digest,
+                      snapshot.read(symbols.path()),
                       [(v.id, v.rom_sha256, snapshot.read(v.split), version_data.facts_digest(v))
                        for v in snapshot.versions.values()], _code()))
         return pickle.loads(store.cached(snapshot.config, "boundary", key, lambda: pickle.dumps(_boundary(snapshot))))

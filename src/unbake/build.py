@@ -275,20 +275,18 @@ def _text_spans(snapshot: Snapshot, version: str) -> list[tuple[int, int]]:
     return effort.memo(("spans", snapshot.digest, version), spans)
 def _split_input(text: str):
     document = yaml.load(text, Loader=yaml.CSafeLoader)
-    for segment in document["segments"]:
-        if not isinstance(segment, dict):
+    rows = [row for s in document["segments"] if isinstance(s, dict) for row in [s, *s.get("subsegments", [])]]
+    for row in rows:
+        key = "name" if isinstance(row, dict) else 2
+        if (isinstance(row, dict) and key not in row) or (isinstance(row, list) and len(row) < 3):
             continue
-        for row in [segment, *segment.get("subsegments", [])]:
-            key = "name" if isinstance(row, dict) else 2
-            if (isinstance(row, dict) and key not in row) or (isinstance(row, list) and len(row) < 3):
-                continue
-            name = row[key]
-            if not isinstance(name, str):
-                continue
-            bounded = "/".join(part if len(part.encode()) <= 240 else
-                               part.encode()[:180].decode(errors="ignore") + "_" +
-                               hashlib.sha256(part.encode()).hexdigest()[:16] for part in name.split("/"))
-            row[key] = bounded
+        name = row[key]
+        if not isinstance(name, str):
+            continue
+        bounded = "/".join(part if len(part.encode()) <= 240 else
+                           part.encode()[:180].decode(errors="ignore") + "_" +
+                           hashlib.sha256(part.encode()).hexdigest()[:16] for part in name.split("/"))
+        row[key] = bounded
     return document
 _READ_PATHS = ("target_path", "symbol_addrs_path", "reloc_addrs_path", "extensions_path")
 _UNTOUCHED = ("base_path", "data_path", "nonmatchings_path", "matchings_path")
