@@ -18,7 +18,6 @@ from unbake.contracts import Claim, Finding, Refusal, Snapshot, UnitSpec, digest
 
 _WORD = 0xFFFFFFFF
 _MANY = 16  # more equal ranges than this are ambiguous without counting them all
-_CODE = digest(Path(__file__).read_bytes())  # cached placements are only valid for the code that made them
 def _classes() -> dict[str, str]:
     """Input section name -> output section, for every allocated non-zero section but text (units.toml)."""
     rows = config.load_resource("units.toml")["section"]
@@ -171,7 +170,7 @@ def _job_key(item: tuple[Snapshot, UnitSpec, str | None]) -> str | None:
     held = sorted({v for n in unit.members for v in snapshot.layout.members[n].holders()} & ({only} if only else
                   set(snapshot.versions)))
     stamps = [native.stamp(snapshot, unit, v) for v in held]
-    return None if None in stamps else digest((stamps, [_index(snapshot, v)[4] for v in held], _CODE))
+    return None if None in stamps else digest((stamps, [_index(snapshot, v)[4] for v in held]))
 def _job(item: tuple[Snapshot, UnitSpec, str | None]) -> dict[str, dict | str]:
     snapshot, unit, only = item
     cfg, recipe, out = snapshot.config, recipes.resolve(snapshot.config, unit, {}), {}
@@ -352,6 +351,8 @@ def _derived(snapshot: Snapshot, unit: UnitSpec, result: dict[str, Any]) -> tupl
         snapshot = layout.overlay(snapshot, {**rows, "layout.toml": layout.dump_map(replace(snapshot.layout,
                                                                                           units=units))})
     return snapshot, owned
+def _stamp_key(item: tuple[Snapshot, UnitSpec, str]) -> str | None:
+    return native.stamp(*item)
 def _exact_job(item: tuple[Snapshot, UnitSpec, str]) -> str:
     proofs = native.prove_job(item)
     gap = next((m for p in proofs for m in p.missing), "no measurement")
@@ -364,7 +365,7 @@ def exact(snapshot: Snapshot, units: dict[str, UnitSpec]) -> tuple[dict[str, Uni
         trial = replace(snapshot, layout=replace(snapshot.layout, units=units), digest=digest((snapshot.digest, units)))
         jobs = [(trial, u, v) for u in units.values() if "compile" in phases[u.kind]["phases"]
                 for v in sorted({v for n in u.members for v in snapshot.layout.members[n].holders()} - set(u.withheld))]
-        gaps = pool.map(snapshot.config, "layout.exactness", _exact_job, jobs, lambda j: native.stamp(*j))
+        gaps = pool.map(snapshot.config, "layout.exactness", _exact_job, jobs, _stamp_key)
         lost: dict[str, set[str]] = defaultdict(set)
         debt: dict[str, list[str]] = defaultdict(list)
         for (_, unit, version), gap in zip(jobs, gaps, strict=True):

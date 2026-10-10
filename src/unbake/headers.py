@@ -3,7 +3,6 @@
 import re
 from collections.abc import Collection
 from copy import deepcopy
-from pathlib import Path
 
 from pycparser import CParser, c_ast, c_generator
 from pycparser.c_parser import ParseError
@@ -11,7 +10,6 @@ from pycparser.c_parser import ParseError
 from unbake import effort, pool, types
 from unbake.contracts import Finding, Refusal, Snapshot, SourceView, UnitSpec, digest
 
-_CODE = digest(Path(__file__).read_bytes())
 
 def _blank(text):
     return re.sub(r'/\*.*?\*/|//[^\n]*',
@@ -89,7 +87,7 @@ def _file_job(item) -> dict:
     defined = _DEFINITION.findall(_blank(code)) if source else []
     return {'declared': (_externs if source else _declared)(code), 'defined': defined}
 def _file_key(item) -> str:
-    return digest((*item, _CODE))  # the file bytes, how it is read and the code that reads it
+    return digest(item)  # the file bytes and how it is read
 
 def _scanned(snapshot: Snapshot, paths: list[str]) -> list[dict]:
     return pool.map(snapshot.config, 'headers.catalog', _file_job,

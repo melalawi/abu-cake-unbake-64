@@ -9,6 +9,7 @@ import pickle
 import resource
 import shutil
 import signal
+import sys
 import tempfile
 import threading
 import time
@@ -139,26 +140,44 @@ def _raise_failure(config: Config, name: str, index: int, exc: Any) -> None:
         + "".join(f" {note}" for note in getattr(exc, "__notes__", ())),
         origin=config.host.origins["resources.memory_worker_bytes"] if memory else None,
     )) from exc
+_IDENTITIES: dict[str, str] = {}
+def _identity(function: Callable[..., Any]) -> str:
+    """The digest of the source of the module that defines `function`, read once per process: a job whose module
+    changed has no warm results, so no caller names the code of its own job function. A built-in has no source."""
+    module = getattr(function, "__module__", None) or "builtins"
+    if module not in _IDENTITIES:
+        path = getattr(sys.modules.get(module), "__file__", None)
+        _IDENTITIES[module] = digest(Path(path).read_bytes() if path else module)
+    return _IDENTITIES[module]
+def _keys(key: Callable[[Any], str | None], items: Sequence[Any], identity: str) -> list[str | None]:
+    return [None if (named := key(item)) is None else digest((named, identity)) for item in items]
+def _keys_dispatch(blob: bytes) -> list[str | None]:
+    return _keys(*_Unpickler(io.BytesIO(blob)).load())
 class _Run:
     """One group of a gather: its items, the cache keys of those, and the indexes the workers must still compute."""
-    def __init__(self, config: Config, name: str, function: Callable, items: Sequence,
+    def __init__(self, name: str, function: Callable[..., Any], items: Sequence[Any],
                  key: Callable[[Any], str | None] | None = None):
         self.name, self.function, self.items, self.key = name, function, items, key
         self.sealed = False
         self.outcomes: list[tuple[bool, Any, Json] | None] = [None] * len(items)
-        self.keys = [key(item) for item in items] if key else []
+        self.keys: list[str | None] = []
+        self.whole: str | None = None
         self.todo = list(range(len(items)))
-        self.whole = digest(self.keys) if key and None not in self.keys else None
-        if key:  # the parent resolves hits itself: a warm item never travels to a worker
-            blob = self.whole and store.get(config, name + ".group", self.whole)  # a fully warm group is one entry
-            self.sealed = bool(blob)  # a group warm entry by entry is sealed too, so the next run reads one entry
-            warm = pickle.loads(blob) if blob else [k and store.get(config, name, k) for k in self.keys]
-            for index, found in enumerate(warm):
-                effort.count(name, found is not None)
-                if found is not None:
-                    self.outcomes[index] = (True, pickle.loads(found), {})
-            self.todo = [i for i, outcome in enumerate(self.outcomes) if outcome is None]
-        self.submitted, self.done = 0, len(items) - len(self.todo)
+        self.submitted, self.done = 0, 0
+    def resolve(self, config: Config, keys: list[str | None]) -> None:
+        """With its keys known, the parent resolves the hits itself: a warm item never travels to a worker."""
+        self.keys = keys
+        self.whole = digest(keys) if None not in keys else None
+        # a fully warm group is one entry
+        blob = store.get(config, self.name + ".group", self.whole) if self.whole else None
+        self.sealed = bool(blob)  # a group warm entry by entry is sealed too, so the next run reads one entry
+        warm = pickle.loads(blob) if blob else [k and store.get(config, self.name, k) for k in keys]
+        for index, found in enumerate(warm):
+            effort.count(self.name, found is not None)
+            if found is not None:
+                self.outcomes[index] = (True, pickle.loads(found), {})
+        self.todo = [i for i, outcome in enumerate(self.outcomes) if outcome is None]
+        self.done = len(self.items) - len(self.todo)
     def seal(self, config: Config) -> None:
         if self.whole and (self.todo or not self.sealed) and all(o and o[0] for o in self.outcomes):
             blobs = [pickle.dumps(o[1], protocol=5) for o in self.outcomes]
@@ -170,6 +189,31 @@ class _Run:
             self.outcomes[index] = outcome
         self.done += len(picked)
         effort.progress(self.name, self.done, len(self.items))
+def _resolve(config: Config, runs: Sequence[_Run]) -> None:
+    """The keys of every keyed group, computed by the workers in chunks (the parent only when there is a single item
+    or it is itself a worker), then each group's hits."""
+    keyed = [(r, r.key) for r in runs if r.key]
+    if sum(len(r.items) for r, _ in keyed) <= 1 or _in_worker:
+        for run, key in keyed:
+            run.resolve(config, _keys(key, run.items, _identity(run.function)))
+        return
+    executor, width, futures = _get_executor(config), config.host.workers, []
+    for run, key in keyed:
+        size, identity = max(1, len(run.items) // (width * 32)), _identity(run.function)
+        for lo in range(0, len(run.items), size):
+            stream = io.BytesIO()
+            _Pickler(stream, protocol=5).dump((key, run.items[lo:lo + size], identity))
+            futures.append((run, executor.submit(_keys_dispatch, stream.getvalue())))
+    found: dict[int, list[str | None]] = {id(run): [] for run, _ in keyed}
+    for run, future in futures:
+        try:
+            found[id(run)].extend(future.result())
+        except (BrokenProcessPool, Refusal):
+            raise
+        except Exception as exc:
+            _raise_failure(config, run.name, 0, exc)
+    for run, _ in keyed:
+        run.resolve(config, found[id(run)])
 def map(config: Config, name: str, function: Callable[[Any], Any], items: Sequence[Any],
         key: Callable[[Any], str | None] | None = None) -> list[Any]:
     return gather(config, [(name, function, items, key)])[0]
@@ -178,9 +222,11 @@ def gather(config: Config, groups: Sequence[tuple]) -> list[list[Any]]:
     workers. A keyed group resolves its cache hits in the parent and dispatches only its misses."""
     with effort.stage("pool.map"):
         start_ns, waited, current = time.monotonic_ns(), 0.0, (0, 0)
-        runs = [_Run(config, *group) for group in groups]
-        total, admitted = sum(len(r.todo) for r in runs), 0
+        runs = [_Run(*group) for group in groups]
+        total, admitted = 0, 0
         try:
+            _resolve(config, runs)
+            total = sum(len(r.todo) for r in runs)
             inline = total <= 1 or _in_worker  # nothing to fan out: the jobs run here, one at a time
             width, floor, pending = 1 if inline else config.host.workers, config.host.serial_seconds, {}
             admitted = 0 if inline else width

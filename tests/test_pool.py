@@ -1,4 +1,5 @@
 """Bounded ordered maps, metrics, and progress using futures and forkserver."""
+import io
 import os
 import pickle
 import sys
@@ -20,6 +21,18 @@ _RAISED = ValueError("unset")
 
 def _fail(value):  # module level: items and functions travel to workers through a pickle
     raise _RAISED
+
+
+_RAN: list[int] = []
+
+
+def _record(value):
+    _RAN.append(value)  # inline in the parent here: the pool runs a group of two in this process or a worker
+    return value
+
+
+def _name(value):
+    return str(value)
 
 
 def _square(value):
@@ -305,3 +318,28 @@ def test_a_worker_crash_names_the_type_and_the_innermost_unbake_frame(tmp_path):
     with pytest.raises(Refusal) as raised:
         pool._raise_failure(_config(tmp_path), "stage", 3, error)
     assert "TypeError" in raised.value.findings[0].reason and "at view:_sha:" in raised.value.findings[0].reason
+
+
+def test_an_equal_key_from_a_changed_module_is_cold(tmp_path, monkeypatch, mocked_parallel):
+    config, ran = _config(tmp_path), _RAN
+    ran.clear()
+    monkeypatch.setattr(pool, "_IDENTITIES", {__name__: "one"})
+    pool.map(config, "units", _record, [1, 2], key=_name)
+    pool.map(config, "units", _record, [1, 2], key=_name)
+    assert ran == [1, 2]  # the second run is warm
+    monkeypatch.setattr(pool, "_IDENTITIES", {__name__: "two"})
+    pool.map(config, "units", _record, [1, 2], key=_name)
+    assert ran == [1, 2, 1, 2]
+
+
+def test_the_key_pass_dispatches_chunks_and_the_parent_computes_no_key(tmp_path, monkeypatch, mocked_parallel):
+    config, chunks, parent = _config(tmp_path), [], []
+    def dispatched(blob):
+        items = pool._Unpickler(io.BytesIO(blob)).load()[1]
+        chunks.append(len(items))
+        return [str(item) for item in items]
+    monkeypatch.setattr(pool, "_keys_dispatch", dispatched)
+    monkeypatch.setattr(pool, "_keys", lambda key, items, identity: parent.append(len(items)))
+    items = list(range(640))
+    pool.map(config, "units", _square, items, key=_name)
+    assert sum(chunks) == 640 and 1 < len(chunks) < 640 and parent == []

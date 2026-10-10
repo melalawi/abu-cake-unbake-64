@@ -11,6 +11,7 @@ from dataclasses import replace
 from functools import cache
 from pathlib import Path
 from string import Template
+from typing import Any
 
 import rabbitizer
 import yaml
@@ -201,13 +202,15 @@ def files(snapshot: Snapshot) -> dict[str, bytes]:
         return wanted
 def _extract_job(job):
     return build.extract(*job)
+def _prove_key(job: Any) -> str | None:
+    return native.stamp(*job)
 def _prove(snapshot: Snapshot, versions) -> dict:
     owned = {m for unit in snapshot.layout.units.values() for m in unit.members}
     jobs = [(snapshot, layout.asm_unit(snapshot, m.name, v), v) for m in snapshot.layout.members.values()
             if m.kind == "function" and m.name not in owned for v in m.holders() if v in versions]
     counts, missing, bad = {v: {"members": 0, "exact": 0, "bytes": 0} for v in versions}, [], []
     for (_, unit, v), proofs in zip(jobs, pool.map(snapshot.config, "repo.prove", native.prove_job, jobs,
-                                                   lambda job: native.stamp(*job)), strict=True):
+                                                   _prove_key), strict=True):
         member = unit.members[0]
         exact = bool(proofs) and all(p.exact for p in proofs)
         counts[v]["members"] += 1

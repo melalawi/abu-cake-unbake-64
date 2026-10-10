@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import csv
 import hashlib
-import inspect
 import io
 import mmap
 import os
@@ -90,14 +89,13 @@ def fact_files(config: Config, vid: str) -> tuple[list[str], list[str]]:
     found = [f"{top}/{name}"[len(base) + 1:] for top, _, names in os.walk(f"{base}/asm/{vid}")
              for name in names if name.endswith(".s")]
     return autos, sorted(found)
-_CODE = digest(inspect.getsource(_asm_symbols))  # a parsed asm file is only as true as the parser that read it
 def _asm_job(item: tuple[str, str]):
     root, rel = item
     return _asm_symbols((Path(root) / rel).read_bytes())
 def _asm_key(item: tuple[str, str]) -> str:
     """A splat asm file is rewritten only when its bytes change, so name, size and mtime stand for its content."""
     stat = os.stat(f"{item[0]}/{item[1]}")
-    return digest((item[1], stat.st_size, stat.st_mtime_ns, _CODE))
+    return digest((item[1], stat.st_size, stat.st_mtime_ns))
 def _generated(config: Config, vid: str, files: tuple[list[str], list[str]], parsed: Sequence[Any], declared
                ) -> tuple[dict[str, int], frozenset[str]]:
     root, facts, code = config.project.root, {}, set()

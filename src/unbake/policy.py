@@ -193,13 +193,13 @@ def _census_key(item: tuple[Snapshot, UnitSpec]) -> str | None:
     snapshot, unit = item
     reads = _view.closure(snapshot, unit, _census_version(snapshot, unit))
     return None if reads is None else digest((reads, snapshot.layout.groups[unit.group].sdk,
-                                              config.load_resource("rules.toml"), _CODE))
+                                              config.load_resource("rules.toml")))
 def _census_header(item: tuple[Snapshot, str, bool]) -> tuple[Finding, ...]:
     snapshot, path, sdk = item  # a header is judged by its text alone, so one verdict serves every unit
     return evaluate(snapshot, path, snapshot.read(path).decode(), None, sdk)
 def _header_key(item: tuple[Snapshot, str, bool]) -> str:
     snapshot, path, sdk = item
-    return digest((snapshot.read(path), path, sdk, config.load_resource("rules.toml"), _CODE))
+    return digest((snapshot.read(path), path, sdk, config.load_resource("rules.toml")))
 
 def census(snapshot: Snapshot) -> tuple[Finding, ...]:
     """Every source once and every header once: a header that thousands of units include is read one time."""
