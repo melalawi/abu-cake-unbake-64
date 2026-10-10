@@ -165,7 +165,8 @@ def plans(snapshot: Snapshot, unit: UnitSpec, proposed: Snapshot) -> list[Plan]:
         if conflicts:
             raise Refusal(*conflicts)
         result, last = [], ()
-        options = [(owner, {})] if again else layout.unit_options(snapshot, unit.members[0], folded[unit.path], unit.toolchain)
+        options = ([(owner, {})] if again else
+                   layout.unit_options(snapshot, unit.members[0], folded[unit.path], unit.toolchain))
         for option, writes in options:
             try:
                 writes = dict(writes)

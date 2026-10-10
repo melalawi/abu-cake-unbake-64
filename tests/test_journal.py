@@ -145,6 +145,7 @@ def test_dirty_path_refused(repo, status, missing):
     with pytest.raises(Refusal) as error:
         journal.apply(config, _plan({"planned": b"new"}), state["head"])
     _refused(error, "journal.changed", missing)
+    assert "commit or revert" in error.value.findings[0].action
     assert (config.project.root / "planned").read_bytes() == b"dirty"
     assert not (config.project.root / ".unbake/journal.json").exists()
     assert not any("commit" in call.args for call in git.call_args_list)

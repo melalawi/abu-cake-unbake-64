@@ -282,6 +282,9 @@ def _drop_stale_facts(config: Config) -> None:
     it ran on. A version whose stamp no longer matches the split file, the ROM or the symbol file the table will
     render has its facts removed before they are read, so a stale list never refuses a setup that replaces it."""
     root, project = config.project.root, config.project
+    if not (root / symbols.path()).is_file():
+        raise Refusal(Finding("config.missing", f"{symbols.path()} does not exist", path=symbols.path(),
+                              action=f"create {symbols.path()} as the empty symbol table that unbake init writes"))
     stamps = _stamps(config)
     table = symbols.parse((root / symbols.path()).read_bytes(), project.versions)
     for v in project.versions:

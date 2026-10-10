@@ -112,6 +112,13 @@ def test_host_schema_1_refused(tmp_path: Path) -> None:
     assert "config.schema" in _keys(_refusal(configuration.load_host, path))
 
 
+def test_a_document_of_another_schema_version_is_one_finding_with_an_action() -> None:
+    with pytest.raises(Refusal) as caught:
+        configuration.validate("layout", {"schema": 1, "group": [{"name": "g", "split": 1}]}, "layout.toml")
+    finding, = caught.value.findings
+    assert (finding.key, finding.path) == ("config.schema", "layout.toml:schema") and "schema 3" in finding.action
+
+
 def test_host_unknown_key_refused(tmp_path: Path) -> None:
     path = fixture.host(tmp_path)
     path.write_text(path.read_text() + "\n[bogus]\nx = 1\n")

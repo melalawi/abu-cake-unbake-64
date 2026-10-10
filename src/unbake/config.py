@@ -46,7 +46,13 @@ def toml(schema: str, data: bytes, file: str, key: str = "config.schema",
                                         lambda: pickle.dumps(read(), protocol=5)))
     return document
 def validate(schema: str, value: Json, file: str) -> None:
-    """Raise one Refusal listing every schema error of value, sorted by path."""
+    """Raise one Refusal listing every schema error of value, sorted by path; a document of another schema version is
+    one finding, not a list of its differences."""
+    want = _schema(schema).get("properties", {}).get("schema", {}).get("const")
+    have = value.get("schema") if isinstance(value, dict) else None
+    if want is not None and have is not None and have != want:
+        raise Refusal(Finding("config.schema", f"{file} is schema {have}, but this unbake reads schema {want}",
+                              path=f"{file}:schema", action=f"re-create {file} as schema {want}"))
     errors = sorted( Draft202012Validator(_schema(schema)).iter_errors(value),
         key=lambda e: ([str(p) for p in e.absolute_path], e.message), )
     if errors:

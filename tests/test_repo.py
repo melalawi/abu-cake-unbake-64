@@ -654,3 +654,12 @@ def test_a_manifest_naming_a_path_outside_the_project_is_refused_by_name(path):
     with pytest.raises(Refusal) as caught:
         repo._stale(_snapshot({"generated.txt": f"{path}\n".encode()}), {})
     assert "generated.txt lists" in caught.value.findings[0].reason
+
+
+def test_setup_without_a_symbol_table_refuses_by_name_with_an_action(setup_case):
+    snapshot, *_ = setup_case
+    (snapshot.config.project.root / "symbols.toml").unlink()
+    with pytest.raises(Refusal) as caught:
+        repo.setup(snapshot.config, {})
+    finding, = caught.value.findings
+    assert (finding.key, finding.path) == ("config.missing", "symbols.toml") and finding.action

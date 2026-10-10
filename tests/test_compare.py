@@ -111,7 +111,8 @@ def test_bind_function_names_member_and_overlays(cfg: Config, tmp_path: Path, mo
     file.write_bytes(b"int f;")
     u = unit("f")
     over = replace(s, digest="overlaid")
-    monkeypatch.setattr(compare.layout, "unit_options", lambda snapshot, name, source, toolchain: [(None, {}), (u, {"x": b"1"})])
+    monkeypatch.setattr(compare.layout, "unit_options",
+                        lambda snapshot, name, source, toolchain: [(None, {}), (u, {"x": b"1"})])
     monkeypatch.setattr(compare.layout, "overlay", lambda snapshot, writes: over)
     assert compare.bind(s, file, "f", None) == (u, over)
 

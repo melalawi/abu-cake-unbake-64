@@ -75,7 +75,8 @@ def apply(config: Config, plan: Plan, head: str) -> str:
             changed = _status(config, paths)
             if now != head or changed:
                 missing = changed + ((f"HEAD moved from {head} to {now}",) if now != head else ())
-                raise Refusal(Finding("journal.changed", "The project changed under a planned write.", missing=missing))
+                raise Refusal(Finding("journal.changed", "The project changed under a planned write.", missing=missing,
+                                      action="commit or revert the named files, then run the command again"))
             # a file the plan changes is clean (checked above), so git has its old bytes: only its name is recorded
             tracked = set(_git(config, "--literal-pathspecs", "ls-files", "-z", "--", *paths).decode().split("\0"))
             manifest = {"head": head, "plan": plan.digest, "before": {
