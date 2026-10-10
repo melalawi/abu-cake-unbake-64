@@ -138,7 +138,7 @@ def test_makefile_tree_and_rom_checks(build_snapshot):
         assert f'\t$(Q)test "$$(sha1sum < {rom} | cut -d\' \' -f1)" = {files.baserom_sha1}' in text
         assert f"{rom}: {files.baserom} Makefile" in text
         assert f"cp {files.baserom} $@" in text
-    assert "for p in $(PATCHES); do dd if=$${p%:*} of=$@ bs=1 seek=$${p##*:}" in text
+    assert "for p in $(PATCHES); do dd if=$${p%:*} of=$@ bs=64K oflag=seek_bytes seek=$${p##*:}" in text
     assert "conv=notrunc status=none || exit 1" in text
 
 

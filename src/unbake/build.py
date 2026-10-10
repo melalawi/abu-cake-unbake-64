@@ -233,7 +233,7 @@ def makefile(snapshot: Snapshot) -> bytes:
             checks.append(f'\t$(Q)test "$$(sha1sum < {rom} | cut -d\' \' -f1)" = {files.baserom_sha1}')
             rom_rules.append(f"{rom}: {files.baserom} Makefile\n"
                 f"\t$(Q)mkdir -p $(@D) && cp {shlex.quote(files.baserom)} $@ && "
-                'for p in $(PATCHES); do dd if=$${p%:*} of=$@ bs=1 seek=$${p##*:} '
+                'for p in $(PATCHES); do dd if=$${p%:*} of=$@ bs=64K oflag=seek_bytes seek=$${p##*:} '
                 'conv=notrunc status=none || exit 1; done\n'
                 f"\t$(Q)test \"$$({{ sha1sum < $@; }} | cut -d' ' -f1)\" = {files.baserom_sha1}\n")
         return Template(configuration.template("Makefile.in")).substitute(
