@@ -160,7 +160,7 @@ def init_case(tmp_path, rom_pair, host_file, toolchains, monkeypatch):
 def test_init_never_stages_roms(init_case):
     params, root, calls = init_case
     repo.init(params)
-    assert "/roms/" in (root / ".gitignore").read_text().splitlines()
+    assert {"/roms/", "/asm/"} <= set((root / ".gitignore").read_text().splitlines())  # splat writes asm/ untracked
     assert calls[-3:] == [("init",), ("add", "-A"),
                          ("-c", "user.name=test", "-c", "user.email=test@example.invalid",
                           "commit", "-m", "init demo")]
