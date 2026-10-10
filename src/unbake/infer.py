@@ -36,7 +36,7 @@ def _segment(snapshot: Snapshot, p: Placement) -> str:
     return next(name for name, start, end, _ in snapshot.versions[p.version].segments if start <= p.rom_start < end)
 _WIDTH = {"lb": 1, "lbu": 1, "sb": 1, "lh": 2, "lhu": 2, "sh": 2, "lw": 4, "sw": 4, "lwc1": 4, "swc1": 4,
           "ld": 8, "sd": 8, "ldc1": 8, "sdc1": 8}
-def _scan_job(item) -> list[tuple[str, frozenset[int], frozenset[str], bool, dict[str, list[Any]]]]:
+def _scan_job(item) -> list[tuple[str, frozenset[int], frozenset[str], bool, dict[str, Any]]]:
     """Per function of one chunk: the rodata addresses it loads, the functions it calls, whether padding ends it and
     its usage: accesses (address, width, mnemonic, how, base), calls (callee, ((argument, value),)), argument
     accesses (argument, offset, width) and steps (base address or "aN", constant) of incremented registers."""
@@ -114,7 +114,7 @@ def _scan_job(item) -> list[tuple[str, frozenset[int], frozenset[str], bool, dic
         zeros = len(words) - next((i for i, w in enumerate(reversed(words)) if w), len(words))
         padding = len(words) - zeros - (1 if zeros and words[zeros - 1] == 0x03E00008 else 0)
         out.append((name, frozenset(loads), frozenset(callees), bool(zeros and padding > 0),
-                    {key: sorted(found, key=repr) for key, found in use.items()}))
+                    {"mask": _masked(code), **{key: sorted(found, key=repr) for key, found in use.items()}}))
     return out
 def _evidence(snapshot, functions, version, cap, scanned):
     held = [(m, p) for m in functions for p in m.placements if p.version == version and p.section == ".text"]
@@ -273,27 +273,13 @@ def sdk(snapshot: Snapshot) -> frozenset[str]:
 # cached results are only valid for the code that made them
 _CODE = digest([Path(f).read_bytes() for f in (__file__, ownership.__file__)])
 _PASSES = 3  # rows from claims, claims on those rows, and one pass that proves they agree
-def _mask_job(item) -> list[bytes]:
-    snapshot, placements = item
-    return [_masked(_code(snapshot, p)) for p in placements]
 def _scan_key(item) -> str:
     snapshot, version, rows, addresses, spans = item
     return digest((snapshot.versions[version].rom_sha256, snapshot.versions[version].symbols.get("_gp"), rows,
                    addresses, spans, _CODE))
-def _mask_key(item) -> str:
-    snapshot, placements = item
-    return digest((placements, sorted({snapshot.versions[p.version].rom_sha256 for p in placements}), _CODE))
 def _masks(snapshot: Snapshot, wanted) -> dict[str, tuple[list[str], list[bytes]]]:
-    """Per version the function names in ROM order and their masked code, decoded in the pool in small chunks."""
-    held = {v: sorted((p.rom_start, m.name, p) for m in snapshot.layout.members.values() if m.kind == "function"
-                      for p in m.placements if p.version == v and p.section == ".text") for v in wanted}
-    chunks = [(v, rows[i:i + 128]) for v, rows in held.items() for i in range(0, len(rows), 128)]
-    done = pool.map(snapshot.config, "infer.masks", _mask_job,
-                    [(snapshot, [p for _, _, p in rows]) for _, rows in chunks], _mask_key)
-    out: dict[str, tuple[list[str], list[bytes]]] = {v: ([name for _, name, _ in rows], []) for v, rows in held.items()}
-    for (v, _), masks in zip(chunks, done, strict=True):
-        out[v][1].extend(masks)
-    return out
+    return {v: ([r[0] for r in rows], [r[4]["mask"] for r in rows])
+            for v, rows in scan(snapshot).items() if v in wanted}
 def _align(item) -> dict[str, str]:
     """Names of one version mapped to the other's. Equal masked code unique in both versions anchors the order;
     between two anchors the rest pair in order by the share of masked words they hold in common, identical code
@@ -326,7 +312,9 @@ def pairs(snapshot: Snapshot, directions: Sequence[tuple[str, str]]) -> dict[tup
         found = pool.map(snapshot.config, "infer.align", _align, [(masks[a], masks[b]) for a, b in directions], digest)
         return dict(zip(directions, found, strict=True))
 def _votes_key(job: Any) -> str:
-    return digest((job[0].digest, job[1], job[2], job[3]))
+    snapshot, a, b, rows = job
+    return digest((a, b, [(snapshot.read(versions.asm_path(snapshot.config, v, n).relative_to(
+        snapshot.config.project.root).as_posix())) for left, right in rows for v, n in ((a, left), (b, right))]))
 def _votes_job(item) -> Counter:
     snapshot, a, b, rows = item
     counts: Counter = Counter()
@@ -346,14 +334,18 @@ def _agreed(snapshot: Snapshot, b: str, counts: Counter) -> dict[str, tuple[str,
     symbols = snapshot.versions[b].symbols
     return {x: (y, symbols[y], n) for (x, y), n in counts.items()
             if len(targets[x]) == 1 and x not in symbols and y in symbols}
+def correspondence(snapshot: Snapshot, member: str) -> tuple[tuple[str, str, str, str], ...]:
+    return _correspondences(snapshot, member)
 def correspondences(snapshot: Snapshot) -> tuple[tuple[str, str, str, str], ...]:
+    return _correspondences(snapshot, None)
+def _correspondences(snapshot: Snapshot, member: str | None) -> tuple[tuple[str, str, str, str], ...]:
     """(x, a, y, b): the name x that version a's code uses and the name y that version b gives the same thing,
     where every pairing of the two functions agrees."""
     with effort.stage("infer.correspondences"):
         source = snapshot.config.project.names_from
         directions = [(a, b) for v in snapshot.versions if v != source for a, b in ((source, v), (v, source))]
-        jobs = [(snapshot, a, b, rows[i:i + 64]) for (a, b), found in pairs(snapshot, directions).items()
-                for rows in [list(found.items())] for i in range(0, len(rows), 64)]
+        jobs = [(snapshot, a, b, [(left, right)]) for (a, b), found in pairs(snapshot, directions).items()
+                for left, right in found.items() if member is None or member in (left, right)]
         total: dict[tuple[str, str], Counter] = defaultdict(Counter)
         parts = pool.map(snapshot.config, "infer.votes", _votes_job, jobs, _votes_key)
         for (_, a, b, _), part in zip(jobs, parts, strict=True):

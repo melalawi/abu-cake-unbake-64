@@ -1,7 +1,5 @@
 """Admission, submission landing and withdrawal."""
-import posixpath
 import re
-from collections import defaultdict
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
@@ -104,24 +102,14 @@ def _regressions(snapshot: Snapshot, gaps: tuple[Finding, ...], own: Sequence[st
                 action=f"make the declaration agree with {head.path}, or change both"))
     return tuple(kept)
 def _consumers(snapshot: Snapshot, changed: Sequence[str]) -> tuple[str, ...]:
-    """Every unit, of any group, that includes a changed header directly or through other headers. A quote include
-    names a file beside the including one, else under include/ or src/; taking every one that exists
-    over-approximates."""
+    """Units whose include search can reach a changed header, including a header removed by the change set."""
     if not changed:
         return ()
-    known = {*headers.sources(snapshot), *snapshot.layout.units, *changed}
-    included_by = defaultdict(set)
-    for path in known:
-        for name in re.findall(rb'^\s*#\s*include\s*"([^"]+)"', snapshot.peek(path) or b"", re.M):
-            for base in (posixpath.dirname(path), "include", "src"):
-                if (target := posixpath.normpath(posixpath.join(base, name.decode(errors="replace")))) in known:
-                    included_by[target].add(path)
-    reached, todo = set(), list(changed)
-    while todo:
-        new = included_by[todo.pop()] - reached
-        reached |= new
-        todo.extend(new)
-    return tuple(path for path in reached if path in snapshot.layout.units)
+    def touched(unit: UnitSpec) -> bool:
+        recipe = recipes.resolve(snapshot.config, unit, {})
+        found, missing = view.headers(snapshot, unit, ("-Iinclude", "-Isrc", *recipe.cppflags))
+        return bool(set(changed) & {*found, *missing})
+    return tuple(u.path for u in snapshot.layout.units.values() if touched(u))
 def admit(snapshot: Snapshot, request: Json, partial: bool = False) -> tuple[UnitSpec, Snapshot, tuple[Proof, ...]]:
     with effort.stage("publish.admit"):
         with effort.stage("publish.admit.1"):
