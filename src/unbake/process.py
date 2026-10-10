@@ -7,6 +7,7 @@ import signal
 import subprocess
 from collections.abc import Mapping, Sequence
 from contextlib import ExitStack, suppress
+from functools import cache
 from pathlib import Path
 from time import perf_counter_ns
 
@@ -17,6 +18,15 @@ from unbake.contracts import Config, Finding, NativeResult, Refusal
 def _kill(pid: int) -> None:
     with suppress(ProcessLookupError):
         os.killpg(pid, signal.SIGKILL)
+
+
+_PR_SET_CHILD_SUBREAPER = 36  # linux/prctl.h
+
+
+@cache
+def _subreaper() -> None:
+    """Once per process (the setting is process-wide): orphans of a killed child come to us to be reaped."""
+    ctypes.CDLL(None).prctl(_PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0)
 
 
 def _reap(group: int) -> float:
@@ -41,7 +51,7 @@ def scratch(root: Path) -> Path:
 
 def _execute(name, argv, cwd, stdin, stdout_path, timeout, outputs, tmp):
     start = perf_counter_ns()
-    ctypes.CDLL(None).prctl(36, 1, 0, 0, 0)  # PR_SET_CHILD_SUBREAPER: orphans of a killed child come to us to be reaped
+    _subreaper()
     deadline = None if timeout is None else start + timeout * 1_000_000_000
     streams = {"stdout": bytearray(), "stderr": bytearray()}
     with ExitStack() as stack:
