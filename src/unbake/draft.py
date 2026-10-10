@@ -6,10 +6,11 @@ import json
 import os
 import re
 from collections import Counter
+from collections.abc import Iterator
 from pathlib import Path
 
 from unbake import config as configuration
-from unbake import effort, gbi, headers, layout, process, store, types, versions
+from unbake import effort, gbi, headers, layout, native, process, recipes, store, types, versions
 from unbake.contracts import Config, Finding, Json, Member, Refusal, Snapshot, digest
 
 _OPS = {"eq": lambda a, b: a == b, "lt": lambda a, b: a < b, "gte": lambda a, b: a >= b}
@@ -37,13 +38,13 @@ def hints(snapshot: Snapshot, subsystem: str, symptoms: Json) -> tuple[list[Json
     cap = configuration.load_resource("flow.toml")["packet"]["hints"]
     return matched, others[:cap]
 
-def _function_text(snapshot: Snapshot, member: str, version: str) -> tuple[str, int]:
+def _function_text(snapshot: Snapshot, member: str, version: str, stack_structs: bool) -> str:
     config = snapshot.config
     unit = layout.unit_of(snapshot, member)
     toolchain = unit.toolchain if unit is not None else config.project.toolchain
     target = configuration.load_resource("toolchains.toml")["toolchain"][toolchain]["m2c"]
     argv = [
-        str(process.tool(config, "m2c")), "-t", target, "--valid-syntax", "--stack-structs",
+        str(process.tool(config, "m2c")), "-t", target, "--valid-syntax", *["--stack-structs"] * stack_structs,
         "--context", str(headers.context(snapshot, version)), "--function", member,
         str(versions.asm_path(config, version, member)),
     ]
@@ -58,7 +59,7 @@ def _function_text(snapshot: Snapshot, member: str, version: str) -> tuple[str, 
         return result.stdout
     # the context file is named by its content, so the argv, the assembly and the tool are everything m2c reads
     key = digest((argv, Path(argv[-1]).read_bytes(), os.stat(argv[0]).st_mtime_ns))
-    return gbi.rewrite(store.cached(config, "m2c-draft", key, produce).decode(errors="replace"))
+    return store.cached(config, "m2c-draft", key, produce).decode(errors="replace")
 
 def _data_text(snapshot: Snapshot, entry: Member, version: str) -> str:
     placements = sorted((p for p in entry.placements if p.version == version and p.section != ".bss"),
@@ -109,6 +110,41 @@ def refuse_fragment(snapshot: Snapshot, member: str) -> None:
         raise Refusal(Finding("member.split-delay-slot", f"{member} ends on a branch or jump whose delay slot "
                               f"is the first word of {successor}", unit=member))
 
+def _stages(snapshot: Snapshot, member: str, version: str, known: dict[str, str], callees: list[str]) -> Iterator[Json]:
+    """Candidate drafts, richest first: m2c with and without stack structs, with and without the GBI rewrites,
+    with and without the project headers (m2c's own type definitions can clash with them)."""
+    declared = headers.catalog(snapshot, version)
+    head = "".join(f"{known[n]}\n" for n in callees if n in known and n not in declared)
+    for stack in (True, False):
+        raw = re.sub(r"^.*?(\w+)\(.*\);\s*/\* extern \*/\n", lambda m: "" if m[1] in known | declared else m[0],
+                     _function_text(snapshot, member, version, stack), flags=re.M)
+        for body, rewrites in dict.fromkeys([gbi.rewrite(raw), (raw, 0)]):
+            names = set(re.findall(r"\w+", head + body)) & declared.keys()
+            paths = sorted({declared[n][0].removeprefix("include/") for n in names})
+            for wanted in (paths, []):
+                text = configuration.template("m2c_macros.h") + "".join(f'#include "{p}"\n' for p in wanted)
+                yield {"text": text + head + body, "gbi_rewrites": rewrites}
+
+def _checked(snapshot: Snapshot, member: str, version: str, draft: Json, repair: int = 2) -> Json:
+    """The draft with why it does not compile under the project's toolchain ("" when it does). Names m2c uses but
+    never declares (its stack slots) become M2C_UNK locals, and calls the declaration disagrees with are cast."""
+    text = draft["text"]
+    unit, writes = layout.unit_options(snapshot, member, text.encode())[-1]
+    with store.work(snapshot.config) as work:
+        proof = native.prove(layout.overlay(snapshot, writes), unit, version,
+                             recipes.resolve(snapshot.config, unit, {}), work)[0]
+    error = next((m for m in proof.missing if "compile.error" in m or "preprocess" in m), "")
+    names = sorted(set(re.findall(r"`(\w+)' undeclared \(first use in this function", error)))
+    calls = sorted(set(re.findall(r"too (?:many|few) arguments to function `(\w+)'", error)))
+    opened = re.search(rf"^.*\b{re.escape(member)}\(.*\) \{{\n", text, re.M)
+    if repair < 1 or not (names or calls) or not opened:
+        return {**draft, "reason": error}
+    slots = [f"{n}[0x100]" if re.search(rf"\b{n}\[", text) else n for n in names]
+    fixed = "".join(f"#define {n} ((M2C_UNK (*)()){n})\n" for n in calls) + text[opened.start():opened.end()] + (
+        f"    M2C_UNK {', '.join(slots)};\n" if slots else "")
+    return _checked(snapshot, member, version, {**draft, "text": text[:opened.start()] + fixed + text[opened.end():]},
+                    repair - 1)
+
 def create(snapshot: Snapshot, member: str, out: Path) -> Json:
     """Write the first draft of `member` to `out` and return its report."""
     with effort.stage("draft.create"):
@@ -122,17 +158,22 @@ def create(snapshot: Snapshot, member: str, out: Path) -> Json:
         subsystem = group.subsystem if group is not None and entry.group else "unknown"
         known: dict[str, str] = {}
         if entry.kind == "function":
-            text, rewrites = _function_text(snapshot, member, version)
+            _function_text(snapshot, member, version, True)  # m2c refuses by name before the type map is solved
             asm = versions.asm_path(config, version, member).read_text(errors="replace")
             callees = [n for n in dict.fromkeys(re.findall(r"\bjal\s+(\w+)", asm)) if n != member]
             known = types.declarations(snapshot, [member, *callees])  # on demand, for the target and its callees
-            text = "".join(f"{known[n]}\n" for n in callees if n in known) + text
+            results = []  # the first stage that compiles is the draft, else the richest one with its error
+            for stage in _stages(snapshot, member, version, known, callees):
+                results.append(_checked(snapshot, member, version, stage))
+                if not results[-1]["reason"]:
+                    break
+            result = results[-1] if not results[-1]["reason"] else results[0]
         else:
-            text, rewrites = _data_text(snapshot, entry, version), 0
+            result = {"text": _data_text(snapshot, entry, version), "gbi_rewrites": 0, "reason": ""}
         out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(text, encoding="utf-8")
+        out.write_text(result["text"], encoding="utf-8")
         return {"member": member, "kind": entry.kind, "version": version, "path": str(out),
-                "gbi_rewrites": rewrites, "subsystem": subsystem,
+                "gbi_rewrites": result["gbi_rewrites"], "subsystem": subsystem, "compile_error": result["reason"],
                 "hints": hints(snapshot, subsystem, {})[1], "declarations": len(known)}
 
 def run(config: Config, params: Json) -> Json:

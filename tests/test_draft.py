@@ -53,6 +53,7 @@ def _data_snapshot(tmp: Path, blob: bytes, kinds: dict[str, str] | None = None) 
 def _mock_m2c(monkeypatch: pytest.MonkeyPatch, stdout: bytes, exit: int = 0, stderr: bytes = b"") -> list[Any]:
     calls: list[Any] = []
     monkeypatch.setattr(headers, "context", lambda snapshot, version: Path("context.c"))
+    monkeypatch.setattr(draft, "_checked", lambda snapshot, member, version, stage, repair=2: {**stage, "reason": ""})
 
     def run(name: str, argv: Any, cwd: Path, **kw: Any) -> Any:
         calls.append((name, list(argv)))
@@ -138,7 +139,7 @@ def test_function_draft_declares_the_target_and_its_callees(tmp_path: Path, tool
     out = tmp_path / "out" / "draft.c"
     result = draft.create(snapshot, "func_80000400", out)
     assert seen == [["func_80000400", "func_80000500"]]
-    assert out.read_text().startswith("s32 func_80000500(s32 arg0);\nvoid func_80000400")
+    assert "s32 func_80000500(s32 arg0);\nvoid func_80000400" in out.read_text()
     assert result["declarations"] == 2
 
 
@@ -247,3 +248,75 @@ def test_fragment_ending_on_a_jump_refuses_naming_the_slot_holder(tmp_path: Path
 
 def test_whole_function_has_no_split_slot(tmp_path: Path, toolchains: Any) -> None:
     assert draft.split_slot(_snapshot(tmp_path), "func_80000400") is None
+
+
+def _function(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, body: bytes) -> Snapshot:
+    snapshot = _snapshot(tmp_path)
+    asm = tmp_path / "project/asm/a/func_80000400.s"
+    asm.parent.mkdir(parents=True)
+    asm.write_text("glabel func_80000400\n")
+    _mock_m2c(monkeypatch, body)
+    monkeypatch.setattr(draft.types, "declarations", lambda s, names: {})
+    return snapshot
+
+
+def test_draft_carries_the_macros_m2c_assumes(tmp_path: Path, toolchains: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    out = tmp_path / "draft.c"
+    draft.create(_function(tmp_path, monkeypatch, b"void func_80000400(void) {\n}\n"), "func_80000400", out)
+    assert "#define M2C_FIELD(" in out.read_text() and "typedef int M2C_UNK;" in out.read_text()
+
+
+def test_draft_is_the_richest_stage_that_compiles(tmp_path: Path, toolchains: Any,
+                                                  monkeypatch: pytest.MonkeyPatch) -> None:
+    snapshot = _function(tmp_path, monkeypatch, b"void func_80000400(void) {\n}\n")
+    checked = []
+
+    def check(snapshot: Snapshot, member: str, version: str, stage: Any, repair: int = 2) -> Any:
+        checked.append(stage["text"])
+        return {**stage, "reason": "" if len(checked) == 3 else "compile.error: stage broke"}
+
+    monkeypatch.setattr(draft, "_checked", check)
+    out = tmp_path / "draft.c"
+    result = draft.create(snapshot, "func_80000400", out)
+    assert result["compile_error"] == "" and out.read_text() == checked[2] and len(checked) == 3
+
+
+def test_draft_that_never_compiles_keeps_the_richest_stage_and_names_why(
+        tmp_path: Path, toolchains: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    snapshot = _function(tmp_path, monkeypatch, b"void func_80000400(void) {\n}\n")
+    texts = []
+
+    def check(snapshot: Snapshot, member: str, version: str, stage: Any, repair: int = 2) -> Any:
+        texts.append(stage["text"])
+        return {**stage, "reason": f"compile.error: attempt {len(texts)}"}
+
+    monkeypatch.setattr(draft, "_checked", check)
+    out = tmp_path / "draft.c"
+    result = draft.create(snapshot, "func_80000400", out)
+    assert len(texts) > 1 and out.read_text() == texts[0]
+    assert result["compile_error"] == "compile.error: attempt 1"
+    configuration.validate("result.draft", result, "result")
+
+
+def test_checked_declares_stack_slots_and_casts_disagreeing_calls(
+        tmp_path: Path, toolchains: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    snapshot = _function(tmp_path, monkeypatch, b"")
+    errors = iter(["func_80000400.c:3: `sp30' undeclared (first use in this function)\n"
+                   "func_80000400.c:4: too many arguments to function `func_80000500'", ""])
+    proofs = []
+
+    class Proof:
+        def __init__(self) -> None:
+            reason = next(errors)
+            self.missing = (f"version a: compile.error: {reason}",) if reason else ()
+
+    monkeypatch.undo()  # the real _checked, with only the compiler faked
+    monkeypatch.setattr(draft.layout, "unit_options", lambda s, m, source: [(None, {})])
+    monkeypatch.setattr(draft.layout, "overlay", lambda s, writes: s)
+    monkeypatch.setattr(draft.recipes, "resolve", lambda *a: None)
+    monkeypatch.setattr(draft.native, "prove", lambda *a: proofs.append(a) or (Proof(),))
+    text = "void func_80000400(void) {\n    x = sp30[0];\n}\n"
+    fixed = draft._checked(snapshot, "func_80000400", "a", {"text": text, "gbi_rewrites": 0})
+    assert fixed["reason"] == "" and len(proofs) == 2
+    assert "#define func_80000500 ((M2C_UNK (*)())func_80000500)\n" in fixed["text"]
+    assert "void func_80000400(void) {\n    M2C_UNK sp30[0x100];\n" in fixed["text"]

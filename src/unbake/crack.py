@@ -223,6 +223,8 @@ def run(config: Config, params: Json) -> Json:
             submission = land.submit(config, request, unit, proofs, cand.read_bytes(), "crack")
             if exact or submission is not None:
                 drain = land.drain(config)
+        uncompiled = next((m for p in proofs for m in p.missing if "compile.error" in m), "")
         return {"member": member, "steps": steps, "best": best, "state": "exact" if exact else "creative",
-                "candidate": str(cand), "packet": packet_path, "submitted": submission.id if submission else None,
+                "candidate": str(cand), "packet": packet_path, "compile_error": uncompiled,
+                "submitted": submission.id if submission else None,
                 "drain": drain, "label": "CRACKED" if exact else "NEEDS CREATIVE"}

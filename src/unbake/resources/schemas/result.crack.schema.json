@@ -250,6 +250,9 @@
     "NEEDS CREATIVE",
     ""
    ]
+  },
+  "compile_error": {
+   "type": "string"
   }
  },
  "required": [
@@ -261,7 +264,8 @@
   "packet",
   "submitted",
   "drain",
-  "label"
+  "label",
+  "compile_error"
  ],
  "additionalProperties": false
 }

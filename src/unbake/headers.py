@@ -358,12 +358,6 @@ def fold(snapshot: Snapshot, unit: UnitSpec, view: SourceView) -> tuple[dict[str
                     if not source[first:start].strip() and not source[end:last].strip():
                         start, end = first, last
                 source = source[:start] + replacement + source[end:]
-        additions = sorted(p for p in includes if not re.search(
-            r'^\s*#\s*include\s*[<"]' + re.escape(p) + r'[>"]', source, re.M))
-        if additions:
-            matches = list(re.finditer(r'^\s*#\s*include[^\n]*(?:\n|$)', source, re.M))
-            position = matches[-1].end() if matches else 0
-            prefix = '\n' if position and source[position - 1] != '\n' else ''
-            source = source[:position] + prefix + ''.join(f'#include "{p}"\n' for p in additions) + source[position:]
+        source = _included(source, includes)
         writes[unit.path] = source.encode()
         return writes, tuple(findings)

@@ -104,6 +104,8 @@ def finish(command: str, result: Json | None, findings: Sequence[Finding]) -> No
             colour = "32" if label == "CRACKED" else "33"
             rendered = f"\x1b[{colour}m{label}\x1b[0m" if _tty else label
             lines.append(f"{member}: {rendered}")
+        if result.get("compile_error"):
+            lines.append(f"{member}: the draft does not compile: {result['compile_error'].splitlines()[0]}")
         if feedback is not None:
             lines.append(f"{member} ({feedback['subsystem']}): {feedback['score_before'] * 100:.1f}% -> "
                          f"{feedback['score_after'] * 100:.1f}% ({feedback['outcome']})")

@@ -62,6 +62,9 @@
   "declarations": {
    "type": "integer",
    "minimum": 0
+  },
+  "compile_error": {
+   "type": "string"
   }
  },
  "required": [
@@ -72,7 +75,8 @@
   "gbi_rewrites",
   "subsystem",
   "hints",
-  "declarations"
+  "declarations",
+  "compile_error"
  ],
  "additionalProperties": false
 }
