@@ -50,10 +50,6 @@ sentence = "a required configuration file is missing"
 owner = "config"
 sentence = "a bundled resource is missing or unreadable"
 
-[key."config.retired"]
-owner = "config"
-sentence = "a configuration key was retired at the cutover"
-
 [key."config.schema"]
 owner = "config"
 sentence = "a configuration or data file does not match its schema"

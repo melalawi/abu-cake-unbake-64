@@ -1,4 +1,4 @@
-"""Configuration and resource loading: validated host, project and tool data, with retired keys refused by name."""
+"""Configuration and resource loading: validated host, project and tool data."""
 from __future__ import annotations
 
 import hashlib
@@ -18,7 +18,7 @@ from jsonschema import Draft202012Validator
 from unbake.contracts import Config, Finding, Host, Json, Origin, Project, Refusal, Resident, VersionFiles, digest
 
 SCHEMA_OF = { "keys.toml": "keys",
-    "rules.toml": "rules", "units.toml": "units", "commands.toml": "commands", "retired.toml": "retired",
+    "rules.toml": "rules", "units.toml": "units", "commands.toml": "commands",
     "toolchains.toml": "toolchains",
     "flow.toml": "flow", "rom.toml": "rom", "repo.toml": "repo", }
 @cache
@@ -103,19 +103,6 @@ def _flatten(node: Any, prefix: str, out: dict[str, bool]) -> None:
         for item in node:
             if isinstance(item, dict):
                 _flatten(item, prefix, out)
-def _retired(document: Json, file: str) -> None:
-    keys: dict[str, bool] = {}
-    _flatten(document, "", keys)
-    findings = []
-    for row in load_resource("retired.toml")["retired"]:
-        if row["file"] != file:
-            continue
-        key = row["key"]
-        if any(flat == key or flat.startswith(key + ".") for flat in keys):
-            action = f"replace with {row['replacement']}" if row["replacement"] else "delete the key"
-            findings.append(Finding("config.retired", row["note"], path=f"{file}:{key}", action=action))
-    if findings:
-        raise Refusal(*findings)
 def _read(path: Path, file: str) -> tuple[dict[str, Any], str, dict[str, Origin]]:
     if not path.is_file():
         raise Refusal(Finding("config.missing", f"{path} does not exist", path=str(path), action=f"create {path}"))
@@ -125,7 +112,6 @@ def _read(path: Path, file: str) -> tuple[dict[str, Any], str, dict[str, Origin]
         document = tomllib.loads(raw.decode("utf-8"))
     except (tomllib.TOMLDecodeError, UnicodeDecodeError) as error:
         raise Refusal(Finding("config.schema", f"not valid TOML: {error}", path=f"{file}:<root>")) from error
-    _retired(document, file)
     validate(file, document, file)
     keys: dict[str, bool] = {}
     _flatten(document, "", keys)

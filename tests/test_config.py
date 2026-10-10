@@ -33,7 +33,7 @@ def test_load_resource_every_data_file(name: str) -> None:
 
 def test_schema_of_has_no_features() -> None:
     assert "features.toml" not in configuration.SCHEMA_OF
-    assert len(configuration.SCHEMA_OF) == 9
+    assert len(configuration.SCHEMA_OF) == 8
     assert _keys(_refusal(configuration.load_resource, "features.toml")) == {"config.resource"}
 
 
@@ -130,12 +130,12 @@ def test_host_unknown_key_refused(tmp_path: Path) -> None:
     ("extra", "path"),
     [("[search]\nx = 1\n", "host:search"), ("[cycle]\nx = 1\n", "host:cycle")],
 )
-def test_host_retired_keys(tmp_path: Path, extra: str, path: str) -> None:
+def test_host_old_keys_are_refused_by_the_schema(tmp_path: Path, extra: str, path: str) -> None:
     host = fixture.host(tmp_path)
     host.write_text(host.read_text() + "\n" + extra)
     refusal = _refusal(configuration.load_host, host)
-    assert _keys(refusal) == {"config.retired"}
-    assert refusal.findings[0].path == path
+    assert _keys(refusal) == {"config.schema"}
+    assert refusal.findings[0].path.startswith("host:")
 
 
 def test_host_relative_tool_refused(tmp_path: Path) -> None:
@@ -160,11 +160,11 @@ def test_project_title_and_meta(tmp_path: Path, toolchains: dict[str, Any]) -> N
     assert project.version_files["b"].meta == {}
 
 
-def test_project_retired_key(tmp_path: Path, toolchains: dict[str, Any]) -> None:
+def test_project_old_key_is_refused_by_the_schema(tmp_path: Path, toolchains: dict[str, Any]) -> None:
     config = fixture.config(tmp_path).project.root / "config.toml"
     config.write_text(config.read_text() + "\n[compilers]\nx = 1\n")
     refusal = _refusal(configuration.load_project, config.parent)
-    assert _keys(refusal) == {"config.retired"}
+    assert _keys(refusal) == {"config.schema"}
 
 
 def test_project_unknown_key(tmp_path: Path, toolchains: dict[str, Any]) -> None:
