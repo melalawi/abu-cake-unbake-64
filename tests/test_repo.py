@@ -174,8 +174,7 @@ def test_init_yaml_options_rewritten(init_case):
     for v in ("a", "b"):
         document = yaml.safe_load((root / f"versions/{v}/demo.yaml").read_text())
         assert document == {"options": {
-            **{k: value.format(version=v, name="demo", rom=f"roms/baserom.{v}.z64")
-               for k, value in rules["splat"]["options"].items()}, "custom": "keep",
+            **repo._options(rules, v, "demo", f"roms/baserom.{v}.z64"), "custom": "keep",
         }, "segments": []}
         assert (root / f"versions/{v}/symbol_addrs.txt").read_bytes() == b""
     assert not list(root.glob("*.yaml"))
@@ -321,6 +320,10 @@ def setup_case(snapshot, monkeypatch):
         target = root / path
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(value)
+    for v, vf in cfg.project.version_files.items():
+        (root / vf.split).parent.mkdir(parents=True, exist_ok=True)
+        (root / vf.split).write_text(yaml.safe_dump({"options": repo._options(
+            configuration.load_resource("repo.toml"), v, cfg.project.name, vf.baserom)}))
     boundary = {k: {"proposed": 0, "applied": 0, "withheld": 0} for k in ("prelude", "split", "merge")}
 
     @contextmanager
@@ -399,6 +402,20 @@ def test_setup_busy_when_land_held(setup_case, monkeypatch):
     assert events == [] and stages == ["repo.setup"]
 
 
+@pytest.mark.parametrize("options", [{}, {"create_c_files": True}])
+def test_setup_refuses_a_split_yaml_that_would_let_splat_write_c_files(setup_case, options):
+    snapshot, stages, events, *_ = setup_case
+    root, vf = snapshot.config.project.root, snapshot.config.project.version_files["a"]
+    document = yaml.safe_load((root / vf.split).read_text())
+    document["options"].pop("create_c_files")
+    (root / vf.split).write_text(yaml.safe_dump({"options": {**document["options"], **options}}))
+    with pytest.raises(Refusal) as caught:
+        repo.setup(snapshot.config, {})
+    finding = caught.value.findings[0]
+    assert finding.key == "setup.options" and finding.missing == (f"{vf.split}: create_c_files",)
+    assert ("toolchain", 0) not in events and not [e for e in events if isinstance(e, tuple)]
+
+
 def test_setup_stage_order(setup_case):
     snapshot, stages, events, plans, *_ = setup_case
     repo.setup(snapshot.config, {})
@@ -472,7 +489,8 @@ def test_setup_extract_uses_content_digests(setup_case, changed):
         vf = snapshot.config.project.version_files["b"]
         path = vf.split if changed == "split" else "symbols.toml" if changed == "symbols" else vf.baserom
         value = (repo.symbols.dump({"changed": {"kind": "data", "b": 0x80000400}}) if changed == "symbols"
-                 else b"changed")
+                 else (snapshot.config.project.root / path).read_bytes() + b"\nchanged: 1\n"
+                 if changed == "split" else b"changed")
         (snapshot.config.project.root / path).write_bytes(value)
     events.clear()
     result = repo.setup(snapshot.config, {})

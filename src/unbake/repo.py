@@ -108,6 +108,20 @@ def _checked(result, key: str, name: str) -> None:
     if result.exit != 0 or result.signal is not None:
         tail = result.stderr.decode(errors="replace").splitlines()
         raise Refusal(Finding(key, f"{name}: {tail[-1] if tail else f'exit {result.exit}, signal {result.signal}'}"))
+def _options(rules: Json, version: str, name: str, rom: str) -> Json:
+    return {k: value.format(version=version, name=name, rom=rom) if isinstance(value, str) else value
+            for k, value in rules["splat"]["options"].items()}
+def _require_options(config: Config) -> None:
+    """A split yaml without the options init writes would let splat write C files over the tracked sources."""
+    rules, project, found = configuration.load_resource("repo.toml"), config.project, []
+    for v, files in project.version_files.items():
+        options = yaml.safe_load((project.root / files.split).read_bytes()).get("options") or {}
+        wanted = _options(rules, v, project.name, files.baserom)
+        found += [f"{files.split}: {k}" for k, value in wanted.items()
+                  if k not in options or (not isinstance(value, str) and options[k] != value)]
+    if found:
+        raise Refusal(Finding("setup.options", configuration.sentence("setup.options"), missing=tuple(found),
+                              action="set these options in the split yaml to the values unbake init writes"))
 def init(params: Json) -> Json:
     with effort.stage("repo.init"):
         root, name, roms = Path(params["dir"]).absolute(), params["name"], {}
@@ -146,8 +160,7 @@ def init(params: Json) -> Json:
             (root / split).parent.mkdir(parents=True, exist_ok=True)
             made.pop().rename(root / split)
             document = yaml.safe_load((root / split).read_bytes())
-            document["options"].update({k: value.format(version=v, name=name, rom=rom)
-                                        for k, value in rules["splat"]["options"].items()})
+            document["options"].update(_options(rules, v, name, rom))
             write(split, yaml.safe_dump(document, sort_keys=False).encode())
             write(symbol_file, b"")
             blocks.append(f'\n[version.{v}]\nbaserom = {json.dumps(rom)}\nbaserom_sha1 = "{versions[v]["sha1"]}"\n'
@@ -281,6 +294,7 @@ def setup(config: Config, params: Json) -> Json:
         if not held:
             raise Refusal(Finding("setup.busy", configuration.sentence("setup.busy")))
         journal.recover(config)
+        _require_options(config)
         done, state = config.project.root / ".unbake/setup.json", _state(config)
         if done.exists() and json.loads(done.read_bytes())["state"] == state:
             effort.count("setup", True)

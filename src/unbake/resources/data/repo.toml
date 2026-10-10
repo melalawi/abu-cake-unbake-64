@@ -19,6 +19,8 @@ undefined_syms_auto_path = "build/{version}/undefined_syms_auto.txt"
 # splat names what no symbol file names with its own spelling, so a table name never means a second address
 symbol_name_format = "auto_$VRAM"
 symbol_name_format_no_rom = "auto_$VRAM"
+# splat must never write C files: it would overwrite the tracked sources
+create_c_files = false
 
 [github.checkout]
 action = "actions/checkout"

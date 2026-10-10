@@ -149,7 +149,7 @@
     "options": {
      "type": "object",
      "additionalProperties": {
-      "type": "string",
+      "type": ["string", "boolean"],
       "minLength": 1
      }
     }

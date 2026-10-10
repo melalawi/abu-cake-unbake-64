@@ -143,6 +143,10 @@ sentence = "the same option is added and omitted"
 owner = "recipes"
 sentence = "a compiler option is unknown or absent"
 
+[key."setup.options"]
+owner = "repo"
+sentence = "a split yaml lacks splat options that setup requires"
+
 [key."setup.splat"]
 owner = "build"
 sentence = "splat failed"
