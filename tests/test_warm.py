@@ -95,3 +95,19 @@ def test_a_split_file_is_parsed_once_across_commands(cfg) -> None:
         effort._memo.clear()
         assert versions._parsed("document", b"x", parse, cached) == [b"x"]
     assert len(parses) == 1
+
+
+def test_derive_many_places_every_unit_in_one_dispatch(monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    from unbake import ownership
+    maps = []
+    monkeypatch.setattr(ownership.pool, "map",
+                        lambda cfg, name, fn, items, key=None: maps.append(len(items)) or [{}] * len(items))
+    monkeypatch.setattr(ownership, "_emits_data", lambda snapshot, unit: unit != "data")
+    monkeypatch.setattr(ownership, "_derived", lambda snapshot, unit, result: ("derived", unit))
+    snapshot = SimpleNamespace(config=None)
+    got = ownership.derive_many(snapshot, ["a", "data", "b"])
+    assert got == [("derived", "a"), (snapshot, "data"), ("derived", "b")]
+    assert maps == [2]  # two compiled units, one dispatch
+    assert ownership.derive_many(snapshot, ["data"]) == [(snapshot, "data")] and maps == [2]  # nothing to place

@@ -59,10 +59,10 @@ def _plan(operation, snapshot, writes, affected, debt, message):
     return Plan(*body, digest(body))
 def _proofs(snapshot: Snapshot, affected: Sequence[str]) -> tuple[tuple[Proof, ...], tuple[Finding, ...]]:
     with store.work(snapshot.config) as work:
-        jobs, units = [], []
-        for path in affected:
-            own, unit = ownership.derive(snapshot, snapshot.layout.units[path])  # its data is proved with its code
-            units.append((own, unit))
+        jobs = []
+        # their data is proved with their code
+        units = ownership.derive_many(snapshot, [snapshot.layout.units[path] for path in affected])
+        for own, unit in units:
             recipe = recipes.resolve(snapshot.config, unit, unit.options)
             for version in compare.holders(own, unit):
                 jobs.append((own, unit, version, recipe, work / f"{len(jobs)}"))

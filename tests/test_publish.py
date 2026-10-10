@@ -108,6 +108,7 @@ REAL_SCOPE = _policy.scope
 def _no_ownership(monkeypatch):  # the units here have no source to compile: they own what they list
     derive = Mock(side_effect=lambda snapshot, unit: (snapshot, unit))
     monkeypatch.setattr(ownership, "derive", derive)
+    monkeypatch.setattr(ownership, "derive_many", lambda snapshot, units: [derive(snapshot, u) for u in units])
     return derive
 
 

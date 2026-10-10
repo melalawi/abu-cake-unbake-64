@@ -304,7 +304,12 @@ def test_landed_c_that_does_not_compile_refuses_while_the_ownership_classes_stay
     assert found[0].missing == ("src/f.c a boom",) and found[0].action == "fix it"
 
 
-def test_derive_gives_a_candidate_the_rows_its_source_emits(monkeypatch):
+@pytest.fixture
+def inline(monkeypatch):
+    monkeypatch.setattr(ownership.pool, "map", lambda config, name, fn, items, key=None: [fn(i) for i in items])
+
+
+def test_derive_gives_a_candidate_the_rows_its_source_emits(monkeypatch, inline):
     from unbake import layout
     members = {"f": member("f", "function", ".text"), "row": member("row")}
     snapshot = SimpleNamespace(config=SimpleNamespace(project=SimpleNamespace(names_from="a")),
@@ -319,13 +324,13 @@ def test_derive_gives_a_candidate_the_rows_its_source_emits(monkeypatch):
     assert ownership.derive(snapshot, unit("f")) == (snapshot, unit("f"))  # not compiled: as it is
 
 
-def test_derive_returns_a_data_unit_as_it_is(monkeypatch):
+def test_derive_returns_a_data_unit_as_it_is(monkeypatch, inline):
     snapshot = SimpleNamespace(layout=SimpleNamespace(members={"row": member("row")}, units={}))
     monkeypatch.setattr(ownership.config, "load_resource", lambda name: {"kind": {"c": {"phases": ["compile"]}}})
     assert ownership.derive(snapshot, unit("row")) == (snapshot, unit("row"))
 
 
-def test_derive_generates_the_rows_in_a_private_copy_and_takes_other_units_rows_as_taken(monkeypatch):
+def test_derive_generates_the_rows_in_a_private_copy_and_takes_other_units_rows_as_taken(monkeypatch, inline):
     from unbake import layout
     members = {"f": member("f", "function", ".text"), "mine": member("mine"), "theirs": member("theirs")}
     other = replace(unit("theirs"), path="src/g.c")
@@ -346,7 +351,7 @@ def test_derive_generates_the_rows_in_a_private_copy_and_takes_other_units_rows_
     assert got.members == ("f", "rodata/f/00000108") and got.withheld == ()
 
 
-def test_derive_does_not_reserve_another_units_unclaimed_holder(monkeypatch):
+def test_derive_does_not_reserve_another_units_unclaimed_holder(monkeypatch, inline):
     from unbake import layout
     members = {"f": member("f", "function", ".text", ("b",)),
                "rodata/g/00000100": member("rodata/g/00000100", holders=("a",))}
@@ -365,7 +370,7 @@ def test_derive_does_not_reserve_another_units_unclaimed_holder(monkeypatch):
     assert got.members == ("f", "rodata/f/00000100")
 
 
-def test_derive_takes_the_rows_of_an_unowned_data_unit_for_the_function_that_claims_them(monkeypatch):
+def test_derive_takes_the_rows_of_an_unowned_data_unit_for_the_function_that_claims_them(monkeypatch, inline):
     from unbake import layout
     name = "rodata/unresolved/00000100"
     members = {"f": member("f", "function", ".text"), name: member(name)}

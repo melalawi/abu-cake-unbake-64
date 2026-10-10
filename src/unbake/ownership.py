@@ -5,9 +5,10 @@ import io
 import re
 from bisect import bisect_left, bisect_right, insort
 from collections import defaultdict
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
 from elftools.elf.elffile import ELFFile
 from elftools.elf.enums import ENUM_RELOC_TYPE_MIPS
@@ -303,14 +304,23 @@ def claims(snapshot: Snapshot, version: str | None = None, units: Mapping[str, U
 def _unowned(unit: UnitSpec) -> bool:
     """A data unit of rows no function has claimed: it gives them up to the first function whose object emits them."""
     return bool(unit.members) and all(versions.unowned(n) for n in unit.members)
+def _emits_data(snapshot: Snapshot, unit: UnitSpec) -> bool:
+    """Whether the unit is compiled from functions, so what it emits is derived at all."""
+    return ("compile" in config.load_resource("units.toml")["kind"][unit.kind]["phases"]
+            and any(snapshot.layout.members[n].kind == "function" for n in unit.members))
 def derive(snapshot: Snapshot, unit: UnitSpec) -> tuple[Snapshot, UnitSpec]:
     """The snapshot and the unit with the data rows its present source emits, per holder, where the ROM holds them
     exactly: what a candidate must reproduce besides its code. The rows its claims become exist only in a private
     copy of the layout, and the returned snapshot is that copy. A unit that is not compiled is returned as it is."""
-    if "compile" not in config.load_resource("units.toml")["kind"][unit.kind]["phases"]:
-        return snapshot, unit
-    if all(snapshot.layout.members[n].kind != "function" for n in unit.members):
-        return snapshot, unit  # a data unit's members already are all the data its source emits
+    return derive_many(snapshot, [unit])[0]
+def derive_many(snapshot: Snapshot, units: Sequence[UnitSpec]) -> list[tuple[Snapshot, UnitSpec]]:
+    """derive for each unit: every unit's compile is placed in one pool dispatch (cached units dispatch nothing)."""
+    todo = [u for u in units if _emits_data(snapshot, u)]
+    if not todo:
+        return [(snapshot, u) for u in units]
+    found = iter(pool.map(snapshot.config, "ownership.derive", _job, [(snapshot, u, None) for u in todo], _job_key))
+    return [_derived(snapshot, u, next(found)) if u in todo else (snapshot, u) for u in units]
+def _derived(snapshot: Snapshot, unit: UnitSpec, result: dict[str, Any]) -> tuple[Snapshot, UnitSpec]:
     from unbake import layout  # the rows come from the layout, which in turn reads ownership
     members = snapshot.layout.members
     taken: dict[str, list[tuple[int, int, str]]] = defaultdict(list)
@@ -322,7 +332,7 @@ def derive(snapshot: Snapshot, unit: UnitSpec) -> tuple[Snapshot, UnitSpec]:
     for rows in taken.values():
         rows.sort()
     indexes = {v: _index(snapshot, v) for v in snapshot.versions}
-    keep, resolved, mine, debt = _resolve(unit, members, _job((snapshot, unit, None)), indexes,
+    keep, resolved, mine, debt = _resolve(unit, members, result, indexes,
                                           snapshot.config.project.names_from)
     owned, kept = _own(unit, members, keep, resolved, mine, taken, debt)
     rows = layout.claim_rows(snapshot, kept)
