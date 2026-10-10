@@ -460,3 +460,8 @@ def test_reading_zero_as_a_source_keeps_the_function(snapshot_factory, monkeypat
     monkeypatch.setattr(report, "split_slot", _REAL_SPLIT_SLOT)
     assert report.split_slot(snapshot, "reader") is None
     assert [r["member"] for r in report.items(snapshot, {})] == ["reader"]
+
+
+def test_items_leave_out_handwritten_assembly(snapshot_factory):
+    rows = report.items(snapshot_factory([_member("loop", state="hasm"), _member("plain", address=96)]), {})
+    assert [r["member"] for r in rows] == ["plain"]

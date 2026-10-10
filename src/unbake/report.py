@@ -164,7 +164,8 @@ def items(snapshot: Snapshot, params: Json) -> list[Json]:
             sections = (".text",) if member.kind == "function" else (".data", ".rodata")
             if matched or not any(p.section in sections for p in member.placements):
                 continue
-            if member.kind == "function" and (slots[name] is not None or name in successors):
+            if member.kind == "function" and (member.state == "hasm" or slots[name] is not None
+                                              or name in successors):  # handwritten assembly is no target
                 continue
             if segment is not None and sid != segment:
                 continue
