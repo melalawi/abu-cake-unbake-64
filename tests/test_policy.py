@@ -227,6 +227,7 @@ def test_census_units_headers_deduplication_and_sdk(snapshot, monkeypatch, names
     monkeypatch.setattr(policy, "evaluate", evaluate)
     monkeypatch.setattr(policy.pool, "gather", gathered)
     monkeypatch.setattr(policy.store, "cached", lambda cfg, kind, key, produce: produce())
+    monkeypatch.setattr(policy.types, "conflicts", lambda snap: [])
     findings = policy.census(snapshot)
     assert [(f.path, f.line, f.blocking) for f in findings] == [
         (PATH, 2, False), ("src/second.c", 2, False), ("include/shared.h", 2, False),
@@ -252,3 +253,12 @@ def test_directive_rules_never_let_whitespace_cross_a_line():
     directive = [r["regex"] for r in rules if r.get("regex", "").startswith("^")]
     assert directive and not any(r"^\s" in regex for regex in directive)  # a blank-line run is not rescanned per line
     assert re.search(directive[0], "\n\n\n  #  include \"../x.h\"\n", re.M)
+
+
+def test_census_counts_a_name_declared_with_two_spellings(snapshot, monkeypatch):
+    conflict = Finding("types.conflict", "gX is declared 2 ways and defined nowhere", unit="gX",
+                       missing=("gX: src/a.c:3 s32 gX;", "gX: include/a.h:9 f32 gX;"))
+    snapshot.layout = LayoutMap(200, {}, {}, {}, "layout", (), {})
+    monkeypatch.setattr(policy.pool, "gather", lambda cfg, groups: [[], []])
+    monkeypatch.setattr(policy.types, "conflicts", lambda snap: [conflict])
+    assert [(f.key, f.unit, f.blocking) for f in policy.census(snapshot)] == [("types.conflict", "gX", False)]

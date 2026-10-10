@@ -9,7 +9,7 @@ from collections.abc import Collection, Sequence
 from dataclasses import replace
 from pathlib import Path
 
-from unbake import config, effort, pool, recipes, store
+from unbake import config, effort, pool, recipes, store, types
 from unbake import view as _view
 from unbake.contracts import Finding, Snapshot, SourceView, UnitSpec, digest
 
@@ -217,7 +217,7 @@ def census(snapshot: Snapshot) -> tuple[Finding, ...]:
             ("policy.census", _census_unit, items, _census_key),
             ("policy.census.headers", _census_header, [(snapshot, path, sdk) for path, sdk in sorted(headers.items())],
              _header_key)])
-        for findings in (*found[0], *found[1]):
+        for findings in (*found[0], *found[1], types.conflicts(snapshot)):
             for finding in findings:
-                unique[(finding.key, finding.path, finding.line)] = replace(finding, blocking=False)
+                unique[(finding.key, finding.path, finding.line, finding.unit)] = replace(finding, blocking=False)
         return tuple(unique.values())
